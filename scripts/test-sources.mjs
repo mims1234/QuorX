@@ -18,7 +18,7 @@ import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as 
 import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList, connect as mcpConnect, callTool as mcpCall, toolsFor as mcpToolsFor, stopAll as mcpStopAll, MASK as MCP_MASK } from '../server/mcpclient.js';
 import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, sourceLimit, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
-import { isLimitHit, resetAt, fallbackCost, limitPlan, limitFallbackFor, limitChoice, switchBackDue, LIMIT_SECS } from '../server/limitswitch.js';
+import { isLimitHit, resetAt, fallbackCost, limitPlan, limitFallbackFor, limitChoice, limitPickedModel, waitOffered, untilWords, switchBackDue, LIMIT_SECS } from '../server/limitswitch.js';
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, goAccount, effortFor as goEffort } from '../server/opencodego.js';
@@ -1557,6 +1557,54 @@ test('limit switch in a reply: YOLO counts down and switches, Strict asks for a 
     assert.deepEqual([n, back.bodies.length, of(back.events, 'limit_back').length], [1, 0, 1], 'after it: back on the source, and the page hears it');
     const stay = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: src, settings: settings({ approval: 'yolo' }), limitSwitch: { from: SRC, to: FB, until: Date.now() - 1, back: false } });
     assert.deepEqual([n, stay.bodies.length], [1, 3], '"Switch back" unticked: it stays on the fallback');
+    forgetSourceHealth();
+  }
+});
+
+test('limit switch details: wait offered only near the reset, another model picked on the card, a chat that waits limits out, and a failed turn that says when it resets', async () => {
+  const now = 1e12;
+  assert.deepEqual([waitOffered(now + 3600e3, 6, now), waitOffered(now + 7 * 3600e3, 6, now), waitOffered(0, 6, now), waitOffered(now - 1, 6, now), waitOffered(now + 7 * 3600e3, 8, now), waitOffered(now + 60e3, 0, now)],
+    [true, false, false, false, true, false], 'a reset more than the set hours away is not waited for');
+  assert.deepEqual([untilWords(now + 134 * 60e3, now), untilWords(now + 45 * 60e3, now), untilWords(now + 120 * 60e3, now), untilWords(now + 10e3, now)], ['in about 2h 14m', 'in about 45m', 'in about 2h', 'in under a minute']);
+  assert.deepEqual([limitPickedModel({ text: 'model:z-ai/glm-5' }), limitPickedModel({ text: 'model:' }), limitPickedModel({ text: 'hi' }), limitPickedModel(null)], ['z-ai/glm-5', '', '', '']);
+  assert.deepEqual([limitChoice({ text: 'model:z/x' }), limitChoice({ choice: 1 }, { reset: 5, canWait: false }), limitChoice({ choice: 0 }, { hasTo: false }), limitChoice({ timedOut: true }, { onTimeout: 'wait' })],
+    ['switch', 'cancel', 'cancel', 'wait'], 'a picked model switches; Wait needs waiting offered; Switch needs a fallback');
+  assert.deepEqual(limitPlan({ approval: 'yolo', info: { price: [1, 2] }, secs: 2, mode: 'wait', canWait: true }), { cost: 'paid', ask: false, ms: 2000, onTimeout: 'wait' }, 'a chat that waits limits out counts down to waiting');
+  assert.deepEqual(limitPlan({ approval: 'yolo', info: { price: [1, 2] }, secs: 2, mode: 'wait', canWait: false }).onTimeout, 'switch', 'too far to wait: the app setting');
+
+  const SRC = 'opencode-local/opencode-go/glm-5.3', FB = 'z-ai/glm-5.3', OTHER = 'test/model';
+  const limited = (secs = 3600) => Object.assign(new Error('5-hour usage limit reached.'), { status: 429, errorType: 'GoUsageLimitError', retryAfter: secs });
+  const steps = (body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done.')][i];
+  { // the reset is 10 hours away: the card offers no waiting, and says so
+    forgetSourceHealth();
+    const { events } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(10 * 3600); }, settings: { sourceFallback: 'off', limitFallback: { 'opencode-local': FB }, limitSwitchSecs: 1, approval: 'yolo' } });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.deepEqual([q.limit.waitOk, q.limit.waitHours], [false, 6]);
+  }
+  { // "Another model…": the reply moves to the model picked on the card, not the provider's fallback
+    forgetSourceHealth();
+    const { events, bodies } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(); }, settings: { sourceFallback: 'off', limitFallback: { 'opencode-local': FB }, approval: 'strict' },
+      onEvent: (e, id) => { if (e.t === 'question' && e.gate === 'limit') setTimeout(() => answerQuestion(id, e.id, { text: `model:${OTHER}` }), 20); } });
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.to]), [[0, OTHER]]);
+    assert.equal(of(events, 'limit_switch')[0].to, OTHER);
+    assert.ok(bodies.every((b) => b.model === OTHER), 'every step ran on the picked model');
+  }
+  { // the chat waits limits out: with no fallback chosen it still gets a card, which counts down to waiting
+    forgetSourceHealth();
+    let n = 0;
+    const { events, bodies, done } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, limitMode: 'wait',
+      sourceStream: async () => { if (++n === 1) throw limited(1); return srcReply('Waited it out.'); }, settings: { sourceFallback: 'off', limitSwitchSecs: 1, approval: 'yolo' } });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.deepEqual([q.limit.to, q.limit.mode, q.wait.then], ['', 'wait', 'wait']);
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.by]), [[1, 'timeout']]);
+    assert.deepEqual([n, bodies.length, done.reply], [2, 0, 'Waited it out.']);
+  }
+  { // no fallback and no waiting: the failed turn says which provider, and when it resets, for the Retry / Switch to… / Wait row
+    forgetSourceHealth();
+    const err = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, settings: { sourceFallback: 'off', approval: 'yolo' }, sourceStream: async () => { throw limited(); } }).catch((e) => e);
+    assert.equal(err.limit?.source, 'opencode-local');
+    assert.equal(err.limit?.kind, 'quota');
+    assert.ok(err.limit.reset > Date.now() && err.limit.waitOk, 'a reset within the hours set can be waited for');
     forgetSourceHealth();
   }
 });

@@ -323,7 +323,7 @@ function normalise(doc) {
     quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
     // What this chat allows on its own (rules, tools and when they were allowed and used, apps, folders): kept on load,
     // or the next save dropped them.
-    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), ...(agent.limitSwitch ? { limitSwitch: agent.limitSwitch } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), ...(agent.limitSwitch ? { limitSwitch: agent.limitSwitch } : {}), ...(agent.limitMode === 'wait' ? { limitMode: 'wait' } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -3783,7 +3783,14 @@ function renderComposerBar(c) {
     + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
     + sec('safety', 'Mode', permHTML('cq-perm'))
     + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
-    + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat');
+    + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat')
+    + sec('limit', 'At a usage limit', `<div class="seg cq-limit" role="group" aria-label="What this chat does when its provider runs out of usage"><button type="button" data-limit="app" class="${c.agent.limitMode === 'wait' ? '' : 'on'}" title="Do what ⚙ Settings → Providers says: switch to the provider's fallback model, or stop">App setting</button><button type="button" data-limit="wait" class="${c.agent.limitMode === 'wait' ? 'on' : ''}" title="When the reset is close, wait for it in this chat (nothing paid) instead of switching models">Wait it out here</button></div>`, 'this chat');
+  // At a usage limit: follow the app setting, or wait it out in this chat. Saved at once, like the MCP row.
+  for (const b of quick.querySelectorAll('.cq-limit [data-limit]')) b.onclick = () => {
+    if (b.dataset.limit === 'wait') c.agent.limitMode = 'wait'; else delete c.agent.limitMode;
+    for (const x of quick.querySelectorAll('.cq-limit [data-limit]')) x.classList.toggle('on', x === b);
+    saveChat(c);
+  };
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
   const ch = { think: rv !== (G.settings.reasoning || 'off'), creative: cv !== 'default', safety: c.approval !== (G.settings.approval || 'strict') };
@@ -5173,6 +5180,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     $('.foot', el).insertAdjacentHTML('afterbegin', `<span class="f-stopped" title="You stopped this reply">■ Stopped</span>${last ? '<button type="button" class="continue-btn" title="Carry on from where you stopped it">▶ Continue</button>' : ''}`);
     const cb = $('.continue-btn', el); if (cb) cb.onclick = () => continueReply(c, m);
   }
+  drawLimitFail(c, m, el);
   // Right side, always in this order: ⏰ repeat on a schedule, remix, read in the side pane (long answers), copy the
   // Markdown, and last 🧭 Steps (hover: what it cost; click: the steps, ending with the cost card).
   const right = document.createElement('span'); right.className = 'f-right';
@@ -6372,27 +6380,51 @@ function limitCardHTML(q, live = true) {
   const head = `<b class="lim-title">${esc(L.name || 'The provider')} hit its ${LIM_KIND[L.kind] || 'usage limit'}</b> <span class="lim-from">(${esc(short(L.from || ''))})</span>`;
   const reset = L.reset ? `Resets at ${esc(limWhen(L.reset))}.` : 'It didn’t say when it resets.';
   if (a) {
-    const ch = a.choice != null ? Number(a.choice) : null;
-    const said = ch === 0 ? `✓ ${a.by === 'timeout' ? 'Switched after the countdown' : 'Switched'} to ${limModel(L.to)}`
-      : ch === 1 ? (q.resumed ? `✓ Waited for the reset, then carried on on ${limModel(L.from)}` : live ? `⏳ Waiting for the reset at ${esc(limWhen(L.reset))}, then carrying on on ${limModel(L.from)}` : `Waited for the reset at ${esc(limWhen(L.reset))}`)
+    const ch = a.choice != null ? Number(a.choice) : null, to = a.to || L.to;
+    const said = ch === 0 ? `✓ ${a.by === 'timeout' ? 'Switched after the countdown' : 'Switched'} to ${limModel(to)}. It carries on from this chat’s history.`
+      : ch === 1 ? (q.resumed ? `✓ Waited for the reset, then carried on on ${limModel(L.from)}` : live ? `⏳ Waiting for the reset: resuming at ${esc(limWhen(L.reset))} · ${esc(limUntil(L.reset))}, on ${limModel(L.from)}` : `Waited for the reset at ${esc(limWhen(L.reset))}`)
       : ch === 2 ? '■ Stopped here. ▶ Continue picks up from the last step.' : esc(a.label || 'Not answered: the reply ended');
     return `<div class="approval question qbox limitq done"><div class="lim-top"><span class="lim-ico" aria-hidden="true">⏱</span><div class="lim-text">${head}<div class="lim-sub">${reset}</div></div></div><div class="lim-said">${said}</div></div>`;
   }
-  const w = c.wait, C = 2 * Math.PI * 17;
+  const w = c.wait && !c.wait.held ? c.wait : null, C = 2 * Math.PI * 17, toWait = w?.then === 'wait';
   const left = w ? Math.max(0, Math.ceil((w.until - Date.now()) / 1000)) : 0;
   const ring = w ? `<span class="lim-ring" data-until="${w.until}" data-secs="${w.secs}" aria-hidden="true"><svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" class="lim-track"/><circle cx="20" cy="20" r="17" class="lim-arc" stroke-dasharray="${((left / (w.secs || 1)) * C).toFixed(1)} ${C.toFixed(1)}"/></svg><b class="lim-n">${left}</b></span>` : '<span class="lim-ico ask" aria-hidden="true">⏸</span>';
-  const sub = w ? `${reset} Switching to ${limModel(L.to)} in <b class="lim-n2">${left}</b>s.` : `${reset} Switch to ${limModel(L.to)}? It is paid, so QuorX asks first.`;
+  // Said plainly before the countdown ends: the new model starts from this chat's history, at its own price.
+  const hist = L.to ? `<div class="lim-hist">${limModel(L.to)} picks up from this chat’s history: everything said and done so far goes to it${L.cost === 'paid' ? ', and each step is billed at its price' : L.cost === 'plan' ? ', on your subscription' : ', free'}.</div>` : '';
+  const sub = c.wait?.held ? `${reset} Countdown stopped: pick what to do.`
+    : toWait ? `${reset} This chat waits out limits: resuming at ${esc(limWhen(L.reset))} · ${esc(limUntil(L.reset))}. Waiting in <b class="lim-n2">${left}</b>s.`
+    : w ? `${reset} Switching to ${limModel(L.to)} in <b class="lim-n2">${left}</b>s.`
+    : L.to ? `${reset} Switch to ${limModel(L.to)}? It is paid, so QuorX asks first.` : reset;
+  // Waiting is offered only when the reset is close (⚙ Settings → Providers → At a usage limit).
+  const waitTip = !L.reset ? 'It didn’t say when it resets' : L.waitOk === false ? `It resets more than ${L.waitHours ?? 6} h from now, so waiting isn’t offered (⚙ Settings → Providers → At a usage limit)` : '';
+  const waitBtn = `<button type="button" class="${toWait ? 'primary' : 'secondary'} sm lim-wait" data-i="1" ${waitTip ? `disabled title="${esc(waitTip)}"` : ''}>Wait for reset${!waitTip ? ` <small class="lim-wait-at">· ${esc(limWhen(L.reset))}, ${esc(limUntil(L.reset))}</small>` : ''}</button>`;
   return `<div class="approval question qbox limitq" data-id="${esc(c.id)}" tabindex="-1">
-    <div class="lim-top">${ring}<div class="lim-text">${head}<div class="lim-sub">${sub}</div></div></div>
-    <div class="acts lim-acts"><button type="button" class="primary sm" data-i="0">Switch now</button><button type="button" class="secondary sm" data-i="1" ${L.reset ? '' : 'disabled title="It didn’t say when it resets"'}>Wait for reset</button><button type="button" class="secondary sm" data-i="2">Cancel</button></div>
+    <div class="lim-top">${ring}<div class="lim-text">${head}<div class="lim-sub">${sub}</div>${hist}</div></div>
+    <div class="acts lim-acts">${L.to ? `<button type="button" class="${toWait ? 'secondary' : 'primary'} sm" data-i="0">Switch now</button>` : ''}${waitBtn}<button type="button" class="secondary sm lim-other" title="Stops the countdown and opens the model picker">Another model…</button><button type="button" class="secondary sm" data-i="2">Cancel</button></div>
   </div>`;
 }
+const limUntil = (t) => { const mins = Math.max(0, Math.round((t - Date.now()) / 60e3)), h = Math.floor(mins / 60), r = mins % 60; return mins < 1 ? 'in under a minute' : `in about ${h ? `${h}h${r ? ` ${r}m` : ''}` : `${r}m`}`; };
 function wireLimit(card, m) {
-  const id = card.dataset.id;
-  for (const b of card.querySelectorAll('[data-i]')) b.onclick = () => {
+  const id = card.dataset.id, q = m.questions?.[id], L = q?.card?.limit || {};
+  const answer = (body) => {
     card.querySelectorAll('button').forEach((x) => (x.disabled = true));
     const r = $('.lim-ring', card); if (r) delete r.dataset.until; // the clock stops at once
-    postJ('/api/answer', { runId: m.runId, id, choice: Number(b.dataset.i) }).catch(() => {});
+    postJ('/api/answer', { runId: m.runId, id, ...body }).catch(() => {});
+  };
+  for (const b of card.querySelectorAll('[data-i]')) b.onclick = () => answer({ choice: Number(b.dataset.i) });
+  // Another model: the countdown stops for good while the picker is open (nothing switches behind your back), then the
+  // reply moves to the model you picked, from this chat's history, the same way as Switch now.
+  const other = $('.lim-other', card);
+  if (other) other.onclick = async () => {
+    const r = $('.lim-ring', card); if (r) delete r.dataset.until;
+    if (q?.card?.wait && !q.card.wait.held) {
+      postJ(`/api/runs/${m.runId}/hold`, { id }).catch(() => {});
+      const sub = $('.lim-sub', card); if (sub) sub.textContent = `${L.reset ? `Resets at ${limWhen(L.reset)}.` : ''} Countdown stopped: pick what to do.`.trim();
+    }
+    const pick = await pickModel('chat', L.to || '', { context: `${L.name || 'The provider'} hit its usage limit: carry on with` });
+    if (!pick) return;
+    if (pick.split('/')[0] === L.source) return uiAlert(`Pick a model outside ${L.name || 'that provider'}: it is the one out of usage.`);
+    answer({ text: `model:${pick}` });
   };
 }
 // The countdown ring and its seconds; at zero the server switches and the card redraws with the answer.
@@ -6419,6 +6451,14 @@ function drawLimitBar(c) {
   bar.hidden = !sw;
   if (!sw) { bar.innerHTML = ''; return; }
   const due = sw.until && Date.now() >= sw.until;
+  // "Switch back" was unticked and the limit has reset: ask once, Switch back or Stay. Stay keeps the bar as it is.
+  if (due && !sw.back && !sw.asked) {
+    bar.innerHTML = `<span class="lim-bar-ico" aria-hidden="true">⇄</span><span class="lim-bar-text">${esc(short(sw.from))}’s limit has reset. <b>Switch back to ${esc(short(sw.from))}?</b> <span class="lim-bar-was">It picks up from this chat’s history.</span></span>
+      <button type="button" class="primary sm lim-ask-back">Switch back</button><button type="button" class="secondary sm lim-ask-stay" title="Keep using ${esc(short(sw.to))} in this chat">Stay on ${esc(short(sw.to))}</button>`;
+    $('.lim-ask-back', bar).onclick = () => { delete c.agent.limitSwitch; saveChat(c); drawLimitBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/limit`, { back: true, now: true }).catch(() => {}); };
+    $('.lim-ask-stay', bar).onclick = () => { sw.asked = true; saveChat(c); drawLimitBar(c); };
+    return;
+  }
   bar.innerHTML = `<span class="lim-bar-ico" aria-hidden="true">⇄</span><span class="lim-bar-text">Now on ${limModel(sw.to)} <span class="lim-bar-was">instead of ${esc(short(sw.from))}${sw.until && !due ? `, which hit its limit` : ''}</span></span>
     ${sw.until && !due ? `<label class="sq-check lim-back" title="When the limit resets, the chat goes back to ${esc(short(sw.from))}"><input type="checkbox" ${sw.back ? 'checked' : ''}><span>Switch back at ${esc(limWhen(sw.until))}</span></label>` : ''}
     <button type="button" class="secondary sm lim-back-now" title="Go back to ${esc(short(sw.from))} now">Back to ${esc(short(sw.from))}</button>`;
@@ -6426,6 +6466,42 @@ function drawLimitBar(c) {
   if (cb) cb.onchange = () => { sw.back = cb.checked; saveChat(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/limit`, { back: cb.checked }).catch(() => {}); };
   $('.lim-back-now', bar).onclick = () => { delete c.agent.limitSwitch; saveChat(c); drawLimitBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/limit`, { back: true, now: true }).catch(() => {}); };
 }
+// The latest reply failed at a usage limit and no card showed (no fallback chosen for that provider): Retry, Switch
+// to… (the chat moves to the model you pick until the reset, like the card's switch) or Wait until the reset (QuorX sends
+// it again then, while it is open). Only on the latest failed turn; older ones keep just their error.
+function limitFailOf(c, m) {
+  const L = m.limitHit || m.stats?.modelLimit;
+  return L && !m.live && !c.running && c.agent.messages.at(-1) === m ? L : null;
+}
+function drawLimitFail(c, m, el) {
+  $('.lim-fail', el)?.remove();
+  const L = limitFailOf(c, m); if (!L) return;
+  const waitOk = L.waitOk && L.reset > Date.now();
+  const row = document.createElement('div'); row.className = 'lim-fail';
+  row.innerHTML = m.limitWaitAt ? `<span class="lim-fail-t">⏳ Sending again when ${esc(L.name || 'the provider')} resets: ${esc(limWhen(m.limitWaitAt))} · ${esc(limUntil(m.limitWaitAt))}</span><button type="button" class="secondary sm lim-fail-unwait">Don’t wait</button>`
+    : `<span class="lim-fail-t">${esc(L.name || 'The provider')} is out of usage${L.reset ? ` until ${esc(limWhen(L.reset))}` : ''}.</span>${retryable(c, m) ? '' : '<button type="button" class="secondary sm lim-fail-retry" title="Carry on on the chat’s model now">↻ Retry</button>'}<button type="button" class="primary sm lim-fail-switch" title="Carry on with another model until the limit resets. It picks up from this chat’s history.">Switch to…</button>${waitOk ? `<button type="button" class="secondary sm lim-fail-wait" title="QuorX sends it again at the reset, while it is open">Wait until ${esc(limWhen(L.reset))}</button>` : ''}`;
+  $('.foot', el).before(row);
+  const again = () => (retryable(c, m) ? retryReply(c, m) : send(c, 'Go on from where you stopped.'));
+  const b = (k) => $(`.lim-fail-${k}`, row);
+  if (b('retry')) b('retry').onclick = again;
+  if (b('unwait')) b('unwait').onclick = () => { delete m.limitWaitAt; saveChat(c); drawLimitFail(c, m, el); };
+  if (b('wait')) b('wait').onclick = () => { m.limitWaitAt = L.reset; saveChat(c); drawLimitFail(c, m, el); };
+  if (b('switch')) b('switch').onclick = async () => {
+    const pick = await pickModel('chat', '', { context: `${L.name || 'The provider'} is out of usage: carry on with` });
+    if (!pick) return;
+    if (pick.split('/')[0] === L.source) return uiAlert(`Pick a model outside ${L.name || 'that provider'}: it is the one out of usage.`);
+    c.agent.limitSwitch = { source: L.source, from: c.agent.setup.model, to: pick, until: L.reset || 0, back: !!L.reset };
+    saveChat(c); drawLimitBar(c); again();
+  };
+}
+// "Wait until": at the reset the latest failed reply goes again (checked with the bar's clock below).
+function limitWaitsDue() {
+  for (const c of G.open?.values?.() || []) {
+    const m = c.agent?.messages?.at(-1);
+    if (m?.limitWaitAt && Date.now() >= m.limitWaitAt && limitFailOf(c, m)) { delete m.limitWaitAt; saveChat(c); retryable(c, m) ? retryReply(c, m) : send(c, 'Go on from where you stopped.'); }
+  }
+}
+setInterval(limitWaitsDue, 20e3);
 // The bar goes by itself once the reset passes (and "Switch back" is ticked).
 setInterval(() => { for (const c of G.open?.values?.() || []) if (c.agent?.limitSwitch) drawLimitBar(c); }, 30e3);
 
@@ -6523,8 +6599,8 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   // ⚙ Settings as they are, for quorx_settings to read (settings above is this chat's view of them).
   const prefs = { ...G.settings, theme: G.theme ?? 'system' };
   const lsw = limitSwitchNow(c);
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(a.limitMode === 'wait' ? { limitMode: 'wait' } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(a.limitMode === 'wait' ? { limitMode: 'wait' } : {}), ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, async (signal) => {
@@ -6724,7 +6800,7 @@ async function followRun(c, m, open) {
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'done') { m.doneAt = Date.now(); m.content = e.reply; m.note = e.historyNote; m.stats = e.stats; G.sessionCost += e.stats.cost; renderSpend(); loadScores(); setTimeout(() => loadChatBudget(c), 400); }
-        if (e.t === 'error') { setTimeout(() => loadChatBudget(c), 400); m.error = e.msg; m.failed = !e.stopped; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
+        if (e.t === 'error') { setTimeout(() => loadChatBudget(c), 400); m.error = e.msg; m.failed = !e.stopped; if (e.limit) m.limitHit = e.limit; if (e.stats && !m.stats) { m.stats = { ...e.stats, partial: true }; G.sessionCost += e.stats.cost || 0; renderSpend(); } }
         if (e.t === 'interrupted') { m.error = 'The harness restarted while this reply was running.'; m.resumable = !!e.resumable; closeOpenCards(m); }
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
@@ -8053,6 +8129,10 @@ function settingsPanels(S) {
       `<div class="pv-home">${stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
         stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
         + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`))}</div>`,
+      // The card a chat shows when a provider runs out of usage (each provider's fallback model is on its own card above).
+      `<div class="pv-home">${stCard('At a usage limit', 'When a provider with a fallback model (on its card above) runs out of usage, the chat shows a card: switch, wait for the reset, or stop. Each chat can also wait limits out instead (This chat → At a usage limit).',
+        stRow('Countdown before switching', 'In ⚡ YOLO, or when the fallback costs nothing per call, the card switches after this long. In 🔒 Strict a paid fallback always asks first.', stStep('limitSwitchSecs', S.limitSwitchSecs ?? 15, 1, 120, 1, 's'))
+        + stRow('Offer “Wait for reset” within', 'Waiting holds the reply until the provider resets. Offered only when the reset is at most this far away.', stStep('limitWaitHours', S.limitWaitHours ?? 6, 0, 168, 1, 'h')))}</div>`,
       // OpenRouter's own settings: they go into OpenRouter's page when it is open (drawProviders moves them).
       `<div id="pvOrHold" hidden><div id="pvOrCards">${stCard('Spending limit and models', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit')}${stCard('Fallback on OpenRouter', 'When a chat’s OpenRouter model fails or is down.', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')}${stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
