@@ -38,6 +38,7 @@ import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, st
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, knownFolder, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
@@ -203,6 +204,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
+    // Search inside chats (server/chatsearch.js): Ctrl+K's Messages group and the Search chats window.
+    if (url.pathname === '/api/search/chats' && req.method === 'GET') {
+      const s = url.searchParams, project = s.get('project') || '', role = s.get('role') || '';
+      if (project && !validId(project)) return json(res, 400, { error: 'bad project id' });
+      if (role && role !== 'user' && role !== 'agent') return json(res, 400, { error: 'role is user or agent' });
+      if ((s.get('q') || '').length > 200) return json(res, 400, { error: 'search for 200 characters at most' });
+      return json(res, 200, await searchChats({ q: s.get('q') || '', project, role, from: s.get('from'), to: s.get('to'), archived: s.get('archived') === '1', offset: s.get('offset'), limit: s.get('limit'), perChat: s.get('per') }));
+    }
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost', providerOf: providerOfModel }));
     // What each provider was paid (⚙ Settings → Providers): today, this month, all time, calls, models, 14 days.
     if (url.pathname === '/api/costs/providers' && req.method === 'GET') return json(res, 200, providerUsage({ providerOf: providerOfModel }));

@@ -359,6 +359,13 @@ function indexWrite(id, doc, text) {
   const f = `${id}.json`;
   try { SUMMARIES.set(f, entryOf(keyOf(fs.statSync(path.join(DIR, f))), doc, text)); changed(); } catch { dirty.add(f); }
 }
+/** A chat file's size:mtime stamp from the index (null: not in it), so chat search knows when its copy is stale. */
+export function chatFileKey(id) {
+  summaries();
+  return SUMMARIES.get(`${id}.json`)?.key ?? null;
+}
+/** The chats folder, for chat search to read files on its own schedule. */
+export const CHATS_DIR = DIR;
 /** What a chat allows on its own, from the index ({ cmdRules, allowed, allowedMeta, apps, folders }, or null). */
 export function chatPerms(id) {
   summaries();
