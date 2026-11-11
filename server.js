@@ -39,6 +39,7 @@ const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
 import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn, busyNow } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -610,7 +611,30 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/servers/overview' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid) }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [] }); }
+      // Pages first: the old previews leave the launch file (once) before the servers are read.
+      try { const pages = listPages(pid); return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid), pages: pages.pages, pagesNotice: pages.notice }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [], pages: [] }); }
+    }
+    // ---- pages (server/pages.js): previews and mockups on the pages address, apart from the project's servers ----
+    if (url.pathname === '/api/pages' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ...listPages(pid), pagePort: runtime.pagePort || null }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, pages: [] }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try {
+        if (b.action === 'undo') return json(res, 200, { ok: true, restored: undoMove(b.projectId) });
+        if (b.action === 'dismiss') return json(res, 200, { ok: dismissMove(b.projectId) });
+        if (b.action === 'keep') return json(res, 200, { ok: true, config: keepAsServer(b.projectId, b.entry, b.name) });
+        if (b.action === 'add') return json(res, 200, { ok: true, ...addPage(b.projectId, { entry: b.entry, title: b.title }) });
+        return json(res, 400, { error: 'action must be undo, dismiss, keep or add' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'DELETE') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: removePage(pid, url.searchParams.get('entry') || '') }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/servers/log' && req.method === 'GET') return json(res, 200, { log: serverLog(url.searchParams.get('key')) });
     if (url.pathname === '/api/servers/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopServerWait(b.key, 'you'); return json(res, 200, { ok: !!r, ...(r || {}) }); }
@@ -632,7 +656,9 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4));
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       try {
+        migrateProject(b.projectId, { create: true });
         const config = saveLaunchConfig(b.projectId, b);
+        if (isPreviewEntry(config)) ensureServeScript(workspaceDir(b.projectId));
         // A renamed server that isn't running leaves no row under its old name.
         if (b.oldName && b.oldName !== config.name && serverFor(b.projectId, b.oldName)?.status === 'stopped') await forgetServer(b.projectId, b.oldName, 'you');
         return json(res, 200, { ok: true, config });
@@ -1397,6 +1423,14 @@ if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 const pageServer = http.createServer((req, res) => {
   let p = '';
   try { p = new URL(req.url, 'http://x').pathname; } catch { /* below */ }
+  // A page of a project that links from the root (/style.css, /about.html), as it would on a server of its own: sent
+  // on to the same path in its project, which its address (Referer) names. Only its own project, as below.
+  const from = String(req.headers.referer || '').match(/^https?:\/\/[^/]+\/ws\/([a-z0-9-]+)\//i);
+  if (from && isLoopback(req) && ['GET', 'HEAD'].includes(req.method) && p.startsWith('/') && !/^\/(ws|art|preview|wsf|api)(\/|$)/.test(p)) {
+    let q = ''; try { q = new URL(req.url, 'http://x').search; } catch { /* none */ }
+    res.writeHead(307, { Location: `/ws/${from[1]}${p}${q}`, 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (!isLoopback(req) || !['GET', 'HEAD'].includes(req.method) || !/^\/(ws|art|preview\/page)\//.test(p)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not here'); }
   req.pageOrigin = true;
   server.emit('request', req, res);
