@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   hideAll: () => call('hideAll'),
   nav: (sid, op) => call('nav', sid, op),
   close: (sid) => call('close', sid),
+  find: (sid, op, text, opts) => call('find', sid, op, text, opts),
   snapshot: (sid) => call('snapshot', sid),
   sound: (op, arg) => call('sound', op, arg),
   tabs: (op, sid) => call('tabs', op, sid),
@@ -33,5 +34,9 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   openExternal: (url) => call('openExternal', url),
   showFile: (file) => call('showFile', file),
   perf: () => call('perf'),
+  // The taskbar badge: how many chats need you, and the picture the page drew for it.
+  badge: (n, png) => call('badge', n, png),
+  // The mouse's side buttons come from the window (see 'app-command' in main.js), not from the page's own events.
+  navButtons: true,
   on: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
 });

@@ -30,6 +30,7 @@
 <link rel="stylesheet" href="chatflow.css">
 <link rel="stylesheet" href="perf.css">
 <link rel="stylesheet" href="worktrees.css">
+<link rel="stylesheet" href="workspace.css">
 </head>
 <body>
 <!-- Top bar: app-wide controls only. Everything about one chat lives in that chat's header and composer. -->
@@ -50,6 +51,16 @@
 </header>
 
 <div class="shell">
+<!-- The rail: Chats (the sidebar slides out from here), Running, Servers and Files. With the sidebar closed it also
+     carries the buttons the sidebar had (moved here by wrInit in app.js). -->
+<nav class="ws-rail" id="wsRail" aria-label="Panels">
+  <div class="wr-top wr-extra"></div>
+  <button type="button" class="wr-btn" data-rail="chats" data-tip="Projects and chats" aria-label="Projects and chats" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12.5h5"/></svg></button>
+  <button type="button" class="wr-btn" data-rail="servers" data-tip="Servers: this project's servers and pages" aria-label="Servers"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></svg></button>
+  <button type="button" class="wr-btn" data-rail="files" data-tip="Files: this project's files, each previewed" aria-label="Files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+  <div class="wr-sp"></div>
+  <div class="wr-foot wr-extra"></div>
+</nav>
 <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
   <div class="sb-expanded">
     <!-- On wider screens the app's title row lives here (moved from the top bar by placeChrome in app.js). -->
@@ -104,6 +115,24 @@
 </aside>
 <div class="sidebar-backdrop" id="sideBackdrop"></div>
 <div class="resizer" id="sideResizer" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabindex="0" title="Drag to resize · double-click to reset"></div>
+<!-- The rail's Running panel: the Running list, in the sidebar's place. -->
+<aside class="ws-panel" id="wsPanel" aria-label="Running">
+  <div class="wp-head"><b>Running</b><small>in every project</small><span class="wp-sp"></span><button type="button" class="wp-close" id="wpClose" aria-label="Close the Running panel" title="Close">✕</button></div>
+  <div class="wp-body" id="wpBody"></div>
+</aside>
+<div class="ws-main">
+<!-- Back / forward, then the open chats of this project as tabs; on a phone, a switcher and a menu instead. -->
+<div class="ws-top" id="wsTop">
+  <div class="wt-nav">
+    <button type="button" class="wt-navb" id="wsBack" aria-label="Back" title="Back (Alt+←, or the mouse's back button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+    <button type="button" class="wt-navb" id="wsFwd" aria-label="Forward" title="Forward (Alt+→, or the mouse's forward button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+  </div>
+  <span class="wt-proj" id="wtProj" hidden></span>
+  <div class="wt-strip" id="wtStrip" role="tablist" aria-label="Open chats"></div>
+  <button type="button" class="wt-switch" id="wtSwitch" aria-haspopup="menu" title="Open chats: switch, or reopen one you closed"></button>
+  <button type="button" class="wt-more" id="wtMore" aria-haspopup="menu" aria-label="All open chats, and reopen closed tabs" title="All open chats, and reopen closed tabs (Ctrl+Shift+T)">…</button>
+  <button type="button" class="wt-panels" id="wtPanels" aria-haspopup="menu" aria-label="Panels: chats, running, servers, files" title="Chats, Running, Servers, Files">☰<i class="wt-pn" hidden></i></button>
+</div>
 <main class="layout">
   <section class="work">
     <div class="chats" id="chats"></div>
@@ -117,11 +146,13 @@
       <button type="button" role="tab" data-tab="trace" aria-label="Steps" title="Steps&#10;Everything a reply did, in order"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M11 6h9M11 12h9M11 18h9"/><circle cx="6" cy="12" r="1.2" fill="currentColor"/></svg><span class="pt-label">Steps</span></button>
       <button type="button" role="tab" data-tab="term" aria-label="Terminal" title="Terminal&#10;Your own terminals, and every command and server in this project, live"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg><span class="pt-label">Terminal</span> <span class="pt-n"></span></button>
       <button type="button" role="tab" data-tab="files" aria-label="Files" title="Files&#10;This chat's artifacts and the project's files, each previewed"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="pt-label">Files</span></button>
+      <!-- Files open as tabs here, after the pane's five; the empty part of the strip maximises the group on a double-click. -->
+      <span class="pa-files"></span>
       <span class="pt-spacer"></span>
-      <button type="button" class="pt-icon pa-btn" data-pa="split" aria-label="Split the pane" title="Split: show another tab below this one"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12h16"/></svg></button>
-      <button type="button" class="pt-icon pa-btn" data-pa="close" aria-label="Close this area" title="Close this area (the others take its space)" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg></button>
+      <span class="pa-follow" hidden>👁</span>
+      <button type="button" class="pt-icon pa-btn" data-pa="max" aria-pressed="false" aria-label="Maximise this group" title="Maximise this group">⤢</button>
+      <button type="button" class="pt-icon pa-btn" data-pa="more" aria-haspopup="menu" aria-label="More for this group" title="Split, move, maximise, follow the agent, close">⋯</button>
       <button type="button" class="pt-icon" id="paneSrvBtn" title="Servers: run, stop and edit this project's dev servers" aria-label="Servers" aria-haspopup="dialog" aria-expanded="false"></button>
-      <button type="button" class="pt-icon" id="paneMaxBtn" aria-pressed="false" title="Make the pane full width">⤢</button>
     </div>
     <div class="srv-pop pane-srv-pop" id="paneSrvPop" role="dialog" aria-label="Servers in this project" hidden></div>
     <div class="pane-tool" id="paneTool">
@@ -139,6 +170,9 @@
   </aside>
 </main>
 </div>
+</div>
+<!-- The status bar: what needs you, what runs, this project's servers, and the context left in the chat on screen. -->
+<footer class="ws-status" id="wsStatus" aria-label="Status"></footer>
 
 <dialog id="settings" class="st-dialog" aria-label="Settings">
   <div class="settings-modal">

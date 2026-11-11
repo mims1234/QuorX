@@ -1,0 +1,229 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The workspace's chrome (app.js, "the workspace's chrome"): the rail on the left, the chat tabs with back / forward
+   along the top, the Running panel in the sidebar's place, and the status bar at the bottom. Phones (≤ 900px) keep
+   their own layout: a chat switcher and a ☰ menu instead of the tabs and the rail, and no status bar. */
+
+/* ---------- the column beside the rail: tabs on top of the chat and the pane ---------- */
+.ws-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.ws-main > .layout { flex: 1; min-height: 0; }
+
+/* ---------- the rail ---------- */
+.ws-rail { display: none; }
+body.ws-on .ws-rail { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: none; width: 44px; padding: 8px 0; background: var(--panel); border-right: 1px solid var(--line); z-index: 6; }
+.ws-rail .wr-top, .ws-rail .wr-foot { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.ws-rail .wr-top { padding-bottom: 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
+.ws-rail .wr-sp { flex: 1; }
+/* The buttons the folded sidebar had appear only while the sidebar is closed (open, it has them itself). */
+.shell:not(.wr-closed):not(.wr-run) .ws-rail .wr-extra { display: none; }
+.ws-rail .wr-btn, .ws-rail .sb-rail-btn { position: relative; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
+.ws-rail .wr-btn svg, .ws-rail .sb-rail-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ws-rail .wr-btn:hover, .ws-rail .sb-rail-btn:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+.ws-rail .wr-btn:focus-visible, .ws-rail .sb-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The open panel's button: a bar on its left edge and the accent colour. */
+.ws-rail .wr-btn.on, .ws-rail .sb-rail-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ws-rail .wr-btn.on::before, .ws-rail .sb-rail-btn.on::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.ws-rail .sb-rail-btn.active { color: var(--accent); }
+/* Running's count: a number tag in the corner, like the sidebar's. */
+.ws-rail .rl-badge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 4px; background: var(--st-run, #3ccf91); color: #04140c; font: 700 9.5px/15px var(--mono, monospace); font-style: normal; text-align: center; }
+.ws-rail .rl-badge[hidden] { display: none; }
+.ws-rail .nw-dot { position: absolute; top: 4px; right: 4px; }
+/* With the rail there, a closed sidebar is gone (no folded strip beside the rail). */
+body.ws-on .sidebar.collapsed { display: none !important; }
+body.ws-on .shell.wr-run .sidebar, body.ws-on .shell.wr-run #sideResizer { display: none !important; }
+
+/* ---------- the Running panel ---------- */
+.ws-panel { display: none; }
+body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex: none; width: clamp(300px, var(--side-w, 300px), 420px); min-height: 0; background: var(--panel); border-right: 1px solid var(--line); }
+.ws-panel .wp-head { display: flex; align-items: baseline; gap: 8px; height: 42px; flex: none; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); line-height: 42px; }
+.ws-panel .wp-head b { font-size: 13px; color: var(--text); }
+.ws-panel .wp-head small { color: var(--dim); font-size: 11.5px; }
+.ws-panel .wp-sp { flex: 1; }
+.ws-panel .wp-close { align-self: center; width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
+.ws-panel .wp-close:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+.ws-panel .wp-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px; display: grid; align-content: start; gap: 10px; }
+.ws-panel .run-row { grid-template-columns: minmax(0, 1fr); }
+.ws-panel .wp-chat { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 7px 9px; margin-top: 4px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: 500 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+.ws-panel .wp-chat:hover { border-color: var(--line-strong, var(--line)); background: var(--panel-3); }
+.ws-panel .wp-chat .wt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-panel .wp-chat small { flex: none; color: var(--muted); font-size: 11px; }
+.ws-panel .wp-chat.st-wait { border-color: color-mix(in srgb, var(--st-wait) 45%, transparent); }
+.ws-panel .wp-chat.st-wait small { color: var(--st-wait); }
+.ws-panel .wp-chat :is(.wt-dot) { flex: none; }
+.ws-panel .wp-chat.st-run .wt-dot { border: 0; background: var(--st-run); box-shadow: 0 0 7px var(--st-run); }
+.ws-panel .wp-chat.st-wait .wt-dot { border: 0; width: 8px; height: 8px; background: var(--st-wait); box-shadow: 0 0 8px var(--st-wait); }
+.ws-panel .run-acts { justify-content: flex-start; }
+
+/* ---------- the top row: ‹ ›, the project, the chat tabs, … ---------- */
+.ws-top { display: flex; align-items: stretch; gap: 4px; height: 40px; flex: none; padding: 0 6px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; }
+.ws-top .wt-nav { display: flex; align-items: center; gap: 2px; flex: none; }
+.ws-top .wt-navb, .ws-top .wt-more, .ws-top .wt-panels { align-self: center; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; flex: none; }
+.ws-top .wt-navb svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ws-top .wt-navb:hover:not(:disabled), .ws-top .wt-more:hover, .ws-top .wt-panels:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+.ws-top .wt-navb:disabled { opacity: .35; cursor: default; }
+.ws-top .wt-proj { align-self: center; flex: none; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; margin: 0 2px 0 4px; border-radius: 4px; font: 600 11px var(--font-ui); letter-spacing: .02em;
+  color: hsl(var(--ph, 170) 55% 62%); background: hsl(var(--ph, 170) 45% 50% / .12); border: 1px solid hsl(var(--ph, 170) 45% 50% / .3); }
+.ws-top .wt-proj[style*="--pcx"] { color: var(--pcx); background: color-mix(in srgb, var(--pcx) 12%, transparent); border-color: color-mix(in srgb, var(--pcx) 35%, transparent); }
+.ws-top .wt-proj[hidden] { display: none; }
+.ws-top .wt-strip { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-top: 6px; }
+.ws-top .wt-strip::-webkit-scrollbar { display: none; }
+.ws-top .wt-none { align-self: center; color: var(--dim); font-size: 12px; padding: 0 8px; white-space: nowrap; }
+
+/* A tab: the state dot, the name, × (shown on hover and on the tab on screen). */
+.wt-tab { position: relative; display: flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 96px; max-width: 220px; height: 33px; padding: 0 6px 0 11px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); font: 500 12.5px var(--font-ui); cursor: pointer; user-select: none; }
+.wt-tab:hover { background: var(--panel-2); color: var(--text); }
+.wt-tab.on { background: var(--bg); color: var(--text); border-color: var(--line); }
+.wt-tab.on::after { content: ""; position: absolute; left: -1px; right: -1px; bottom: -1px; height: 1px; background: var(--bg); }
+.wt-tab.on::before { content: ""; position: absolute; left: 10px; right: 10px; top: -1px; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
+.wt-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wt-tab .wt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-tab .wt-x { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; }
+.wt-tab:hover .wt-x, .wt-tab.on .wt-x, .wt-tab:focus-within .wt-x { opacity: 1; }
+.wt-tab .wt-x:hover { background: var(--panel-3); color: var(--text); }
+.wt-tab.drag { opacity: .45; }
+.wt-tab.drop-l { box-shadow: inset 2px 0 0 var(--accent); }
+.wt-tab.drop-r { box-shadow: inset -2px 0 0 var(--accent); }
+.wt-tab .sr-only, .wt-list .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* The state dot, in the sidebar's state colours: working (green, pulsing), needs you (amber, pulsing), finished but
+   not seen (blue), stopped with an error (red diamond). An idle chat has a quiet hollow dot. */
+.wt-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--dim); box-sizing: border-box; }
+:is(.wt-tab, .wt-lrow, .wt-dot).st-run .wt-dot, .wt-dot.st-run { border: 0; background: var(--st-run); box-shadow: 0 0 7px var(--st-run); animation: pulse-beacon 1.4s infinite cubic-bezier(.4, 0, .6, 1); }
+:is(.wt-tab, .wt-lrow).st-wait .wt-dot, .wt-dot.st-wait { border: 0; width: 8px; height: 8px; background: var(--st-wait); box-shadow: 0 0 8px var(--st-wait); animation: pulse-beacon-amber 1s infinite cubic-bezier(.4, 0, .6, 1); }
+:is(.wt-tab, .wt-lrow).st-done .wt-dot, .wt-dot.st-done { border: 0; background: var(--st-done); }
+:is(.wt-tab, .wt-lrow).st-error .wt-dot, .wt-dot.st-error { border: 0; border-radius: 1px; transform: rotate(45deg); background: var(--st-error); }
+.wt-tab.st-wait:not(.on) { color: var(--st-wait); }
+@media (prefers-reduced-motion: reduce) { .wt-dot, .wt-tab .wt-dot, .wt-lrow .wt-dot { animation: none !important; } }
+
+/* Phone-only pieces stay out of the desktop row. */
+.ws-top .wt-switch, .ws-top .wt-panels { display: none; }
+.wt-panels .wt-pn { position: absolute; top: 1px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 4px; background: var(--st-wait); color: #1a1002; font: 700 9px/14px var(--mono, monospace); font-style: normal; }
+.wt-panels .wt-pn[hidden] { display: none; }
+
+/* … : the open chats and what was closed */
+.wt-list { width: 300px; max-height: min(70vh, 520px); overflow: auto; }
+.wt-list .wt-lrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wt-list .wt-lrow .wt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-list .wt-lrow small { flex: none; color: var(--dim); font-size: 11px; }
+.wt-list .wt-lrow.on { background: var(--panel-2); }
+.wt-list .wt-lrow.closed { color: var(--muted); }
+.wt-list .wt-lrow.closed::before { content: "↺"; color: var(--dim); }
+.wt-list .wt-lh { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px 2px; color: var(--dim); font: 600 10.5px var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
+.wt-list .wt-lh kbd { font: 500 10px var(--mono, monospace); text-transform: none; letter-spacing: 0; color: var(--dim); }
+.wt-list .wt-none { display: block; padding: 6px 10px; color: var(--dim); font-size: 12px; }
+.wt-list .wt-lf { padding: 2px 2px 6px; }
+.wt-list .wt-lrows { display: grid; gap: 2px; }
+
+/* ---------- the status bar ---------- */
+.ws-status { display: flex; align-items: center; gap: 2px; height: 24px; flex: none; padding: 0 8px; background: var(--panel); border-top: 1px solid var(--line); font: 11.5px var(--font-ui); white-space: nowrap; overflow: hidden; }
+.ws-status button { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.ws-status button:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+.ws-status .wsb-need { color: var(--st-wait); font-weight: 700; background: color-mix(in srgb, var(--st-wait) 12%, transparent); border-color: color-mix(in srgb, var(--st-wait) 35%, transparent); }
+.ws-status .wsb-need:hover { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 20%, transparent); }
+.ws-status .wsb-grow { flex: 1; }
+.ws-status .wsb-live { color: var(--st-run); }
+/* The context figure in the composer meter's colours: running low turns amber, then red. */
+.ws-status .wsb-ctx[data-tone="amber"] { color: var(--amber); }
+.ws-status .wsb-ctx[data-tone="red"] { color: var(--bad, var(--st-error)); }
+/* Needs you rows in the rail's Running panel look as they do in the Running window. */
+#wpBody .rl-sec[hidden], #wpBody .rl-row[hidden] { display: none; }
+#wpBody .rl-sec h4 { align-items: center; }
+#wpBody .rl-none { padding: 6px 2px; font-size: 12.5px; color: var(--muted); }
+#wpBody .st-segmented { display: inline-flex; flex-wrap: wrap; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-inset); border: 1px solid var(--border-inset, var(--line)); }
+#wpBody .st-seg-btn { height: 24px; padding: 0 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+#wpBody .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+#wpBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
+
+/* ---------- phones: one view at a time (phone.css); the strip becomes a switcher, the rail a ☰ menu ---------- */
+@media (max-width: 900px) {
+  body.ws-on .ws-rail, .ws-status, .ws-panel { display: none !important; }
+  .ws-top { height: 44px; gap: 6px; }
+  .ws-top .wt-strip, .ws-top .wt-proj, .ws-top .wt-more { display: none !important; }
+  .ws-top .wt-switch { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; align-self: center; height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: 600 13px var(--font-ui); cursor: pointer; }
+  .ws-top .wt-switch .wt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+  .ws-top .wt-switch .wt-n { flex: none; padding: 0 6px; border-radius: 4px; background: var(--panel-3); color: var(--muted); font: 600 11px var(--mono, monospace); }
+  .ws-top .wt-panels { display: grid; position: relative; width: 34px; height: 34px; font-size: 16px; }
+  .ws-top .wt-navb { width: 32px; height: 32px; }
+  /* Only in the Chat view: the chat list and the preview have their own heads. */
+  body:not([data-mview="chat"]) .ws-top { display: none; }
+  .ws-main { height: 100%; }
+  .wt-list { width: min(92vw, 360px); }
+}
+
+/* ---------- W2: the groups placed by rectangles (app.js, "the groups on screen") ----------
+   On a desktop the chat's box (.work) and every pane area are drawn absolutely, each at its group's rectangle (--gx,
+   --gy, --gw, --gh), so splitting, moving the chat or maximising never moves a box in the page (a moved frame reloads,
+   a terminal loses its screen). The pane itself is only a layer over the layout that lets clicks through to the chat. */
+main.layout.ws-free { position: relative; display: block !important; overflow: hidden; }
+main.layout.ws-free > #paneResizer { display: none !important; }
+main.layout.ws-free > section.work { position: absolute !important; left: var(--gx, 0) !important; top: var(--gy, 0) !important; width: var(--gw, 100%) !important; height: var(--gh, 100%) !important; max-width: none !important; min-width: 0 !important; grid-column: auto !important; margin: 0 !important; }
+main.layout.ws-free > aside#pane { position: absolute !important; inset: 0 !important; width: auto !important; height: auto !important; max-width: none !important; min-width: 0 !important; display: block; pointer-events: none; background: none !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; transform: none !important; grid-column: auto !important; }
+main.layout.ws-free > aside#pane > .pane-area { position: absolute !important; left: var(--gx, 0); top: var(--gy, 0); width: var(--gw, 100%); height: var(--gh, 100%); pointer-events: auto; min-height: 0 !important; background: var(--panel); border-left: 1px solid var(--line); overflow: hidden; }
+main.layout.ws-free > aside#pane > .pane-area[hidden] { display: none !important; }
+/* The group you use: an accent line along its strip (the chat's: along its header, while you are in it). */
+main.layout.ws-free > aside#pane.split > .pane-area.on > .pane-tabs { box-shadow: inset 0 2px 0 var(--accent); }
+main.layout.ws-free > aside#pane > .pane-area.maxed { border-left: 0; }
+/* The bars between groups. */
+.ws-bar { position: absolute; z-index: 8; background: var(--bg); touch-action: none; }
+.ws-bar[data-dir="row"] { cursor: col-resize; }
+.ws-bar[data-dir="col"] { cursor: row-resize; }
+.ws-bar::after { content: ''; position: absolute; border-radius: 2px; background: var(--line-strong); opacity: .7; }
+.ws-bar[data-dir="row"]::after { left: 2px; top: 50%; width: 2px; height: 36px; margin-top: -18px; }
+.ws-bar[data-dir="col"]::after { top: 2px; left: 50%; height: 2px; width: 36px; margin-left: -18px; }
+.ws-bar:hover::after, .ws-bar.drag::after, .ws-bar:focus-visible::after { background: var(--accent); opacity: 1; }
+.ws-bar:focus-visible { outline: none; background: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+
+/* ---------- a group's strip: file tabs, the follow mark, ⤢ and ⋯ ---------- */
+#pane .pane-tabs .pa-files { display: inline-flex; align-items: stretch; min-width: 72px; flex: 0 1 auto; overflow: hidden; }
+#pane .pane-tabs .pa-files:empty { display: none; }
+#pane .pane-tabs .pa-ftab { display: inline-flex; align-items: center; gap: 5px; min-width: 40px; flex: 0 1 auto; max-width: 170px; height: 34px; padding: 0 4px 0 9px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); font: 12.5px var(--font-ui); cursor: pointer; }
+#pane .pane-tabs .pa-ftab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ftab.on { min-width: 72px; flex-shrink: 0; color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ftab.preview .ft-name { font-style: italic; }
+#pane .pane-tabs .pa-ftab .ft-ico { flex: none; font-size: 12px; }
+#pane .pane-tabs .pa-ftab .ft-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane .pane-tabs .pa-ftab .ft-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--dim); font-size: 14px; line-height: 1; opacity: 0; }
+#pane .pane-tabs .pa-ftab:hover .ft-x, #pane .pane-tabs .pa-ftab.on .ft-x, #pane .pane-tabs .pa-ftab:focus-visible .ft-x { opacity: 1; }
+#pane .pane-tabs .pa-ftab .ft-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+/* The group that follows the agent: a small violet tag, not a button. */
+#pane .pane-tabs .pa-follow { align-self: center; flex: none; padding: 1px 6px; margin-right: 2px; border-radius: 4px; border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 45%, transparent); color: var(--violet, #a78bfa); font: 600 10.5px var(--mono, monospace); white-space: nowrap; cursor: default; }
+#pane .pane-tabs .pa-follow.off { opacity: .45; }
+#pane .pane-tabs .pa-follow[hidden] { display: none; }
+#pane .pane-tabs .pt-spacer { cursor: default; }
+#pane .pane-tabs [data-pa="max"][aria-pressed="true"] { color: var(--accent); }
+/* The Artifact tab's list of files from the chat, when there are no plans. */
+.pf-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
+.pf-list b { font-size: 12px; color: var(--muted); }
+.chat-head .ch-btn.ch-move { cursor: grab; }
+@media (max-width: 900px) { .chat-head .ch-btn.desk-only { display: none !important; } }
+
+/* ---------- dropping a tab: five zones per group, an outline where it would go ---------- */
+.ws-drop { position: absolute; inset: 0; z-index: 45; background: color-mix(in srgb, var(--bg) 30%, transparent); }
+.ws-drop-hint { position: absolute; display: none; box-sizing: border-box; padding: 6px; pointer-events: none; transition: left .08s, top .08s, width .08s, height .08s; }
+.ws-drop.hot .ws-drop-hint { display: block; }
+.ws-drop-hint[hidden] { display: none !important; }
+.ws-drop-hint::before { content: ''; position: absolute; inset: 6px; border: 2px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.ws-drop-hint > span { position: relative; display: inline-block; margin: 10px; padding: 3px 8px; border-radius: 5px; background: var(--accent); color: var(--on-accent, #fff); font: 600 12px var(--font-ui); }
+.ws-drop-hint.no::before { border-style: dashed; border-color: var(--warn, #e0a030); background: color-mix(in srgb, var(--warn, #e0a030) 10%, transparent); }
+.ws-drop-hint.no > span { background: var(--warn, #e0a030); color: #1b1300; }
+
+/* ---------- a phone: one group at a time, and a row to switch ---------- */
+.ws-phone-sw { display: flex; gap: 4px; flex: none; padding: 6px 8px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--panel); }
+.ws-phone-sw button { flex: none; height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 12px var(--font-ui); }
+.ws-phone-sw button.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ---------- find in the focused tab (Ctrl+F): a small bar at the top right of the group ---------- */
+.find-bar { position: absolute; top: 40px; right: 12px; z-index: 50; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / .28); }
+.layout > .work > .find-bar { top: 10px; right: 16px; }
+.find-bar .fb-q { width: 200px; height: 26px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); font: 12.5px var(--font-ui); }
+.find-bar .fb-q:focus { outline: none; border-color: var(--accent); }
+.find-bar.none .fb-q { border-color: var(--warn, #e0a030); }
+.find-bar .fb-n { min-width: 64px; color: var(--muted); font: 11.5px var(--mono, monospace); text-align: center; white-space: nowrap; }
+.find-bar button { width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.find-bar button:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+::highlight(qx-find) { background: rgba(250, 204, 21, .38); color: inherit; }
+::highlight(qx-find-now) { background: #f59e0b; color: #111; }
+/* In a narrow group the strip scrolls; ⋯, ⤢ and the follow mark stay pinned at its right end. */
+#pane .pane-tabs > [data-pa="more"] { position: sticky; right: 0; z-index: 3; background: var(--panel); }
+#pane .pane-tabs > [data-pa="max"] { position: sticky; right: 26px; z-index: 3; background: var(--panel); }
+#pane .pane-tabs > .pa-follow { position: sticky; right: 54px; z-index: 3; background: var(--panel); box-shadow: -8px 0 8px -4px var(--panel); }
+#pane .pane-tabs > .pa-follow[hidden] + [data-pa="max"] { box-shadow: -8px 0 8px -4px var(--panel); }
