@@ -297,7 +297,38 @@ function tabFor(sid) {
   tabs.set(sid, t);
   wireView(sid, view);
   applySound(t);
+  // A device size picked for this tab (deviceOf) holds on every page it opens, and after it wakes from sleep.
+  view.webContents.on('did-navigate', () => { const x = tabs.get(sid); if (x?.emu?.fixed) { x.sentEmu = null; applyEmu(x); } });
+  if (deviceOf.has(sid)) setImmediate(() => applyDevice(sid));
   return t;
+}
+// ---------- device sizes for your tabs (the Browser tab's 📱 menu) ----------
+// Phone, tablet, laptop or a size of your own: the real tab lays the page out at that size (and as a touch screen
+// for phones and tablets), shown whole in the middle of the pane, scaled down when it doesn't fit. Same emulation as
+// the agent's pages (applyEmu), through the tab's debugger, attached only while a size is set.
+const deviceOf = new Map(); // sid → { width, height, mobile }
+function applyDevice(sid) {
+  const t = tabs.get(sid); if (!t || t.agent) return false;
+  const d = deviceOf.get(sid), dbg = t.view.webContents.debugger, key = d ? JSON.stringify(d) : '';
+  if (t.devKey === key && (!d || dbg.isAttached())) return true; // the same again: no relayout
+  t.devKey = key;
+  if (!d) {
+    if (!t.emu?.fixed) return true;
+    t.emu = null; t.sentEmu = null;
+    if (dbg.isAttached()) {
+      dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {});
+      dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
+      if (!t.onDbg) { try { dbg.detach(); } catch { /* gone */ } } // still attached when lent or in 💬 comment mode
+    }
+    placeView(t);
+    return true;
+  }
+  try { if (!dbg.isAttached()) dbg.attach('1.3'); } catch { t.devKey = null; return false; }
+  t.emu = { width: d.width, height: d.height, deviceScaleFactor: 0, mobile: d.mobile, fixed: true };
+  t.sentEmu = null;
+  applyEmu(t);
+  dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: d.mobile, maxTouchPoints: d.mobile ? 5 : 1 }).catch(() => {});
+  return true;
 }
 
 // ---------- sleeping tabs (tab-sleep.js decides which) ----------
@@ -475,6 +506,9 @@ function fitEmu(t) {
   const e = t.emu, b = t.bounds;
   if (!e?.width || !e?.height) return null;
   if (!b?.width || !b?.height) return { ...e, scale: 1 };
+  // A device size you picked for one of your tabs (the Browser tab's 📱 menu): exactly that size, scaled down to fit
+  // the pane both ways, so a phone shows whole.
+  if (e.fixed) return { ...e, scale: Math.min(1, b.width / e.width, b.height / e.height) };
   const scale = Math.min(1, b.width / e.width);
   return { ...e, height: Math.max(e.height, Math.round(b.height / scale)), scale };
 }
@@ -484,7 +518,7 @@ function placeView(t) {
   let r = b;
   if (f) {
     const w = Math.max(1, Math.round(f.width * f.scale)), h = Math.max(1, Math.min(b.height, Math.round(f.height * f.scale)));
-    r = { x: b.x + Math.round((b.width - w) / 2), y: b.y, width: w, height: h };
+    r = { x: b.x + Math.round((b.width - w) / 2), y: b.y + (f.fixed ? Math.max(0, Math.round((b.height - h) / 2)) : 0), width: w, height: h };
   }
   const key = `${r.x},${r.y},${r.width},${r.height}`;
   if (t.viewRect === key) return; // already there
@@ -509,7 +543,14 @@ handle('nav', (sid, op) => {
   else if (op === 'devtools') wc.openDevTools({ mode: 'detach' });
   return true;
 });
-handle('close', (sid) => closeTab(sid));
+handle('close', (sid) => { deviceOf.delete(String(sid)); return closeTab(sid); });
+handle('device', (sid, d) => {
+  sid = String(sid);
+  const n = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));
+  if (d && Number(d.width) > 0 && Number(d.height) > 0) deviceOf.set(sid, { width: n(d.width, 200, 3840), height: n(d.height, 200, 3840), mobile: !!d.mobile });
+  else deviceOf.delete(sid);
+  return applyDevice(sid);
+});
 // Find in a real tab's page (the page's find bar): op 'find' with the text and { forward, findNext }, or 'stop'.
 handle('find', (sid, op, text, opts = {}) => {
   const t = tabs.get(sid); if (!t || t.view.webContents.isDestroyed()) return false;
@@ -750,7 +791,8 @@ function applyEmu(t) {
   if (t.sentEmu === key) { vlog('emu skip (pane)'); placeView(t); return; } // the same size again would make the page lay itself out (and flash) for nothing
   vlog('emu (pane)', key);
   t.sentEmu = key;
-  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', f).then(() => placeView(t), () => { t.sentEmu = null; placeView(t); });
+  const { fixed: _fixed, ...metrics } = f;
+  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', metrics).then(() => placeView(t), () => { t.sentEmu = null; placeView(t); });
   // A page with no background of its own still looks white to the agent (its checks judge what it sees).
   t.view.webContents.debugger.sendCommand('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});
 }
@@ -965,6 +1007,7 @@ const COMMANDS = {
     const dbg = t.view.webContents.debugger;
     if (t.onDbg) { dbg.removeListener('message', t.onDbg); t.onDbg = null; }
     try { if (dbg.isAttached()) dbg.detach(); } catch { /* gone */ }
+    if (deviceOf.has(tab)) { t.devKey = null; applyDevice(tab); } // detaching dropped the device size
     return true;
   },
 };

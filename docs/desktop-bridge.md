@@ -33,6 +33,7 @@ All calls return a promise.
 | `nav` | Back, forward, reload, stop or DevTools for a tab | `sid`, `'back' \| 'forward' \| 'reload' \| 'stop' \| 'devtools'` | `true`, or `false` for no such tab |
 | `close` | Closes a tab (or forgets a sleeping one) | `sid` | `true` if there was one |
 | `find` | Ctrl+F in a tab's page: finds the text (the next or previous match), or stops and clears the marks; the count arrives as a `find` event | `sid`, `'find'`, text, `{ forward, findNext }` · `sid`, `'stop'` | `true`, or `false` for no such tab |
+| `device` | Lays one of your tabs out at a device's size (the Browser tab's 📱 menu), shown whole and scaled to fit its box; kept on every page it opens and after it sleeps. `null` goes back to the box's own size | `sid`, `{ width, height, mobile }` or `null` | `true`, or `false` for no such tab |
 | `snapshot` | A picture of a tab on screen, to stand in while something covers it | `sid` | a PNG data URL, or `null` |
 | `sound` | Volume and mute for every tab, the agent's tabs, or one tab | `'set'`, `{ volume, muted, agentMuted }` · `'tab'`, `{ sid, muted }` · nothing to read | the sound settings |
 | `tabs` | The Running list: every tab with its page and sound, or close one | nothing to list · `'close'`, `sid` | `[{ sid, agent, chatId, url, title, audible, muted, shown, asleep? }]` |
@@ -86,7 +87,7 @@ Sent on the `oh-desktop` channel; each has a `type`.
 
 A replacement shell needs, roughly in order of effort:
 
-1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `find`,
+1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `device`, `find`,
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.

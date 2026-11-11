@@ -10,6 +10,7 @@ import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -13323,10 +13324,12 @@ function renderBrowser(c) {
   bar.innerHTML = !t ? ''
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
+       ${!t.agent && t.url ? `<button type="button" class="bv-size ${t.device ? 'on' : ''}" aria-haspopup="menu" title="Show this page at a device's size: phone, tablet, laptop or your own">${t.device ? '📱' : '⛶'} <span class="bv-size-t">${esc(deviceLabel(t.device))}</span></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
        <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url ? sndBtnHTML(t) : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
+  const szb = $('.bv-size', bar); if (szb) szb.onclick = () => deviceMenu(szb, t);
   wireSnd(bar, t);
   const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
   const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
@@ -13350,15 +13353,60 @@ function renderBrowser(c) {
   if (!t || !t.url) return newTabPage(c, stage);
   if (t.commenting) return commentStage(c, t, stage);
   if (DESK && t.agent && t.desktop) { t.opened = t.url; return deskStage(t, stage); } // the agent's real tab: shown as it is, never reloaded
-  if (DESK && !t.agent) return deskStage(t, stage);
+  if (DESK && !t.agent) { window.ohDesktop.device?.(t.sid, deviceMetrics(t.device)).catch(() => {}); showDeviceScale(t, stage); return deskStage(t, stage); }
   if (!t.agent && (t.mode || (t.mode = sameSite(t.url) ? 'frame' : 'remote')) === 'frame') {
-    const f = document.createElement('iframe'); f.title = t.url; f.src = offAppHost(t.url); stage.appendChild(f);
+    const f = document.createElement('iframe'); f.title = t.url; f.src = offAppHost(t.url);
+    if (t.device) { const box = document.createElement('div'); box.className = 'bdev'; box.appendChild(f); stage.appendChild(box); stage.classList.add('dev'); fitDeviceFrame(t, stage); }
+    else stage.appendChild(f);
     return;
   }
-  stage.innerHTML = `<div class="ubview ${live ? 'locked' : ''}" tabindex="0"><img class="ub-shot" alt="The page"><textarea class="ub-keys" aria-label="Type into the page" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>${live ? '<div class="ub-lock">🤖 The agent is using this page. You can watch; it is yours when the reply ends.</div>' : ''}<div class="ub-status">${t.shot ? '' : 'Opening…'}</div></div>`;
+  if (t.device && !t.agent) { stage.classList.add('dev'); showDeviceScale(t, stage); }
+  stage.innerHTML = `<div class="ubview ${live ? 'locked' : ''} ${t.device && !t.agent ? 'dev' : ''}" tabindex="0"><img class="ub-shot" alt="The page"><textarea class="ub-keys" aria-label="Type into the page" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>${live ? '<div class="ub-lock">🤖 The agent is using this page. You can watch; it is yours when the reply ends.</div>' : ''}<div class="ub-status">${t.shot ? '' : 'Opening…'}</div></div>`;
   const img = $('.ub-shot', stage); if (t.shot) img.src = t.shot;
   wireUbView(t);
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; ubCall('open', { url: t.url }); } else ubCall('look');
+}
+// ---------- device sizes (the Browser tab's 📱 menu, public/devices.js) ----------
+// One of your tabs can show its page at a phone's, tablet's or laptop's size, or one of your own, turned sideways or
+// not: laid out at exactly that size and shown whole, scaled down when the pane is smaller. The desktop app sizes the
+// real tab; otherwise the headless browser's picture (or the frame) is. "Fit the pane" goes back to the pane's size.
+function deviceMenu(btn, t) {
+  const r = btn.getBoundingClientRect(), d = t.device;
+  const set = (v) => { t.device = v || null; renderPane(); };
+  popMenu({ preventDefault() {}, stopPropagation() {}, clientX: r.left, clientY: r.bottom + 4 }, [
+    [`${d ? '' : '✓ '}⛶ Fit the pane`, () => set(null)],
+    null,
+    ...DEVICES.map((x) => [`${d?.id === x.id ? '✓ ' : ''}${x.icon} ${x.name} · ${x.w}×${x.h}`, () => set(preset(x.id))]),
+    [`${d?.id === 'custom' ? '✓ ' : ''}✎ Custom size…`, async () => {
+      const v = await uiPrompt('Width × height in pixels, e.g. 1024×768', d ? `${d.w}×${d.h}` : '1024×768');
+      if (v == null) return;
+      const sz = parseSize(v);
+      if (!sz) return uiAlert('Type a width and a height between 200 and 3840 pixels, e.g. 1024×768.');
+      set(custom(sz.w, sz.h));
+    }],
+    null,
+    ['⟲ Turn sideways', () => set(rotate(d)), d ? undefined : { disabled: true, title: 'Pick a size first' }],
+  ]);
+}
+// The button says how much smaller the page shows than its real size (e.g. "Phone 390×844 · 62%").
+function showDeviceScale(t, stage) {
+  if (!t.device) return;
+  requestAnimationFrame(() => {
+    const b = stage.getBoundingClientRect(), f = fitBox(t.device, b), el = $('#appBar .bv-size-t');
+    if (el) el.textContent = deviceLabel(t.device, f.scale);
+  });
+}
+// A page in a frame (your own served pages outside the desktop app): the frame is the device's size, scaled to fit.
+function fitDeviceFrame(t, stage) {
+  const box = $('.bdev', stage), f = $('iframe', box);
+  const fit = () => {
+    if (!box.isConnected || !t.device) return ro.disconnect();
+    const b = stage.getBoundingClientRect(), k = fitBox(t.device, b);
+    Object.assign(box.style, { width: `${k.width}px`, height: `${k.height}px` });
+    Object.assign(f.style, { width: `${t.device.w}px`, height: `${t.device.h}px`, transform: `scale(${k.scale})` });
+    const el = $('#appBar .bv-size-t'); if (el) el.textContent = deviceLabel(t.device, k.scale);
+  };
+  const ro = new ResizeObserver(fit); ro.observe(stage); fit();
 }
 // A new tab: quick links to what this chat built and the project's running servers.
 async function newTabPage(c, stage) {
@@ -14167,7 +14215,8 @@ async function ubCall(op, a = {}) {
   const r = $('#paneBody .bstage').getBoundingClientRect(); // the page is sized to the pane
   t.busy = (t.busy || 0) + 1;
   if (op !== 'look') ubStatus(op === 'open' ? 'Opening…' : '…');
-  const res = await postJ('/api/ubrowser', { sid: t.sid, op, w: Math.round(r.width), h: Math.round(r.height), ...a });
+  const dev = !t.agent && t.device;
+  const res = await postJ('/api/ubrowser', { sid: t.sid, op, w: dev ? dev.w : Math.round(r.width), h: dev ? dev.h : Math.round(r.height), ...(dev?.mobile ? { mobile: true } : {}), ...a });
   t.busy--;
   if (activeBTab(c) !== t || !$('#paneBody .ubview')) return;
   if (res.none) { if (t.agent) { delete G.agentTab[c.id]; renderPane(); } return; }
