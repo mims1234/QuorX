@@ -3270,3 +3270,22 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 #rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
 #rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }
+
+/* ⚙ Settings → Shortcuts: one row per shortcut; a changeable key is a chip you click (dashed while it waits for keys),
+   a fixed one is plain keycaps with no border; ↺ puts a changed one back. */
+.kc-filter { margin-bottom: 8px; }
+.kc-list { display: grid; }
+.kc-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; }
+.kc-what { display: grid; gap: 2px; min-width: 0; }
+.kc-keys { display: inline-flex; gap: 6px; align-items: center; justify-self: end; }
+.kc-keys kbd { display: inline-block; min-width: 18px; padding: 1px 6px; margin: 0 2px; border-radius: 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; background: var(--panel-2, var(--panel)); color: var(--text); font: 600 11.5px var(--mono); text-align: center; }
+.kc-chip { display: inline-flex; align-items: center; min-height: 30px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; cursor: pointer; color: var(--text); font: 600 12px var(--mono); }
+.kc-chip:hover { border-color: var(--accent); }
+.kc-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kc-chip.kc-rec { border-style: dashed; border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.kc-fixed { display: inline-flex; align-items: center; min-height: 30px; padding: 2px 8px; opacity: .8; }
+.kc-none { color: var(--dim); font: italic 500 11.5px var(--font-ui); }
+.kc-reset { width: 26px; height: 26px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.kc-reset:hover { color: var(--text); border-color: var(--line-strong); }
+.kc-warn { grid-column: 1 / -1; font-size: 12px; color: var(--warn); }
+.kc-foot { display: flex; justify-content: flex-end; margin-top: 10px; }

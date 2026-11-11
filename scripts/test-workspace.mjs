@@ -1,10 +1,11 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The workspace layout (public/workspace.js): a tree of splits and groups, at most 4 groups, saved per project; and
-// back / forward through what you looked at (public/nav-history.js).
+// back / forward through what you looked at (public/nav-history.js); and the keyboard shortcuts table (public/keymap.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as W from '../public/workspace.js';
 import { createHistory, HISTORY_CAP } from '../public/nav-history.js';
+import * as K from '../public/keymap.js';
 
 const shape = (n) => (n.t === 'g' ? `${n.id}[${n.tabs.join(',')}]` : `${n.dir}(${n.kids.map(shape).join(' ')})`);
 const ids = (lay) => W.groups(lay).map((g) => g.id);
@@ -266,4 +267,52 @@ test('workspace closed tabs: a stack of the last 50 per project, the newest firs
   assert.deepEqual(r.entry, { kind: 'area', pane: 'browser' });
   assert.deepEqual(r.list, [{ kind: 'file', chat: 'a', f: { id: 'file:x' } }]);
   assert.deepEqual(W.popClosed([]), { entry: null, list: [] });
+});
+
+test('shortcuts: one table; Ctrl+1 to Ctrl+9 jump to chat tabs; changed keys win; ids are unique', () => {
+  const ids = K.SHORTCUTS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length, 'every id once');
+  for (const id of ['palette', 'tab.next', 'tab.prev', 'tab.close', 'tab.reopen', 'nav.back', 'nav.forward', 'mic']) assert.ok(K.byId.has(id), id);
+  for (let n = 1; n <= 9; n++) assert.equal(K.byId.get(`tab.${n}`).keys, `Ctrl+${n}`);
+  assert.match(K.byId.get('tab.9').label, /last/);
+  for (const x of K.SHORTCUTS) assert.ok(K.KEY_GROUPS[x.group], `${x.id} has a known group`);
+  const def = K.bindings({});
+  assert.equal(K.actionFor('Ctrl+K', def), 'palette');
+  assert.equal(K.actionFor('Ctrl+3', def), 'tab.3');
+  assert.equal(K.actionFor('Alt+ArrowLeft', def), 'nav.back');
+  assert.equal(K.actionFor('Ctrl+,', def), 'mic');
+  assert.equal(K.actionFor('Enter', def), null, 'fixed keys are not run from the table');
+  assert.equal(K.actionFor('Ctrl+Q', def), null);
+  const mine = K.bindings({ keys: { 'tab.close': 'Alt+X', 'tab.3': '' }, micKey: 'Ctrl+M' });
+  assert.equal(K.actionFor('Alt+X', mine), 'tab.close');
+  assert.equal(K.actionFor('Ctrl+W', mine), null, 'the old key is free again');
+  assert.equal(K.actionFor('Ctrl+3', mine), null, 'no key');
+  assert.equal(mine.get('mic'), 'Ctrl+M', 'the mic key keeps its own setting');
+});
+
+test('shortcuts: keys read the same however they are written; typing keys, clashes and system keys', () => {
+  assert.equal(K.normCombo('shift+control+t'), 'Ctrl+Shift+T');
+  assert.equal(K.normCombo('Ctrl+Esc'), 'Ctrl+Escape');
+  assert.equal(K.normCombo('alt+left'), 'Alt+ArrowLeft');
+  assert.equal(K.normCombo('Ctrl++'), 'Ctrl++');
+  assert.equal(K.normCombo(''), '');
+  assert.equal(K.checkCombo('Ctrl+Shift').ok, false, 'a modifier alone');
+  assert.match(K.checkCombo('Shift+A').error, /typing never/);
+  assert.equal(K.checkCombo('G').ok, false);
+  assert.deepEqual(K.checkCombo('F7'), { ok: true }, 'an F key on its own');
+  assert.deepEqual(K.checkCombo('Ctrl+Alt+J'), { ok: true });
+  assert.match(K.checkCombo('Ctrl+C').warn, /copies/);
+  const def = K.bindings({});
+  assert.equal(K.clashWith('tab.close', 'Ctrl+K', def).id, 'palette');
+  assert.equal(K.clashWith('palette', 'Ctrl+K', def), null, 'its own key is no clash');
+  assert.equal(K.clashWith('tab.close', 'Ctrl+=', def).id, 'zoom.in', 'fixed keys count');
+  assert.equal(K.clashWith('tab.close', 'Ctrl+Alt+J', def), null);
+  const both = K.conflicts(K.bindings({ keys: { 'tab.close': 'Ctrl+K' } }));
+  assert.deepEqual([...both.keys()].sort(), ['palette', 'tab.close']);
+  assert.equal(both.get('palette')[0].id, 'tab.close');
+  assert.equal(K.conflicts(def).size, 0, 'the defaults never clash');
+  assert.deepEqual(K.comboParts('Alt+ArrowLeft'), ['Alt', '←']);
+  assert.deepEqual(K.comboParts('Ctrl++'), ['Ctrl', '+']);
+  assert.deepEqual(K.comboParts('↑ ↓ then Enter or Tab'), ['↑ ↓ then Enter or Tab']);
+  assert.equal(K.comboText('Ctrl+Shift+T'), 'Ctrl+Shift+T');
 });

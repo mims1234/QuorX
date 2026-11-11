@@ -17,7 +17,7 @@
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:ui": "node scripts/ui-test.mjs",
     "mcp": "node server/mcp.js",
-    "test:packs": "node scripts/test-packs.mjs",
+    "test:packs": "node scripts/test-packs.mjs scripts/test-workspace.mjs",
     "news:check": "node scripts/news-check.mjs",
     "news:snapshot": "node scripts/news-snapshot.mjs",
     "scorecard": "node scripts/scorecard.mjs",
