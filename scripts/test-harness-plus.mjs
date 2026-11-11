@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { answerApproval } from '../server/agent.js';
+import { answerApproval, parseNextSteps, nextStepsFor } from '../server/agent.js';
 import { saveHooks, matchHooks, toolMatches, hookLine, cleanHook, HOOK_EVENTS } from '../server/hooks.js';
 import { cleanRole, rolesFrom, HELPER_ROLES } from '../server/helperroles.js';
 import { readOtherNotes, cleanNoteFiles } from '../server/othernotes.js';
@@ -233,4 +233,24 @@ test('what was not checked: harness facts only, no model call, nothing when all 
   assert.equal(of(checked.events, 'wrap_up').length, 0);
   const quiet = await run(() => reply('Just an answer.'), { settings: { verify: false } });
   assert.equal(quiet.done.stats.wrap, undefined, 'nothing after a reply that did no work');
+});
+
+test('suggested next steps: up to three short ones from one helper call, read from JSON or lines', async () => {
+  assert.deepEqual(parseNextSteps('["Add a dark mode", "Run the tests", "add a dark mode", "Deploy it", "Write docs"]'), ['Add a dark mode', 'Run the tests', 'Deploy it']);
+  assert.deepEqual(parseNextSteps('```json\n["Make it faster"]\n```'), ['Make it faster']);
+  assert.deepEqual(parseNextSteps('1. Add sound\n- "Show a score"\n'), ['Add sound', 'Show a score']);
+  assert.deepEqual(parseNextSteps('[]'), []);
+  assert.deepEqual(parseNextSteps(`["${'x'.repeat(200)}", "ok"]`), ['ok'], 'too long to be a button');
+  const bodies = [];
+  const call = async (b) => { bodies.push(b); return { message: { content: '["Add levels", "Add a pause key"]' }, usage: { cost: 0.0001 }, model: b.model }; };
+  const r = await nextStepsFor({ request: 'Make a snake game', reply: 'Built snake.html.', model: 'some/helper', call });
+  assert.deepEqual(r.items, ['Add levels', 'Add a pause key']);
+  assert.equal(r.cost, 0.0001);
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].model, 'some/helper');
+  assert.ok(bodies[0].max_tokens <= 200, 'a small call');
+  assert.match(bodies[0].messages[1].content, /snake game[\s\S]*Built snake/);
+  const none = await nextStepsFor({ request: 'hi', reply: '   ', call });
+  assert.deepEqual(none.items, []);
+  assert.equal(bodies.length, 1, 'no call for an empty reply');
 });

@@ -5056,7 +5056,8 @@ function drawTimeline(c, m) {
   const fresh = putTimeline(m);
   wireTimeline(m, el, fresh);
   // While a /goal works, its checklist sits at the end of the reply and ticks off in place.
-  $('.approvals', el).innerHTML = (m.live ? planCardHTML(m) : '') + outOfStepsHTML(m) + wrapUpHTML(m);
+  $('.approvals', el).innerHTML = (m.live ? planCardHTML(m) : '') + outOfStepsHTML(m) + wrapUpHTML(m) + nextStepsHTML(c, m);
+  wireNextSteps(c, m, $('.approvals', el));
   // The files it wrote go back into their slots (the timeline was drawn again).
   for (const item of el._mm?.values() || []) if (!item._inline) { const box = slotStrip(el, item); if (box ? !box.contains(item) : !item.isConnected) placeMedia(el, item, null); }
   const oos = $('.oos-card[data-run]', el); if (oos) wireOutOfSteps(oos, c, m);
@@ -6124,6 +6125,37 @@ function wrapUpHTML(m) {
     <div class="wu-not"><b>Not checked</b><ul>${w.unchecked.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
   </div>`;
 }
+// ---------- suggested next steps ----------
+// Up to three short things to ask next, as buttons under the newest finished reply (⚙ Agent loop → Suggest next
+// steps). A click puts the words in the message box so you can edit them first; Shift-click sends them. They come
+// from one small helper-model call after the reply, asked only while the setting is on, so off costs nothing.
+function nextStepsHTML(c, m) {
+  if (m.live || !m.next?.length || G.settings.nextSteps === false || c.running || c.agent.messages.at(-1) !== m) return '';
+  return `<div class="ns" role="group" aria-label="Suggested next steps"><span class="ns-lbl">Next</span>${m.next.map((t, i) => `<button type="button" class="ns-btn" data-i="${i}" title="Put this in the message box · Shift-click to send it">${esc(t)}</button>`).join('')}</div>`;
+}
+function wireNextSteps(c, m, el) {
+  for (const b of el.querySelectorAll('.ns-btn')) b.onclick = (ev) => {
+    const text = m.next?.[+b.dataset.i]; if (!text) return;
+    if (ev.shiftKey) { send(c, text); return; }
+    const ta = $('.input', c.el?.root); if (!ta) return;
+    ta.value = text; ta.focus(); ta.setSelectionRange(text.length, text.length); ta.dispatchEvent(new Event('input'));
+  };
+}
+// After a reply that ended normally: ask the helper for suggestions, then draw them. Quiet on any failure.
+const nextAsked = new WeakSet(); // replies already asked about, so a redraw or reattach never asks twice
+async function suggestNext(c, m) {
+  if (G.settings.nextSteps === false || !m.stats || m.error || m.next || nextAsked.has(m) || !String(m.content || '').trim()) return;
+  if ((m.trace || []).some((e) => e.t === 'out_of_steps') || Object.values(m.questions || {}).some((q) => !q.answer?.text && !q.answer?.label)) return;
+  const msgs = c.agent.messages, u = msgs[msgs.indexOf(m) - 1];
+  if (u?.scheduled || msgs.at(-1) !== m) return; // a scheduled run has no one waiting to ask next
+  nextAsked.add(m);
+  const r = await postJ('/api/next-steps', { request: u?.role === 'user' ? String(u.content || '').slice(0, 2000) : '', reply: String(m.content).slice(-6000), model: G.settings.helperModel || '', chatModel: c.agent.setup?.model || '' }).catch(() => null);
+  if (!r || r.error) return;
+  m.next = r.items || [];
+  if (r.cost) (c.agent.extraUsage ||= []).push({ kind: 'next steps', model: r.model, cost: r.cost, at: Date.now() });
+  saveChat(c);
+  if (m.next.length && c.agent.messages.at(-1) === m) updateMsg(c, m);
+}
 // A new chat in the same project, on the model picked, with the brief in its message box (you check it, then send).
 function openFreshChat(c, brief, model) {
   const n = blankChat(c.projectId);
@@ -6403,7 +6435,7 @@ async function send(c, text) {
   c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
   // A new message: the stopped reply above is no longer the last, so its ▶ Continue goes.
-  c.el?.root?.querySelectorAll('.continue-btn').forEach((b) => b.remove());
+  c.el?.root?.querySelectorAll('.continue-btn, .ns').forEach((b) => b.remove());
   // The message shows and the chat is busy at once; the @ context's text (a brief of an attached chat takes a model
   // call) is gathered in the reply as its first step. Awaited here, the box kept its chips meanwhile and sent twice.
   const ctxItems = c.ctx.splice(0);
@@ -6698,6 +6730,7 @@ async function followRun(c, m, open) {
     refreshBalance();
     // ⚙ Reviewer → "Review code changes": after a reply that changed code, a code review card (only when it finds something).
     if (G.settings.codeReview === 'auto' && m.stats && !m.error && (m.stats.changed || []).some((f) => CODE_FILE.test(f))) codeReview(c, 'reply', { auto: true, runId: m.runId });
+    if (!lost) suggestNext(c, m);
   }
 }
 async function reconnect(c, m) {
@@ -8017,7 +8050,8 @@ function settingsPanels(S) {
       + stCard('Tools and files', '', stRow('Load rare tools when needed', 'Auto: the agent starts with its everyday tools; the ticked ones below are listed by name and load the first time it asks for one, so every call is smaller. A chat with many MCP tools gets them the same way. Off: every tool on every call.', stSeg('lazyTools', [['off', 'Off'], ['auto', 'Auto']], S.lazyTools || 'auto') + lazyGroupsHTML(S), { cls: 'sx-row-wide' })
         + stRow('Ask for a short status line', 'After this many steps of tool calls without a word to you, the agent is asked to say in one sentence what it is doing. 0 = never.', stStep('statusEvery', S.statusEvery ?? 0, 0, 50, 1, ' steps'))
         + stRow('Protect files that changed', 'When you, another chat or another program changes a file after the agent read it, the agent must read it again before it edits or overwrites it, so your change is never lost. What its own commands change doesn\'t count.', stSwitch('guardEdits', S.guardEdits !== false)))
-      + stCard('After each reply', '', stRow('Say what wasn\'t checked', 'After a reply that did work, a short note under it when QuorX knows something wasn\'t checked: checks off, no reviewer, a job still running, a hook still failing. Nothing shows when everything was checked. No model call.', stSwitch('wrapUp', S.wrapUp !== false)))
+      + stCard('After each reply', '', stRow('Say what wasn\'t checked', 'After a reply that did work, a short note under it when QuorX knows something wasn\'t checked: checks off, no reviewer, a job still running, a hook still failing. Nothing shows when everything was checked. No model call.', stSwitch('wrapUp', S.wrapUp !== false))
+        + stRow('Suggest next steps', 'Under the newest finished reply, up to three short things you might ask next, as buttons: a click puts the words in the message box, Shift-click sends them. One small call to the helper model per reply (about $0.0001 on the default helper); off means no call.', stSwitch('nextSteps', S.nextSteps !== false)))
       + stCard('Other agents\' notes', '', stRow('Read other agents\' notes', 'Projects made with other coding agents keep their rules in files like AGENTS.md or CLAUDE.md. When on, QuorX reads the ones listed here with AGENT.md, in projects that have them.', stSwitch('otherNotes', S.otherNotes !== false))
         + `<div class="st-row sx-row-wide"><div class="st-row-text"><div class="st-row-label">Files it reads</div><div class="st-row-help">In the project folder, in this order, until the size limit.</div></div><div id="notesFiles"></div></div>`
         + stRow('All of them together, at most', 'What goes past this is cut.', stStep('otherNotesKB', S.otherNotesKB ?? 8, 1, 64, 1, ' KB')))
@@ -8753,7 +8787,7 @@ function resetCategory() {
   if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
-  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
+  if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, nextSteps: d.nextSteps, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') Object.assign(S, { chatBudget: 10, budgetGrace: d.budgetGrace });
