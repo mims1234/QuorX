@@ -515,7 +515,7 @@ function paletteItems(q) {
   for (const x of (words.length ? chats : chats.slice(0, 6))) if (hit(`${x.title} ${projName(x.projectId)}`)) out.push({ group: 'Chats', icon: '💬', label: x.title, hint: `${projName(x.projectId)} · ${ago(x.lastAt || Date.now())}`, run: () => showChat(x.id) });
   if (q.length >= 2 && PAL.msgs?.q === q) out.push(...PAL.msgs.items); // inside chats: asked of the server as you type
   for (const [k, desc, fn] of COMMANDS) if ((c || PAL_GLOBAL.has(k)) && hit(`/${k} ${desc}`)) out.push({ group: 'Commands', icon: '⚡', label: `/${k}`, hint: desc, run: () => (c ? runCommand(c, `/${k}`) : fn(null, '')) });
-  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', 'Your messages and the agent’s replies · Ctrl+Shift+F', () => openChatSearch(q)], ['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
+  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', 'Your messages and the agent’s replies · Ctrl+Shift+F', () => openChatSearch(q)], ['↺', 'Reopen closed tab', 'Ctrl+Shift+T · the last chat, area, file or page you closed', () => wsReopen()], ['‹', 'Back', 'Alt+← · what you looked at before', () => wsStep(-1)], ['›', 'Forward', 'Alt+→', () => wsStep(1)],['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
   for (const [icon, label, hint, run] of acts) if (hit(`${label} ${hint}`)) out.push({ group: 'Actions', icon, label, hint, run });
   if (words.length) for (const p of G.projects) if (hit(`${p.name} new chat project`)) out.push({ group: 'Projects', icon: '📁', label: `New chat in ${p.name}`, hint: `${p.spent ? `$${p.spent.toFixed(3)} spent` : 'project'}`, run: () => newChat(p.id) });
   for (const [group, items] of SETTINGS_NAV) for (const [id, icon, label] of items) if (words.length && hit(`${label} settings ${group}`)) out.push({ group: 'Settings', icon, label, hint: `⚙ Settings · ${group}`, run: () => openSettings(id) });
@@ -1281,6 +1281,7 @@ function renderSidebar() {
       G.projectOrder = order; savePrefs(); renderSidebar();
     };
   }
+  wsChrome(); // the chat tabs and the status bar show the same states
 }
 async function renameChat(id) {
   const c = await getChat(id) || G.open.get(id);
@@ -1340,8 +1341,9 @@ async function deleteChat(id) {
   writeDraft(id, null);
   if (G.open.has(id)) releasePane(G.open.get(id));
   G.open.delete(id);
-  const i = G.panes.indexOf(id);
-  if (i >= 0) { G.panes.splice(i, 1); if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
+  const i = G.panes.indexOf(id), next = i >= 0 ? WS.afterClose(WT.tabs, id) : null;
+  wtForgetChat(id);
+  if (i >= 0) { G.panes.splice(i, 1); if (next) showChat(next); else if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
   refreshSidebar();
 }
 // ---------- ⚙ project settings: name, folder, and what each chat cost ----------
@@ -2219,11 +2221,13 @@ function toggleProjectFold(id) {
 async function showChat(id, pane = G.focus) {
   const c = await getChat(id);
   if (!c) return uiAlert('Could not open that chat.');
-  // One chat on screen at a time (others keep running in the background).
+  // One chat on screen at a time (others keep running in the background); open chats are tabs along the top.
+  wtOpen(c);
   G.panes = [id]; G.focus = 0; G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
   wsSeen('chat', id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
-  withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
+  await withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
+  wtSave(); wsChrome();
 }
 // The home page's draft chat: one at a time, kept while you stay on Home (its options, chips and attachments too),
 // moved to the project you pick. It is not saved and not in the sidebar until its first message.
@@ -2237,14 +2241,18 @@ function promoteDraft(c) {
   writeDraft('home', null);
   G.homeDraft = null; G.landingDraft = ''; G.landingProject = c.projectId;
   G.open.set(c.id, c);
+  wtOpen(c);
   G.panes = [c.id]; G.focus = 0;
+  wsSeen('chat', c.id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
-  withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
+  withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); wtSave(); });
 }
 async function newChat(projectId = focused()?.projectId || 'scratch', pane = G.focus) {
   const c = blankChat(projectId);
   G.open.set(c.id, c);
+  wtOpen(c);
   G.panes = [c.id]; G.focus = 0;
+  wsSeen('chat', c.id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   await withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); $('.input', c.el.root)?.focus(); });
   return c;
@@ -4359,6 +4367,7 @@ function drawContextMeter(c) {
   slot.innerHTML = `<button type="button" class="cmp-ctx-btn" data-tone="${u.tone}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}" aria-label="${esc(tip)}">${ctxRingSVG(u)}<span class="ctx-lbl">${esc(ctxLabel(u))}</span></button><div class="ctx-pop" role="dialog" aria-label="Context" ${open ? '' : 'hidden'}></div>`;
   const btn = $('.cmp-ctx-btn', slot), pop = $('.ctx-pop', slot);
   if (open) drawContextPop(c, pop, u);
+  if (focused() === c) wsStatusDraw(); // the status bar shows the same figure
   const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
   const outside = (e) => { if (!slot.contains(e.target)) close(); };
   const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
@@ -7274,7 +7283,8 @@ async function followRun(c, m, open) {
       note(m.error ? 'error' : 'done', [tookTag, ...usedTags(m)]);
       // A reply that ended off screen marks its sidebar row until you open the chat (last.css, .st-done / .st-error).
       const how = m.failed ? 'error' : m.error ? '' : 'done'; // a reply stopped on purpose gets no mark
-      if (how && !G.panes.includes(c.id)) (G.unseen ??= new Map()).set(c.id, how);
+      // On screen while QuorX is in the background counts as not seen too (the mark goes when the window is back).
+      if (how && (!G.panes.includes(c.id) || !document.hasFocus())) (G.unseen ??= new Map()).set(c.id, how);
     }
     const due = raf || fullTimer; if (raf) { cancelAnimationFrame(raf); raf = 0; } clearTimeout(fullTimer); fullTimer = 0;
     updateMsg(c, m); if (due) stick();
@@ -7340,7 +7350,7 @@ function openFileInPane(c, f) {
   const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
   list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
   c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
-  wsSeen('file', id);
+  wsSeen('file', id, { chat: c.id });
   if (G.paneHidden) setPaneHidden(false);
   openArtifact(c, id);
 }
@@ -7404,6 +7414,8 @@ function drawPaneCard(c, f, body) {
   }
 }
 function closePaneFile(c, id) {
+  const f = paneFiles(c).find((x) => x.id === id);
+  if (f) wtClosed({ kind: 'file', chat: c.id, f });
   c._paneFiles = paneFiles(c).filter((x) => x.id !== id); savePaneFiles(c);
   G.view = { id: null, src: false, files: false };
   renderPane();
@@ -7510,11 +7522,11 @@ function wsForget(gid) { for (const id of [...WK.tabs.keys()]) if (id.endsWith(`
 function wsSync() {
   let lay = WK.lay;
   for (const a of PA.list) lay = WS.setActive(lay, a.gid, WS.tabId(WS.PANE_KINDS[inArea(a, paneTab)] || 'artifact', a.gid));
-  const cg = WS.findGroup(lay, WS.CHAT_GROUP), chats = G.panes.length ? G.panes.map((id) => WS.tabId('chat', id)) : [WS.tabId('chat', 'main')];
-  if (cg && cg.tabs.join() !== chats.join()) {
-    lay = { ...lay, root: structuredClone(lay.root) };
-    Object.assign(WS.findGroup(lay, WS.CHAT_GROUP), { tabs: chats, active: chats[G.focus] || chats[0] });
-  }
+  // The chat group's tabs are the chats open along the top (this project's), the one on screen active.
+  const cg = WS.findGroup(lay, WS.CHAT_GROUP), own = WT.pid && WT.pid === projOf(focused());
+  const ids = own ? WT.tabs : G.panes, chats = ids.length ? ids.map((id) => WS.tabId('chat', id)) : [WS.tabId('chat', 'main')];
+  const active = G.panes[G.focus] ? WS.tabId('chat', G.panes[G.focus]) : chats[0];
+  if (cg && (cg.tabs.join() !== chats.join() || cg.active !== active)) lay = WS.withChatTabs(lay, ids, G.panes[G.focus]);
   WK.lay = WS.setFocus(lay, PA.focus.gid);
 }
 // What each tab saves (only what should survive a reload: the plan shown, the browser tab, the terminal's views).
@@ -7566,8 +7578,9 @@ WS.defineTabKind('viewer', { render: (tab) => openFileInPane(focused(), tab.st) 
 WS.defineTabKind('page', { render: (tab) => openInBrowser(focused(), tab.st.url) });
 WS.defineTabKind('running', { render: () => { const c = focused(); if (c) openTerminal(c, null, 'run'); } });
 WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) toggleServers(c); } });
-// Something came to the front: recorded for back / forward (the ‹ › buttons come later; nothing reads it yet).
-const wsSeen = (kind, id) => { if (id != null) WK.history.push({ kind, id }); };
+// Something came to the front: recorded for back / forward (‹ ›, Alt+← / Alt+→, the mouse's side buttons). A pane
+// tab or a file also names the chat it was in, so stepping back to it brings that chat back first.
+const wsSeen = (kind, id, extra) => { if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
 function inArea(a, fn) {
   const was = AREA;
   if (!a || a === was) return fn();
@@ -7587,10 +7600,10 @@ function paneFocus(a) {
   deskPlace(true);
 }
 // Something asks the pane for one of its tabs (the agent browsing, 🧭 Steps on a reply): an area already showing it takes it.
+// Also a step for back / forward: the Browser or Terminal brought to the front (opening a page, a server's output).
 function aimArea(tab) {
-  if (!paneSplit() || paneTab() === tab) return;
-  const a = PA.list.find((x) => inArea(x, paneTab) === tab);
-  if (a) paneFocus(a);
+  if (paneSplit() && paneTab() !== tab) { const a = PA.list.find((x) => inArea(x, paneTab) === tab); if (a) paneFocus(a); }
+  const c = focused(); if (c) wsSeen('tab', WS.tabId(WS.PANE_KINDS[tab] || 'artifact', AREA.gid), { chat: c.id });
 }
 function paneView(c, tab, id = G.view?.id ?? null) {
   if (tab === 'trace') {
@@ -7660,6 +7673,7 @@ function paneSplitTab(from, tab, where) {
 }
 function paneCloseArea(a) {
   if (PA.list.length < 2 || !PA.list.includes(a)) return;
+  wtClosed({ kind: 'area', pane: inArea(a, paneTab) });
   const i = PA.list.indexOf(a), n = PA.list[i ? i - 1 : 1]; // the layout gives it the closed one's space
   if (PA.focus === a) { PA.focus = n; AREA = n; }
   paneDropArea(a);
@@ -7767,8 +7781,9 @@ const paneKey = (id) => `oh-pane-areas:${id}`;
 function paneSave() {
   const c = focused(); if (!c || PA.chat !== c.id) return;
   wsSync();
-  const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1;
-  const s = split ? WS.serialise(WK.lay, tabs) : '';
+  // Kept when split, or when the project has chat tabs or a closed stack to remember.
+  const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1, own = WT.pid === projOf(c);
+  const s = split || (own && (WT.tabs.length || WT.closed.length)) ? WS.serialise(WK.lay, tabs, own ? WT.closed : []) : '';
   if (s === PA.saved) return;
   PA.saved = s;
   const old = split ? WS.toAreas(WK.lay, tabs) : null;
@@ -7934,6 +7949,420 @@ async function renderAppBar(c, a) {
     pre.hidden = false;
   };
 }
+// ---------- the workspace's chrome: chat tabs, back / forward, the rail, the status bar ----------
+// Open chats show as tabs along the top (the chat group's tabs in the project's layout, so they are kept per project
+// with it); one chat is still on screen at a time. Closing a tab only takes it off the strip: its reply keeps running.
+// What you close goes on the project's "recently closed" stack (Ctrl+Shift+T). ‹ › (Alt+← / Alt+→, the mouse's side
+// buttons) step through WK.history; places in closed tabs are stepped over, and are stops again once reopened. The
+// rail on the left opens the sidebar (Chats), Running, Servers and Files; the status bar at the bottom says what needs
+// you, what runs and how much context the chat on screen has left, and each part opens what it names.
+const WT = { pid: null, tabs: [], closed: [], titles: new Map(), checked: new Set() };
+const projOf = (c) => c?.projectId || 'scratch';
+const chatInfo = (id) => G.open.get(id) || G.chats.find((x) => x.id === id) || Object.values(G.moreChats || {}).flat().find((x) => x.id === id) || null;
+function readLayout(pid) { let t = null; try { t = localStorage.getItem(LAYOUT_KEY(pid)); } catch { /* storage off */ } return WS.parse(t); }
+// A project's open tabs and closed stack, from its saved layout.
+function wtLoad(pid) {
+  const r = readLayout(pid);
+  WT.pid = pid; WT.tabs = r ? WS.chatTabIds(r.layout) : []; WT.closed = r?.closed || [];
+  wtCheck();
+}
+// Tabs saved for chats this page doesn't know (past the sidebar's newest, or deleted since): asked for by id once;
+// the ones the server no longer has go.
+async function wtCheck() {
+  const pid = WT.pid, ask = WT.tabs.filter((id) => !chatInfo(id) && !WT.checked.has(id));
+  if (!ask.length) return;
+  for (const id of ask) WT.checked.add(id);
+  const side = await fetch(`/api/chats?view=sidebar&per=1&ids=${encodeURIComponent(ask.join(','))}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  if (!Array.isArray(side?.chats) || WT.pid !== pid) return;
+  for (const c of side.chats) WT.titles.set(c.id, c.title || 'Chat');
+  const have = new Set(side.chats.map((c) => c.id)), gone = ask.filter((id) => !have.has(id));
+  if (gone.length) { WT.tabs = WT.tabs.filter((id) => !gone.includes(id)); wtSave(); }
+  wsChrome();
+}
+// The tabs and closed stack go into the project's layout save: through paneSave when its chat is on screen, else
+// straight into the saved layout.
+function wtSave() {
+  if (!WT.pid) return;
+  const c = focused();
+  if (c && projOf(c) === WT.pid && PA.chat === c.id) return paneSave();
+  const r = readLayout(WT.pid), lay = WS.withChatTabs(r?.layout || WS.defaultLayout(), WT.tabs, G.panes[0]);
+  const keep = WS.sideGroups(lay).length > 1 || WT.tabs.length || WT.closed.length;
+  try { if (keep) localStorage.setItem(LAYOUT_KEY(WT.pid), WS.serialise(lay, r?.tabs || {}, WT.closed)); else localStorage.removeItem(LAYOUT_KEY(WT.pid)); } catch { /* kept until the page reloads */ }
+}
+// A chat comes to the front: its project's tabs are the strip, and it is one of them (after the one on screen).
+function wtOpen(c) {
+  const pid = projOf(c);
+  if (WT.pid !== pid) wtLoad(pid);
+  const cur = G.panes[0] && projOf(G.open.get(G.panes[0])) === pid ? G.panes[0] : null;
+  WT.tabs = WS.insertTab(WT.tabs, c.id, cur);
+}
+// Closing a tab: off the strip, onto the closed stack; the chat keeps running. The one on screen hands over to its
+// right-hand neighbour (else its left), or Home when it was the last.
+function wtClose(id, { quiet = false } = {}) {
+  if (!WT.tabs.includes(id)) return;
+  const shown = G.panes[0] === id, next = shown ? WS.afterClose(WT.tabs, id) : null, at = WT.tabs.indexOf(id);
+  WT.tabs = WT.tabs.filter((x) => x !== id);
+  WT.closed = WS.pushClosed(WT.closed, { kind: 'chat', id, at });
+  if (shown) { if (next) showChat(next); else showLanding(); }
+  wtSave();
+  if (!quiet) wsChrome();
+}
+// Something closed in the pane (an area, a file, a page in the Browser) goes on the stack too.
+function wtClosed(e) { if (!WT.pid) return; WT.closed = WS.pushClosed(WT.closed, e); wtSave(); wsChrome(); }
+// A deleted chat leaves the strip, the closed stack and back / forward for good.
+function wtForgetChat(id) {
+  WT.tabs = WT.tabs.filter((x) => x !== id);
+  WT.closed = WT.closed.filter((e) => e.id !== id && e.chat !== id);
+  WK.history.forget((e) => e.id === id || e.chat === id);
+  wtSave(); wsChrome();
+}
+// Ctrl+Shift+T and "Reopen closed tab": the newest thing closed comes back where it was; one that can't (a chat that
+// is gone) is dropped and the next one tried.
+async function wsReopen() {
+  for (let n = 0; n < WS.CLOSED_CAP; n++) {
+    const { entry, list } = WS.popClosed(WT.closed);
+    if (!entry) return flashTip($('#wtMore') || document.body, 'Nothing closed to reopen');
+    WT.closed = list; wtSave();
+    if (await reopenOne(entry)) return wsChrome();
+  }
+}
+async function reopenOne(e) {
+  if (e.kind === 'chat') {
+    const c = await getChat(e.id); if (!c) return false;
+    // Back where it was on the strip.
+    if (projOf(c) === WT.pid && !WT.tabs.includes(e.id)) WT.tabs.splice(Math.min(Math.max(0, Number(e.at) || 0), WT.tabs.length), 0, e.id);
+    await showChat(e.id); return true;
+  }
+  // The rest opens in a chat's pane: the one on screen, else the first tab of this project.
+  let c = focused();
+  if (e.kind === 'file') { if (!await getChat(e.chat)) return false; if (G.panes[0] !== e.chat) await showChat(e.chat); c = focused(); if (!c || !e.f) return false; openFileInPane(c, e.f); return true; }
+  if (!c && WT.tabs[0]) { await showChat(WT.tabs[0]); c = focused(); }
+  if (!c) return false;
+  if (e.kind === 'page') { if (!/^https?:\/\//i.test(String(e.url || ''))) return false; newBTab(c.projectId, e.url); setPaneTab('browser'); return true; }
+  if (e.kind === 'area') {
+    const n = PA.list.length;
+    if (!isPhone()) paneSplitTab(PA.list.at(-1), e.pane);
+    if (PA.list.length === n) setPaneTab(e.pane || 'art'); // at the limit (or a phone): shown in the area you use
+    return true;
+  }
+  return false;
+}
+
+// ---------- back / forward through what you brought to the front ----------
+// An entry can be shown when its tab is open (a chat on the strip, a file still in its chat's list); it is skipped when
+// it is what's on screen already, so each press changes what you see.
+const settingsOpen = () => !!$('#settings')?.open;
+function wtTabsOf(pid) { return pid === WT.pid ? WT.tabs : (readLayout(pid) ? WS.chatTabIds(readLayout(pid).layout) : []); }
+function chatTabOpen(id) { const h = chatInfo(id); return !!h && wtTabsOf(projOf(h)).includes(id); }
+function wsLive(e) {
+  if (e.kind === 'settings') return true;
+  if (e.kind === 'chat') return chatTabOpen(e.id);
+  if (e.chat && !chatTabOpen(e.chat)) return false;
+  if (e.kind === 'file') { const c = G.open.get(e.chat); return !c || paneFiles(c).some((x) => x.id === e.id); }
+  return e.kind === 'tab';
+}
+function wsShowing(e) {
+  if (e.kind === 'settings') return settingsOpen() && ST.cat === e.id;
+  if (settingsOpen()) return false;
+  if (e.kind === 'chat') return G.panes[0] === e.id;
+  if (e.chat && G.panes[0] !== e.chat) return false;
+  if (e.kind === 'tab') { const a = PA.list.find((x) => x.gid === e.id.split(':')[1]); return !!a && paneVisible() && inArea(a, paneTab) === WS.KIND_PANE[WS.kindOf(e.id)]; }
+  if (e.kind === 'file') return paneVisible() && PA.list.some((a) => a.st.view?.id === e.id);
+  return false;
+}
+// Leaving a pane tab or file for the chat entry before it is a step of its own (the chat as it opened), even though
+// that chat is on screen already.
+const wsCanShow = (e) => { const from = WK.history.current; return wsLive(e) && (!wsShowing(e) || (e.kind === 'chat' && from?.kind !== 'chat' && from?.chat === e.id)); };
+async function wsStep(dir) {
+  const e = dir < 0 ? WK.history.back(wsCanShow) : WK.history.forward(wsCanShow);
+  if (!e) return;
+  WK.history.stepping = true;
+  try { await wsShowEntry(e); } finally { WK.history.stepping = false; }
+  wsChrome();
+}
+async function wsShowEntry(e) {
+  if (e.kind === 'settings') { if (settingsOpen()) { ST.cat = e.id; $('#stSearch').value = ''; drawSettings(); } else openSettings(e.id); return; }
+  if (settingsOpen()) { if (ST.dirty && !await uiConfirm('Discard your unsaved settings changes?')) return; cancelSettings(); }
+  const chat = e.kind === 'chat' ? e.id : e.chat;
+  if (chat && (G.panes[0] !== chat || e.kind === 'chat')) await showChat(chat);
+  const c = focused(); if (!c || e.kind === 'chat') return;
+  if (e.kind === 'tab') {
+    const a = PA.list.find((x) => x.gid === e.id.split(':')[1]) || PA.focus;
+    paneFocus(a); inArea(a, () => setPaneTab(WS.KIND_PANE[WS.kindOf(e.id)] || 'art'));
+  }
+  if (e.kind === 'file') { const f = paneFiles(c).find((x) => x.id === e.id); if (f) openFileInPane(c, f); }
+}
+// The keys: only while focus is on QuorX itself (a real browser tab gets its own keys in the desktop app, the terminal
+// keeps Ctrl+W and friends), and not over another window of the app (Settings may step back and forward).
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || inTerminal(e.target) || e.isComposing) return;
+  const ctrl = e.ctrlKey || e.metaKey, k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const other = [...document.querySelectorAll('dialog[open]')].some((d) => d.id !== 'settings');
+  if (e.altKey && !ctrl && !e.shiftKey && (k === 'ArrowLeft' || k === 'ArrowRight')) { if (other) return; e.preventDefault(); return wsStep(k === 'ArrowLeft' ? -1 : 1); }
+  if (!ctrl || e.altKey || other || settingsOpen()) return;
+  if (k === 'Tab') { e.preventDefault(); const id = WS.cycleTab(WT.tabs, G.panes[0], e.shiftKey ? -1 : 1); if (id && id !== G.panes[0]) showChat(id); return; }
+  if (k === 'w' && !e.shiftKey && G.panes[0] && WT.tabs.includes(G.panes[0])) { e.preventDefault(); return wtClose(G.panes[0]); }
+  if (k === 't' && e.shiftKey) { e.preventDefault(); return wsReopen(); }
+});
+// The mouse's side buttons. In the desktop app they come from the window (app-command), which sends them to a real
+// browser tab when the pointer or focus is in one and here otherwise; in a browser the page sees them itself.
+document.addEventListener('mouseup', (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault();
+  if (window.ohDesktop?.navButtons) return;
+  wsStep(e.button === 3 ? -1 : 1);
+});
+window.ohDesktop?.on?.((ev) => { if (ev.type === 'ws-nav') wsStep(ev.dir === 'back' ? -1 : 1); });
+
+// ---------- the chat tabs strip ----------
+// Each tab: the chat's state (running, needs you, finished or stopped with an error while you weren't looking), its
+// name and ×. Click to switch, middle-click or × to close, drag to reorder, right-click for more. It scrolls when
+// there are many; … lists them all (with a search past 8) and reopens closed tabs.
+function chatState(id) {
+  const live = G.open.get(id), done = G.unseen?.get(id);
+  if (live?.running && live.waiting) return ['wait', live.waiting === 'answer' ? 'Needs your answer' : live.waiting === 'budget' ? 'Budget reached' : 'Needs your approval'];
+  if (live?.running) return ['run', 'Working'];
+  if (done === 'error') return ['error', 'Stopped with an error'];
+  if (done) return ['done', 'Finished: not seen yet'];
+  return ['', ''];
+}
+const chatTitle = (id) => chatInfo(id)?.title || WT.titles.get(id) || 'Chat';
+function wtDraw() {
+  const box = $('#wtStrip'); if (!box) return;
+  const cur = G.panes[0], p = G.projects?.find((x) => x.id === WT.pid);
+  const sig = JSON.stringify([WT.pid, cur, WT.tabs.map((id) => [id, chatTitle(id), chatState(id)[0]]), p?.name]);
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    box.innerHTML = WT.tabs.map((id) => {
+      const [st, say] = chatState(id), t = chatTitle(id), on = id === cur;
+      return `<div class="wt-tab ${on ? 'on' : ''} ${st ? `st-${st}` : ''}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" draggable="true" data-c="${esc(id)}" title="${esc(t)}${say ? `\n${say}` : ''}\nMiddle-click or × to close (it keeps running) · drag to move"><i class="wt-dot" aria-hidden="true"></i><span class="wt-name">${esc(t)}</span>${say ? `<span class="sr-only">${esc(say)}</span>` : ''}<button type="button" class="wt-x" tabindex="-1" aria-label="Close ${esc(t)}">×</button></div>`;
+    }).join('') || '<span class="wt-none">No chats open. Pick one in the sidebar, or start one on Home.</span>';
+    const pr = $('#wtProj');
+    if (pr) { pr.hidden = !p; if (p) { pr.textContent = p.name; pr.setAttribute('style', projStyle(p)); pr.title = `${p.name}: these are its open chats (each project keeps its own)`; } }
+  }
+  box.querySelector('.wt-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  const sw = $('#wtSwitch');
+  if (sw) { const [st] = cur ? chatState(cur) : ['']; sw.innerHTML = `<i class="wt-dot ${st ? `st-${st}` : ''}"></i><span class="wt-name">${esc(cur ? chatTitle(cur) : 'Home')}</span><span class="wt-n">${WT.tabs.length}</span><span aria-hidden="true">▾</span>`; }
+}
+function wtWire() {
+  const box = $('#wtStrip');
+  box.addEventListener('click', (e) => {
+    const t = e.target.closest('.wt-tab'); if (!t) return;
+    if (e.target.closest('.wt-x')) return wtClose(t.dataset.c);
+    if (t.dataset.c !== G.panes[0]) { showChat(t.dataset.c); if (isPhone()) setMView('chat'); }
+  });
+  box.addEventListener('auxclick', (e) => { const t = e.target.closest('.wt-tab'); if (t && e.button === 1) { e.preventDefault(); wtClose(t.dataset.c); } });
+  box.addEventListener('mousedown', (e) => { if (e.button === 1 && e.target.closest('.wt-tab')) e.preventDefault(); }); // no autoscroll
+  box.addEventListener('contextmenu', (e) => { const t = e.target.closest('.wt-tab'); if (t) wtMenu(e, t.dataset.c); });
+  box.addEventListener('keydown', (e) => {
+    const t = e.target.closest('.wt-tab'); if (!t) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); t.click(); }
+    if (e.key === 'Delete') { e.preventDefault(); wtClose(t.dataset.c); }
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) wtMenu(Object.assign(e, { anchor: t }), t.dataset.c);
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const n = e.key === 'ArrowLeft' ? t.previousElementSibling : t.nextElementSibling; if (n?.classList.contains('wt-tab')) { e.preventDefault(); n.focus(); } }
+  });
+  // Drag to reorder: the tab goes before the one it is dropped on (after it, past its middle).
+  box.addEventListener('dragstart', (e) => { const t = e.target.closest('.wt-tab'); if (!t) return; e.dataTransfer.setData('application/x-quorx-chattab', t.dataset.c); e.dataTransfer.effectAllowed = 'move'; t.classList.add('drag'); });
+  box.addEventListener('dragend', () => { for (const x of box.querySelectorAll('.drag, .drop-l, .drop-r')) x.classList.remove('drag', 'drop-l', 'drop-r'); });
+  const spot = (e) => { const t = e.target.closest('.wt-tab'); if (!t) return null; const r = t.getBoundingClientRect(); return { t, right: e.clientX > r.left + r.width / 2 }; };
+  box.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes('application/x-quorx-chattab')) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    for (const x of box.querySelectorAll('.drop-l, .drop-r')) x.classList.remove('drop-l', 'drop-r');
+    const s = spot(e); if (s) s.t.classList.add(s.right ? 'drop-r' : 'drop-l');
+  });
+  box.addEventListener('drop', (e) => {
+    const id = e.dataTransfer.getData('application/x-quorx-chattab'); if (!id) return;
+    e.preventDefault();
+    const s = spot(e), i = s ? WT.tabs.indexOf(s.t.dataset.c) + (s.right ? 1 : 0) : WT.tabs.length;
+    const before = WT.tabs.filter((x) => x !== id)[i - (WT.tabs.indexOf(id) < i ? 1 : 0)] ?? null;
+    WT.tabs = WS.moveTab(WT.tabs, id, before); wtSave(); wsChrome();
+  });
+  // A wheel over the strip scrolls it sideways.
+  box.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && box.scrollWidth > box.clientWidth) { e.preventDefault(); box.scrollLeft += e.deltaY; } }, { passive: false });
+  $('#wtMore').onclick = (e) => wtList(e.currentTarget);
+  $('#wtSwitch').onclick = (e) => wtList(e.currentTarget);
+  $('#wsBack').onclick = () => wsStep(-1);
+  $('#wsFwd').onclick = () => wsStep(1);
+  // Phones: the rail as a menu (with what needs you first, when something does).
+  $('#wtPanels').onclick = (e) => { const need = needsYou(); popMenu(Object.assign(e, { anchor: e.currentTarget }), [
+    ...(need.length ? [[`⏸ ${need.length} need${need.length === 1 ? 's' : ''} you: ${clip(need[0].title, 24)}`, () => showChat(need[0].c.id)], null] : []),
+    ['Chats', () => setMView('chats')], [`Running · ${replying().length + runTotal()}`, () => openRunningAll()], ['Servers', () => wrServers()], ['Files', () => wrFiles()],
+    null, ['Reopen closed tab', () => wsReopen(), { disabled: !WT.closed.length }]]); };
+}
+const closedLabel = (e) => (e.kind === 'chat' ? `Chat · ${chatTitle(e.id)}` : e.kind === 'file' ? `File · ${e.f?.label || e.f?.name || 'a file'}` : e.kind === 'page' ? `Page · ${String(e.url).replace(/^https?:\/\//, '').slice(0, 40)}` : `${{ art: 'Artifact', browser: 'Browser', trace: 'Steps', term: 'Terminal', files: 'Files' }[e.pane] || 'Pane'} area`);
+function wtMenu(e, id) {
+  const last = WT.closed.at(-1);
+  popMenu(e, [
+    ['Close', () => wtClose(id)],
+    ['Close other tabs', () => { for (const x of WT.tabs.filter((y) => y !== id)) wtClose(x, { quiet: true }); if (G.panes[0] !== id) showChat(id); wsChrome(); }, { disabled: WT.tabs.length < 2 }],
+    ['Close tabs to the right', () => { for (const x of WT.tabs.slice(WT.tabs.indexOf(id) + 1)) wtClose(x, { quiet: true }); wsChrome(); }, { disabled: WT.tabs.indexOf(id) === WT.tabs.length - 1 }],
+    null,
+    [last ? `Reopen closed tab (${closedLabel(last)})` : 'Reopen closed tab', () => wsReopen(), { disabled: !last, title: 'Ctrl+Shift+T' }],
+  ]);
+}
+// … : every open chat (search and a filter by state once there are many), then what was closed, newest first.
+function wtList(anchor) {
+  document.querySelector('.wt-list')?.remove();
+  const m = document.createElement('div'); m.className = 'wt-list exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  const segName = { run: 'Working', wait: 'Needs you', done: 'Finished', error: 'Error', idle: 'Idle' };
+  m.innerHTML = `${WT.tabs.length > 8 ? '<div class="wt-lf"></div>' : ''}<div class="wt-lrows">${WT.tabs.map((id) => { const [st, say] = chatState(id), t = chatTitle(id); return `<button type="button" role="menuitem" class="wt-lrow ${id === G.panes[0] ? 'on' : ''} ${st ? `st-${st}` : ''}" data-c="${esc(id)}" data-lf-seg="${st || 'idle'}" data-lf-text="${esc(`${t} ${say}`.toLowerCase())}"><i class="wt-dot"></i><span class="wt-name">${esc(t)}</span>${say ? `<small>${esc(say)}</small>` : ''}</button>`; }).join('') || '<span class="wt-none">No chats open</span>'}</div>
+    <hr class="fx-sep"><div class="wt-lh">Recently closed <kbd>Ctrl Shift T</kbd></div>${WT.closed.slice(-6).reverse().map((e, i) => `<button type="button" role="menuitem" class="wt-lrow closed" data-k="${WT.closed.length - 1 - i}">${esc(closedLabel(e))}</button>`).join('') || '<span class="wt-none">Nothing closed yet</span>'}`;
+  document.body.append(m);
+  if (WT.tabs.length > 8) listFilter($('.wt-lf', m), { key: 'chatTabs', rows: () => m.querySelectorAll('.wt-lrow[data-c]'), segLabel: (v) => segName[v] || v, segOrder: ['wait', 'run', 'error', 'done', 'idle'], placeholder: 'Find an open chat', label: 'Show' });
+  const r = anchor.getBoundingClientRect(), w = m.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(r.right - w.width, innerWidth - w.width - 8))}px`; m.style.top = `${Math.min(r.bottom + 4, innerHeight - w.height - 8)}px`;
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  const away = (ev) => { if (!m.contains(ev.target) && ev.target !== anchor) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); anchor.focus(); } };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = async (ev) => {
+    const b = ev.target.closest('.wt-lrow'); if (!b) return;
+    close();
+    if (b.dataset.c) { if (b.dataset.c !== G.panes[0]) await showChat(b.dataset.c); if (isPhone()) setMView('chat'); return; }
+    // A closed one picked from the list: it comes off the stack wherever it sits.
+    const k = Number(b.dataset.k), entry = WT.closed[k]; if (!entry) return;
+    WT.closed = WT.closed.filter((_, j) => j !== k); wtSave();
+    if (!await reopenOne(entry)) flashTip(anchor, 'That one can’t be reopened any more');
+    wsChrome();
+  };
+  (m.querySelector('.lf-q') || m.querySelector('.wt-lrow.on') || m.querySelector('.wt-lrow'))?.focus();
+}
+
+// ---------- the rail: Chats, Running, Servers, Files ----------
+// Chats is the sidebar as it always was, sliding in and out from here; Running is the Running list as a panel in the
+// same place; Servers and Files open the side pane on them (Terminal → Servers, Files). With the sidebar closed, the
+// buttons its folded strip had (Home, New chat, News, the update, restart, theme, Settings) sit on the rail.
+const WR = { run: false };
+function wrInit() {
+  const rail = $('#wsRail'); if (!rail) return;
+  const top = $('.wr-top', rail), foot = $('.wr-foot', rail);
+  for (const id of ['#railHome', '#railNew']) { const b = $(id); if (b) top.append(b); }
+  for (const id of ['#railNews', '#railUpd', '#railRestart', '#railTheme', '#railSettings']) { const b = $(id); if (b) foot.append(b); }
+  const run = $('#railRunning'); if (run) { run.dataset.rail = 'running'; $('[data-rail="servers"]', rail).before(run); }
+  $('[data-rail="chats"]', rail).onclick = () => { const open = !G.sideHidden && !WR.run; WR.run = false; G.sideHidden = open; savePrefs(); syncLayout(); };
+  if (run) run.onclick = () => wrRunning(!WR.run);
+  $('[data-rail="servers"]', rail).onclick = () => wrServers();
+  $('[data-rail="files"]', rail).onclick = () => wrFiles();
+  $('#wpClose').onclick = () => wrRunning(false);
+  document.body.classList.add('ws-on');
+}
+function wrRunning(on) {
+  if (isPhone()) return openRunningAll();
+  WR.run = on; syncLayout();
+  if (on) { $('#wpBody').innerHTML = '<div class="run-empty">Checking what runs…</div>'; delete $('#wpBody').dataset.sig; loadRunningAll().then(drawRunningAll); }
+}
+// The rail's own state: which button is lit, and the Running panel in the sidebar's place.
+function wrSync() {
+  const rail = $('#wsRail'); if (!rail) return;
+  const shell = $('.shell'), side = !G.sideHidden && !WR.run;
+  shell.classList.toggle('wr-run', WR.run && !isPhone());
+  shell.classList.toggle('wr-closed', !side && !WR.run);
+  $('[data-rail="chats"]', rail).classList.toggle('on', side);
+  $('[data-rail="chats"]', rail).setAttribute('aria-pressed', String(side));
+  $('#railRunning')?.classList.toggle('on', WR.run);
+  $('#railRunning')?.setAttribute('aria-pressed', String(WR.run));
+}
+// The pane's Servers and Files need a chat: the one on screen, else this project's first tab, else its newest chat.
+async function wrChat() {
+  if (focused()) return focused();
+  const pid = WT.pid || G.landingProject || 'scratch';
+  const id = WT.tabs[0] || G.chats.filter((x) => projOf(x) === pid).sort((a, z) => (z.lastAt || z.updated || 0) - (a.lastAt || a.updated || 0))[0]?.id || G.chats[0]?.id;
+  if (!id) { uiAlert('Open a chat first: servers and files show in its pane.'); return null; }
+  await showChat(id); return focused();
+}
+async function wrServers() { const c = await wrChat(); if (c) openTerminal(c, null, 'srv'); }
+async function wrFiles() { const c = await wrChat(); if (c) setPaneTab('files'); }
+
+// ---------- the status bar ----------
+// "⏸ N needs you" (amber, only when N > 0) opens the chats waiting for you in turn; "▶ N running" opens the Running
+// panel; "🖥 N servers" this project's servers; the context left is the chat on screen's. Read from what the page
+// already has: each chat's waiting state, the Running list, the servers overview.
+const runTotal = () => { const d = RUNV.data; return d ? d.items.length + (RUNV.tabs?.length || 0) + d.control.length : 0; };
+const replying = () => [...G.open.values()].filter((c) => c.running);
+// The Running panel, under Needs you (needsYou, the Running list's own): the other chats with a reply going.
+function wsChatsWorking() {
+  const list = replying().filter((c) => !c.waiting);
+  if (!list.length) return '';
+  const pname = (c) => G.projects.find((p) => p.id === projOf(c));
+  return `<section class="run-group rl-sec wp-chats"><h4>Chats working <span class="run-n">${list.length}</span><small>replies going now</small></h4>${list.map((c) => {
+    const [st, say] = chatState(c.id), p = pname(c);
+    return `<button type="button" class="wp-chat st-${st}" data-chat="${esc(c.id)}" title="Open this chat"><i class="wt-dot"></i><span class="wt-name">${esc(c.title)}</span>${p ? `<span class="rl-proj" style="${projStyle(p)}">${esc(clip(p.name, 18))}</span>` : ''}<small>${esc(say)}</small></button>`;
+  }).join('')}</section>`;
+}
+// The context left in the chat on screen: the composer meter's own numbers and colours (contextUse), once known.
+function wsContextLeft(c) {
+  const u = contextUse(c); if (!u.known) return null;
+  return { pct: u.pct, tone: u.tone, text: ctxLabel(u), title: u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens). Click for details and Compact.` : `${ctxK(u.used)} tokens used. Click for details and Compact.` };
+}
+function wsStatusDraw() {
+  const bar = $('#wsStatus'); if (!bar) return;
+  const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = (pid && G.srvUp?.[pid]) || 0, ctx = c ? wsContextLeft(c) : null;
+  const sig = JSON.stringify([need.map((x) => [x.c.id, x.kind]), work, procs, srv, pid, ctx, c?.id]);
+  if (bar.dataset.sig === sig) return;
+  bar.dataset.sig = sig;
+  bar.innerHTML = `${need.length ? `<button type="button" class="wsb-need" data-sb="need" title="${esc(need.map((x) => `${x.title}: ${x.kind === 'answer' ? 'a question' : x.kind === 'budget' ? 'its budget' : 'an approval'}`).join('\n'))}\nClick to go to ${need.length > 1 ? 'each in turn' : 'it'}">⏸ ${need.length} need${need.length === 1 ? 's' : ''} you</button>` : ''}
+    <button type="button" data-sb="run" class="${work ? 'wsb-live' : ''}" title="Running now, in every project: ${work} chat${work === 1 ? '' : 's'} replying, and ${procs} server${procs === 1 ? '' : 's'}, command${procs === 1 ? '' : 's'}, browser tab${procs === 1 ? '' : 's'} or Chrome / computer use">▶ ${n} running</button>
+    <button type="button" data-sb="srv" title="This project's servers that are up: run, stop and edit them">🖥 ${srv} server${srv === 1 ? '' : 's'}</button>
+    <span class="wsb-grow"></span>
+    ${ctx ? `<button type="button" data-sb="ctx" class="wsb-ctx" data-tone="${ctx.tone}" title="${esc(ctx.title || 'Context left in the chat on screen')}">◔ ${esc(ctx.text || `${ctx.pct}% left`)}</button>` : ''}`;
+}
+function wsStatusWire() {
+  $('#wsStatus').onclick = (e) => {
+    const b = e.target.closest('[data-sb]'); if (!b) return;
+    if (b.dataset.sb === 'need') {
+      const list = needsYou(); if (!list.length) return;
+      const i = list.findIndex((x) => x.c.id === G.panes[0]);
+      showChat(list[(i + 1) % list.length].c.id);
+    }
+    // The context figure opens the composer's own meter (its details and Compact).
+    if (b.dataset.sb === 'ctx') $('.cmp-ctx-btn', focused()?.el?.root || document)?.click();
+    if (b.dataset.sb === 'run') wrRunning(true);
+    if (b.dataset.sb === 'srv') wrServers();
+  };
+}
+
+// ---------- attention: the taskbar badge and the window title ----------
+// In the desktop app the taskbar icon carries the number of chats that need you (a small amber disc drawn here and
+// handed to the window); the window title says it too, in any browser.
+let badgeWas = -1;
+function wsBadge() {
+  const n = needsYou().length;
+  if (n === badgeWas) return;
+  badgeWas = n;
+  const base = document.body.classList.contains('dev-build') ? 'QuorX · DEV' : 'QuorX';
+  document.title = n ? `(${n}) ${base}` : base;
+  if (!window.ohDesktop?.badge) return;
+  let png = '';
+  if (n) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#f5a524'; g.beginPath(); g.arc(16, 16, 15, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#1a1002'; g.font = `bold ${n > 9 ? 17 : 21}px Segoe UI, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(n > 9 ? '9+' : String(n), 16, 17);
+    png = cv.toDataURL('image/png');
+  }
+  window.ohDesktop.badge(n, png).catch(() => {});
+}
+// A reply that ended while QuorX wasn't in front keeps its mark on the chat on screen too, until you come back to it.
+addEventListener('focus', () => { const id = G.panes?.[0]; if (id && G.unseen?.has(id)) { G.unseen.delete(id); renderSidebar(); } });
+
+// Everything above, drawn again: after the sidebar redraws (chat states), and when the Running list or servers change.
+function wsChrome() {
+  if (!$('#wsTop')) return;
+  wtDraw(); wsStatusDraw(); wsBadge();
+  const nb = $('#wsBack'), nf = $('#wsFwd');
+  if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
+  if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
+  const pb = $('#wtPanels .wt-pn'); if (pb) { const n = needsYou().length; pb.hidden = !n; pb.textContent = n; }
+}
+function wsChromeInit() {
+  if (!$('#wsTop')) return;
+  wrInit(); wtWire(); wsStatusWire();
+  if (!WT.pid) wtLoad(G.landingProject || 'scratch');
+  wrSync(); wsChrome();
+}
+
 // ---------- Files: previews like an editor's — pictures, video, audio, PDF, office documents, tables, fonts, pages ----------
 const fileExt = (n) => (String(n || '').match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
 const PREVIEW_KINDS = {
@@ -8916,7 +9345,6 @@ function settingsPanels(S) {
 }
 
 function openSettings(cat) {
-  wsSeen('settings', cat || 'general');
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
@@ -8928,6 +9356,7 @@ function openSettings(cat) {
   // Models & catalogue's OpenRouter settings live on OpenRouter's page; the defaults for new chats on Providers itself.
   if (cat === 'models') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
   if (cat) ST.cat = cat;
+  wsSeen('settings', ST.cat || 'general');
   $('#stSearch').value = '';
   drawSettings();
   if (!$('#settings').open) $('#settings').showModal();
@@ -8935,7 +9364,7 @@ function openSettings(cat) {
 function drawSettings() {
   const S = ST.draft, P = settingsPanels(S);
   $('#stNav').innerHTML = SETTINGS_NAV.map(([group, items]) => `<div class="st-nav-group"><div class="st-nav-group-label">${group}</div>${items.map(([id, ico, label]) => `<button type="button" class="st-nav-item ${ST.cat === id ? 'active' : ''}" data-cat="${id}" ${ST.cat === id ? 'aria-current="page"' : ''}><span class="st-nav-item-left"><span class="st-nav-icon">${ico}</span><span class="st-nav-label">${label}</span></span><span class="sx-nav-sum"></span></button>`).join('')}</div>`).join('');
-  for (const b of document.querySelectorAll('#stNav .st-nav-item')) b.onclick = () => { ST.cat = b.dataset.cat; $('#stSearch').value = ''; drawSettings(); $('#stMain').scrollTop = 0; };
+  for (const b of document.querySelectorAll('#stNav .st-nav-item')) b.onclick = () => { ST.cat = b.dataset.cat; wsSeen('settings', ST.cat); $('#stSearch').value = ''; drawSettings(); $('#stMain').scrollTop = 0; };
   // Every panel is in the page (search looks through all of them); only the chosen one shows. Each one opens with
   // its icon, what it is for, and a line that says what is set now (stRefresh keeps that line up to date).
   $('#stMain').innerHTML = SETTINGS_NAV.flatMap(([group, items]) => items.map((it) => [group, ...it])).map(([group, id, ico]) => {
@@ -10829,7 +11258,7 @@ function syncLayout() {
     $('.ch-pane', p)?.classList.toggle('active', mine && show);
   }
   $('#sidebar').classList.toggle('collapsed', !!G.sideHidden && !isNarrow());
-
+  wrSync();
 }
 
 // ---------- start-up ----------
@@ -10876,6 +11305,8 @@ async function boot() {
   $('#stCancel').onclick = cancelSettings;
   $('#stClose').onclick = cancelSettings;
   $('#settings').addEventListener('cancel', (e) => { e.preventDefault(); cancelSettings(); });
+  // Closing Settings brings the chat back to the front: a step of its own, so ‹ returns to the settings page.
+  $('#settings').addEventListener('close', () => { if (G.panes[0]) wsSeen('chat', G.panes[0]); wsChrome(); });
   $('#stResetCat').onclick = () => resetCategory();
   $('#stSearch').oninput = () => searchSettings($('#stSearch').value);
   $('#newBtn').onclick = () => newChat();
@@ -10885,7 +11316,8 @@ async function boot() {
   $('#schedules').addEventListener('close', () => { SCHED.focus = null; });
   loadSchedules().then(pollSchedules);
   $('#costClose').onclick = () => $('#costs').close();
-  $('#runAllBtn').onclick = () => openRunningAll();
+  // The sidebar's Running opens the rail's Running panel (the dialog on a phone).
+  $('#runAllBtn').onclick = () => (isPhone() || !$('#wsRail') ? openRunningAll() : wrRunning(true));
   $('#railRunning').onclick = () => openRunningAll();
   $('#rlClose').onclick = () => $('#runningAll').close();
   $('#runningAll').addEventListener('close', () => clearInterval(RUNV.timer));
@@ -10944,6 +11376,8 @@ async function boot() {
   for (const id of ids) await getChat(id);
   G.panes = ids.filter((id) => G.open.has(id));
   G.focus = 0;
+  if (G.panes[0]) wtOpen(G.open.get(G.panes[0]));
+  wsChromeInit();
   renderPanes();
   renderSidebar(); renderSpend(); refreshBalance();
   // Chats with a reply still running on the server (started before a reload) reattach too.
@@ -11376,6 +11810,7 @@ function devBadges(projectId, r) {
   if (!r || r.error) return;
   const running = (r.servers || []).filter((s) => s.status === 'running').length;
   const busy = (r.jobs || []).length + (r.servers || []).filter((s) => s.status === 'starting').length;
+  if ((G.srvUp ||= {})[projectId] !== running) { G.srvUp[projectId] = running; wsStatusDraw(); } // the status bar's 🖥
   // The pane's 🖥 and Terminal tab show the project of the chat the pane is showing.
   if (focused()?.projectId !== projectId) return;
   const sb = $('#paneSrvBtn'), tb = $('#paneTabs [data-tab="term"]');
@@ -12102,7 +12537,7 @@ function setPaneTab(tab) {
   const c = focused(); if (!c) return;
   if (tab === 'run') return openTerminal(c, null, 'run');
   if (tab === 'browser') { const a = AREA; refreshAgentTab(c).then((ch) => inArea(a, () => { if (ch && G.view.browser) renderPane(); })); }
-  wsSeen('tab', WS.tabId(WS.PANE_KINDS[tab] || 'artifact', AREA.gid));
+  wsSeen('tab', WS.tabId(WS.PANE_KINDS[tab] || 'artifact', AREA.gid), { chat: c.id });
   G.view = paneView(c, tab);
   c.paneHidden = false;
   syncLayout(); renderPane(); refreshTraceButtons(); toPreview();
@@ -12455,6 +12890,8 @@ async function closeBTab(c, sid) {
     }
   }
   const lentTo = lentChatOf(sid); if (lentTo) takeBackTab(lentTo);
+  // One of your pages: Ctrl+Shift+T opens its address again.
+  if (!sid.startsWith('agent-') && /^https?:\/\//i.test(String(url || ''))) wtClosed({ kind: 'page', url, title: findBTab(sid)?.title || '' });
   if (sid.startsWith('agent-')) { delete G.agentTab[c.id]; } else { const p = bTabProject(sid); if (p != null) G.btabsBy[p] = G.btabsBy[p].filter((x) => x.sid !== sid); if (DESK) window.ohDesktop.close(sid); }
   postJ('/api/ubrowser', { sid, op: 'close' }).catch(() => {});
   if (G.bActive === sid) G.bActive = null;
@@ -12625,7 +13062,8 @@ function drawRunCount() {
     if (w) { w.hidden = !need; w.textContent = need > 99 ? '99+' : String(need); }
   }
   // The open list follows at once (it also redraws every 2 s).
-  if ($('#runningAll')?.open) drawRunningAll();
+  if ($('#runningAll')?.open || WR.run) drawRunningAll();
+  wsStatusDraw();
 }
 const rlChat = (chatId, title) => { const h = chatId && G.chats.find((x) => x.id === chatId); return chatId ? `<button type="button" class="run-chat linkish" data-chat="${esc(chatId)}" title="Open this chat">${esc(clip(h?.title || title || 'a chat', 34))}</button>` : ''; };
 const rlProj = (pid) => { const p = pid && G.projects.find((x) => x.id === pid); return p ? `<button type="button" class="rl-proj" data-proj="${esc(p.id)}" style="${projStyle(p)}" title="Open ${esc(p.name)} on its Running tab">${esc(clip(p.name, 26))}</button>` : ''; };
@@ -12690,9 +13128,10 @@ async function openRunningAll() {
   RUNV.timer = setInterval(async () => { if (!dlg.open) { clearInterval(RUNV.timer); return; } await loadRunningAll(); drawRunningAll(); }, 2000);
 }
 function drawRunningAll() {
-  const body = $('#rlBody'), d = RUNV.data; if (!body || !d || !$('#runningAll').open) return;
+  // In the dialog, or in the rail's Running panel (the same list in the sidebar's place).
+  const panel = WR.run && !isPhone() && !$('#runningAll').open, body = panel ? $('#wpBody') : $('#rlBody'), d = RUNV.data; if (!body || !d || (!panel && !$('#runningAll').open)) return;
   // Rebuilt only when what runs changes; times tick in place, so a click never lands on a button just replaced.
-  const sig = JSON.stringify([needsYou().map((x) => [x.c.id, x.kind, x.id, x.title, x.raiseTo]), d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
+  const sig = JSON.stringify([panel && replying().filter((c) => !c.waiting).map((c) => [c.id, c.title]), needsYou().map((x) => [x.c.id, x.kind, x.id, x.title, x.raiseTo]), d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
   if (body.dataset.sig === sig) {
     for (const t of body.querySelectorAll('.run-time[data-started]')) t.textContent = `${t.dataset.word} ${dur(Date.now() - Number(t.dataset.started))}`;
     return;
@@ -12703,6 +13142,7 @@ function drawRunningAll() {
   const q0 = document.activeElement?.classList.contains('lf-q') && body.contains(document.activeElement) ? document.activeElement.selectionStart : null;
   body.innerHTML = `${d.error ? `<div class="run-empty bad">Could not list servers and commands: ${esc(d.error)}</div>` : ''}<div class="rl-filter"></div>
     ${rows.need.length ? sec('need', 'Needs you', 'chats waiting on you, in every project', rows.need, '') : ''}
+    ${panel ? wsChatsWorking() : ''}
     ${sec('proc', 'Servers and commands', 'in every project', rows.proc, 'No servers or commands are running.', procN > 1 ? `<button type="button" class="rl-stopall danger" title="Stop every server and command in every project (your terminal tabs stay open)">■ Stop all ${procN}</button>` : '')}
     ${RUNV.tabs ? sec('tab', 'Browser tabs in QuorX', 'your tabs and each chat’s agent tab', rows.tab, 'No browser tabs are open.') : ''}
     ${sec('ctl', 'Chrome and computer use', 'chats using your Chrome or your desktop', rows.ctl, 'No chat is using your Chrome or your desktop.')}`;
@@ -12715,7 +13155,7 @@ function drawRunningAll() {
 }
 function wireRunningAll(body) {
   const again = async () => { await loadRunningAll(); drawRunningAll(); pollDev(); };
-  const leave = () => $('#runningAll').close();
+  const leave = () => { if ($('#runningAll').open) $('#runningAll').close(); };
   for (const b of body.querySelectorAll('[data-chat]')) b.onclick = () => { leave(); showChat(b.dataset.chat); if (isPhone()) setMView('chat'); };
   // Needs you: the same calls the chat's own card makes; the reply's events then close the card and the row.
   const need = (b, attr) => needsYou().find((x) => `${x.c.id}:${x.id}` === b.dataset[attr]);
@@ -12780,7 +13220,9 @@ function wireRunningAll(body) {
   };
 }
 // The sidebar count: every 5 s while QuorX is in view (the open list refreshes itself every 2 s).
-setInterval(() => { if (document.visibilityState === 'visible' && !$('#runningAll')?.open && G.projects) loadRunningAll(); }, 5000);
+setInterval(() => { if (document.visibilityState === 'visible' && !$('#runningAll')?.open && G.projects && !WR.run) loadRunningAll(); }, 5000);
+// The rail's Running panel keeps up every 2 s while it is open, like the dialog.
+setInterval(() => { if (document.visibilityState === 'visible' && WR.run && !isPhone() && !$('#runningAll')?.open) loadRunningAll().then(drawRunningAll); }, 2000);
 
 // ---------- ↻ retry a failed reply ----------
 // Only the newest reply, when it failed: your message before it goes again, on the chat's model as it is now.
@@ -13143,7 +13585,7 @@ const DESK = !!window.ohDesktop?.available;
 // Only when the desktop app says so itself (its DEV value: not packaged and a git checkout).
 if (DESK) window.ohDesktop.info().then((i) => { if (i?.dev === true) markDevBuild(); }).catch(() => {});function markDevBuild() {
   document.body.classList.add('dev-build');
-  document.title = 'QuorX · DEV';
+  document.title = 'QuorX · DEV'; badgeWas = -1; wsBadge(); // keeps the needs-you count in the title
 }
 function deskStage(t, stage) {
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; t.error = null; window.ohDesktop.open(t.sid, t.url).catch((e) => { t.error = e.message; deskPlace(true); }); }

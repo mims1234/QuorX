@@ -170,9 +170,9 @@ export function setWeights(lay, weights) {
  * The layout as plain JSON for localStorage, version 1. `tabs` is the state each tab saves ({ [tabId]: { kind, ... } }),
  * kept only for tabs in the tree.
  */
-export function serialise(lay, tabs = {}) {
+export function serialise(lay, tabs = {}, closed = []) {
   const live = new Set(allTabs(lay));
-  return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))) });
+  return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}) });
 }
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
@@ -196,7 +196,66 @@ export function parse(text) {
   const lay = createLayout(root, s.focus);
   const live = new Set(allTabs(lay));
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
-  return { layout: lay, tabs };
+  return { layout: lay, tabs, closed: cleanClosed(s.closed) };
+}
+
+// ---------- open chats, and the tabs you closed ----------
+// The chat group's tabs are the chats open as tabs along the top, in their order; its active tab is the chat on
+// screen. Closing a tab (a chat, a pane area, a file, a page in the Browser) puts what it takes to bring it back on a
+// per-project stack of the last CLOSED_CAP, newest last; Ctrl+Shift+T takes the newest off.
+export const CLOSED_CAP = 50;
+const CLOSED_KINDS = new Set(['chat', 'area', 'file', 'page']);
+/** Only well-formed entries ({ kind, … } of a known kind, plain JSON), the newest CLOSED_CAP. */
+export function cleanClosed(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((e) => e && typeof e === 'object' && CLOSED_KINDS.has(e.kind)).map((e) => JSON.parse(JSON.stringify(e))).slice(-CLOSED_CAP);
+}
+/** Same thing closed again: one entry, moved to the top. */
+const closedKey = (e) => (e.kind === 'chat' ? `chat:${e.id}` : e.kind === 'file' ? `file:${e.chat}:${e.f?.id}` : e.kind === 'page' ? `page:${e.url}` : null);
+export function pushClosed(list, e) {
+  const k = closedKey(e);
+  return cleanClosed([...(list || []).filter((x) => !k || closedKey(x) !== k), e]);
+}
+/** The newest entry (or the newest that ok accepts), and the stack without it. */
+export function popClosed(list, ok) {
+  const l = cleanClosed(list);
+  for (let i = l.length - 1; i >= 0; i--) if (!ok || ok(l[i])) return { entry: l[i], list: [...l.slice(0, i), ...l.slice(i + 1)] };
+  return { entry: null, list: l };
+}
+/** The chat ids open as tabs, in order. */
+export const chatTabIds = (lay) => (findGroup(lay, CHAT_GROUP)?.tabs || []).filter((t) => kindOf(t) === 'chat' && t !== 'chat:main').map((t) => t.slice(5));
+/** The layout with these chats as its chat tabs (active: the one on screen). Never mutates. */
+export function withChatTabs(lay, ids, active = null) {
+  if (!findGroup(lay, CHAT_GROUP)) return lay;
+  const tabs = [...new Set(ids.map(String))].map((id) => tabId('chat', id)), root = copy(lay.root);
+  const g = findGroup(root, CHAT_GROUP);
+  g.tabs = tabs.length ? tabs : [tabId('chat', 'main')];
+  g.active = active != null && tabs.includes(tabId('chat', active)) ? tabId('chat', active) : g.tabs[0];
+  return { ...lay, root };
+}
+/** Where a chat opened from outside the strip goes: right after the one on screen (the end if none). */
+export function insertTab(ids, id, after = null) {
+  if (ids.includes(id)) return [...ids];
+  const i = after != null ? ids.indexOf(after) : -1;
+  return i < 0 ? [...ids, id] : [...ids.slice(0, i + 1), id, ...ids.slice(i + 1)];
+}
+/** Moves a tab to sit before `before` (the end when null). */
+export function moveTab(ids, id, before = null) {
+  if (!ids.includes(id) || id === before) return [...ids];
+  const rest = ids.filter((x) => x !== id), i = before == null ? -1 : rest.indexOf(before);
+  return i < 0 ? [...rest, id] : [...rest.slice(0, i), id, ...rest.slice(i)];
+}
+/** Ctrl+Tab: the next (dir 1) or previous (-1) tab, round the end. */
+export function cycleTab(ids, cur, dir = 1) {
+  if (!ids.length) return null;
+  const i = ids.indexOf(cur);
+  return ids[(((i < 0 ? (dir > 0 ? -1 : 0) : i) + dir) % ids.length + ids.length) % ids.length];
+}
+/** Which tab comes to the front when the one on screen closes: the one to its right, else its left. */
+export function afterClose(ids, id) {
+  const i = ids.indexOf(id);
+  if (i < 0) return null;
+  return ids[i + 1] ?? ids[i - 1] ?? null;
 }
 
 // ---------- tab kinds ----------

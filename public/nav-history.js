@@ -29,8 +29,13 @@ export function createHistory({ cap = HISTORY_CAP, entries = [], at } = {}) {
     get current() { return list[i] || null; },
     get entries() { return list.map((e) => ({ ...e })); },
     get index() { return i; },
-    back() { if (i <= 0) return null; i--; return { ...list[i] }; },
-    forward() { if (i >= list.length - 1) return null; i++; return { ...list[i] }; },
+    // ok(entry), when given, says whether an entry can be shown now: one that can't (its tab is closed, or it is what
+    // is already on screen) is stepped over but kept, so a tab reopened later is a stop again.
+    back(ok) { const k = h.find(-1, ok); if (k < 0) return null; i = k; return { ...list[i] }; },
+    forward(ok) { const k = h.find(1, ok); if (k < 0) return null; i = k; return { ...list[i] }; },
+    canGo(dir, ok) { return h.find(dir < 0 ? -1 : 1, ok) >= 0; },
+    /** The index of the next entry back (dir -1) or forward (1) that ok accepts, or -1. */
+    find(dir, ok) { for (let k = i + dir; k >= 0 && k < list.length; k += dir) if (!ok || ok({ ...list[k] })) return k; return -1; },
     /** Something closed or deleted: its entries go (back / forward skip it from now on). */
     forget(pred) {
       const cur = list[i];
