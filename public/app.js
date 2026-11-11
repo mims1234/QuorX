@@ -5622,7 +5622,8 @@ const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + '…'
 const TRACE_KINDS = [['think', '🧠 Model'], ['tool', '🔧 Tool'], ['res', '↳ Result'], ['file', '📝 File'], ['cmd', '⌨️ Command'], ['browser', '📸 Browser'], ['decide', '⚖️ Deciders'], ['ask', '✋ Approval'], ['ok', '✅ Approved'], ['err', '⛔ Error'], ['warn', '⚠ Warning'], ['note', 'ℹ Note']];
 function openTrace(c, m) {
   // In a group that shows this chat (with two chats on screen, one pinned to the other chat won't do).
-  if (areaChat(AREA) !== c) { const a = PA.list.find((x) => areaChat(x) === c); if (a && a !== AREA) return inArea(a, () => openTrace(c, m)); }
+  // In the group showing this chat's Steps, else one that shows this chat (see "where things open").
+  { const a = areaOf(wsOpenAt('steps', c)); if (a && a !== AREA && (areaChat(AREA) !== c || !(AREA.st.view?.trace))) return inArea(a, () => openTrace(c, m)); }
   const i = G.panes.indexOf(c.id);
   if (i >= 0 && G.focus !== i) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i); }
   // One trace at a time: it becomes an entry in the artifact dropdown (a new one takes its place).
@@ -6918,7 +6919,10 @@ function openInBrowser(c, url) {
 // The agent started (or restarted) a server: show it, and update the 🖥 count.
 function serverUp(c, e) {
   pollDev();
-  if (onScreen(c) && followsAgent(c) && e.url) asAgent(c, () => openInBrowser(c, e.url));
+  if (!onScreen(c) || !followsAgent(c) || !e.url) return;
+  // A started server: the group that follows the agent, else the one showing the Browser (see "where things open").
+  const a = areaOf(wsOpenAt('server', c));
+  if (a) { const was = WP.agent; WP.agent = true; try { inArea(a, () => openInBrowser(c, e.url)); } finally { WP.agent = was; } }
 }
 // Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) open as tabs of their own (see
 // "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it, to open
@@ -7076,7 +7080,7 @@ const PANE_TAB_NAMES = { art: 'Artifact', browser: 'Browser', trace: 'Steps', te
 // keeping one of each: what an area used to keep for itself now sits on its tabs, so later two chats can each have
 // their own Steps, Browser and Terminal. The page's old names (G.view, G.bActive, AREA.st…) read and write them.
 // WK.history records what you bring to the front (chats, tabs, files, settings pages) for back / forward.
-const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory(), pins: {}, max: null, follow: null };
+const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory(), pins: {}, max: null, follow: null, preset: null };
 const LAYOUT_KEY = (projectId) => `oh-layout:${projectId}`, LAYOUT_MIGRATED = 'oh-layout-migrated';
 function wsTab(id) {
   let t = WK.tabs.get(id);
@@ -7265,6 +7269,7 @@ function paneMakeArea(gid) {
 }
 // A new group beside `targetGid` (zone: left, right, top, bottom), holding the pane's five tabs (and `tabs` too).
 function paneAddArea(targetGid, zone = 'bottom', { tabs = [], active = null } = {}) {
+  WK.preset = null; queueMicrotask(() => wsLayoutsDraw());
   if (PA.list.length >= PANE_MAX_AREAS) return null;
   const gid = `g${WK.lay.next}`;
   const r = WS.addGroup(WK.lay, targetGid || PA.list.at(-1).gid, zone, [...WS.paneTabs(gid), ...tabs], { id: gid, active });
@@ -7309,20 +7314,21 @@ function paneCloseArea(a) {
   if (PA.focus === a) { const n = PA.list.find((x) => x !== a); PA.focus = n; AREA = n; }
   if (WK.max === a.gid) WK.max = null;
   if (WK.follow === a.gid) WK.follow = null;
+  WK.preset = null; queueMicrotask(() => wsLayoutsDraw());
   paneDropArea(a);
   paneMarkAreas(); paneSave();
   deskPlace(true);
   if (!PA.list.some((x) => x.st.view?.term)) closeTermStream();
 }
 // Takes an area away (its state too): its real browser tab is no longer placed, its timers stop, its file tabs go.
-function paneDropArea(a) {
+function paneDropArea(a, { keepTabs = false } = {}) {
   clearTimeout(a.st.traceTimer); if (a.st.watch) clearInterval(a.st.watch.timer);
   a.st.dsk = null;
   PA.list.splice(PA.list.indexOf(a), 1);
   paneChromeHome(); // before the area goes: it may hold them
   a.el.remove();
-  for (const t of WS.findGroup(WK.lay, a.gid)?.tabs || []) if (isFileTab(t)) WK.tabs.delete(t);
-  WK.lay = WS.removeGroup(WK.lay, a.gid); wsForget(a.gid);
+  if (!keepTabs) { for (const t of WS.findGroup(WK.lay, a.gid)?.tabs || []) if (isFileTab(t)) WK.tabs.delete(t); WK.lay = WS.removeGroup(WK.lay, a.gid); }
+  wsForget(a.gid);
   if (PA.focus === a) { PA.focus = PA.list[0]; AREA = PA.focus; }
 }
 // The first area carries the pane-wide 🖥 servers button.
@@ -7645,8 +7651,121 @@ function wsDropAt(src, gid, zone) {
     setPaneTab(src.tab);
   }
 }
+// ---------- where things open: one rule set (WS.openTarget) ----------
+// A started server goes to the group that follows the agent, else the one showing the Browser; 🧭 a reply's steps to
+// the group showing that chat's Steps; files and pages to the nearest group to where you clicked that isn't a chat;
+// a reply's Changes beside its chat. Nothing opens in a chat's group, so nothing replaces the chat you type in. Only
+// the groups on screen count.
+const chatGroupOf = (c) => (c && G.panes.indexOf(c.id) === 1 ? WS.CHAT2_GROUP : WS.CHAT_GROUP);
+function wsOpenAt(kind, c, from = null) {
+  if (G.paneHidden && !isPhone()) { setPaneHidden(false); wsPlace(); }
+  const shown = wsShownGroups(), lay = shown.length === WS.groups(WK.lay).length ? WK.lay : WS.keepGroups(WK.lay, shown);
+  const shows = {}, owner = {};
+  for (const a of PA.list) { if (!shown.includes(a.gid)) continue; shows[a.gid] = a.st.view?.ftab ? 'file' : inArea(a, paneTab); owner[a.gid] = areaChat(a)?.id || null; }
+  const gid = WS.openTarget(kind, { lay, rects: WP.rects, from, follow: shown.includes(wsFollowGid()) ? wsFollowGid() : null, shows, owner, chat: c?.id || null, chatGroup: chatGroupOf(c) });
+  return areaOf(gid) ? gid : null;
+}
+
+// ---------- layouts: Build, Debug, Compare, Review, Focus, and your own ----------
+// One click puts the whole workspace in a layout (WS.LAYOUTS). Nothing closes: pane groups keep their boxes (so pages
+// don't reload and terminals keep their screen), file tabs go to the nearest group, and the chats stay open as tabs.
+// Compare brings a second chat on screen (the next open tab); with two chats on screen the other layouts keep both
+// when there is room. The layout picked is kept per project; your own ("Save layout as…" in a group's ⋯) are kept on
+// this computer and offered in every project. A phone shows one group at a time instead.
+const MY_LAYOUTS = 'oh-layouts-mine';
+function myLayouts() {
+  let l = []; try { l = JSON.parse(localStorage.getItem(MY_LAYOUTS) || '[]'); } catch { /* storage off */ }
+  return (Array.isArray(l) ? l : []).map((x) => ({ id: String(x?.id || ''), name: String(x?.name || '').slice(0, 60), shape: WS.cleanShape(x?.shape) })).filter((x) => x.id && x.name && x.shape);
+}
+function saveMyLayouts(list) { try { localStorage.setItem(MY_LAYOUTS, JSON.stringify(list)); } catch { /* storage off */ } wsLayoutsDraw(); }
+const layoutOf = (key) => WS.LAYOUTS[key] || myLayouts().find((x) => `my:${x.id}` === key)?.shape || null;
+const layoutName = (key) => WS.LAYOUTS[key]?.name || myLayouts().find((x) => `my:${x.id}` === key)?.name || 'Layout';
+async function wsApplyLayout(key) {
+  const shape0 = layoutOf(key), c = primaryChat();
+  if (!shape0 || !c || isPhone()) return;
+  let chat2 = G.panes[1] || null, shape = shape0;
+  if (shape.chats === 2 && !chat2) {
+    const other = WT.tabs.find((id) => !G.panes.includes(id) && chatInfo(id));
+    if (!other || !(await getChat(other))) return flashTip($('#wsLayouts') || document.body, `${layoutName(key)} needs a second chat: open one from the sidebar first`, 2600);
+    chat2 = other;
+  }
+  if (chat2 && shape.chats !== 2) { shape = WS.withChat2(shape); if (shape.chats !== 2) chat2 = null; }
+  const r = WS.fitLayout(WK.lay, shape, { chat2, order: PA.list.map((a) => a.gid) });
+  for (const gid of r.removed) { const a = areaOf(gid); if (a) paneDropArea(a, { keepTabs: true }); }
+  WK.lay = r.layout;
+  for (const gid of r.added) paneMakeArea(gid);
+  const chats = chat2 ? [G.panes[0], chat2] : [G.panes[0]];
+  const chatsChanged = chats.join() !== G.panes.join();
+  if (chatsChanged) { if (chat2) wtOpen(G.open.get(chat2)); G.panes = chats; G.focus = Math.min(G.focus, chats.length - 1); }
+  WK.pins = Object.fromEntries(Object.entries(r.pins).map(([g, i]) => [g, chats[i]]).filter(([, id]) => id));
+  WK.follow = r.follow; WK.max = null;
+  if (!areaOf(PA.focus?.gid)) PA.focus = PA.list[0];
+  AREA = PA.focus;
+  // Each group shows the pane tab the layout gives it (its file tabs stay in its strip).
+  for (const [gid, kind] of Object.entries(r.kinds)) { const a = areaOf(gid); if (a) inArea(a, () => { G.view = paneView(focused(), kind); }); }
+  setPaneHidden(!!shape.focus, true);
+  WK.preset = key;
+  if (chatsChanged) renderPanes(); else { syncLayout(); eachArea(renderPane); paneMarkAreas(); }
+  paneSave(); wsChrome(); wsLayoutsDraw(); deskPlace(true); window.dispatchEvent(new Event('resize'));
+}
+// The layout buttons in the top bar: the five, then yours (▾).
+function wsLayoutsDraw() {
+  const box = $('#wsLayouts'); if (!box) return;
+  const mine = myLayouts(), cur = WK.preset, on = !!focused();
+  const sig = JSON.stringify([cur, on, mine.map((x) => [x.id, x.name])]);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const myCur = cur?.startsWith('my:') ? mine.find((x) => `my:${x.id}` === cur) : null;
+  box.innerHTML = WS.LAYOUT_ORDER.map((k) => `<button type="button" data-ly="${k}" aria-pressed="${cur === k}" title="${esc(WS.LAYOUTS[k].tip)}" ${on ? '' : 'disabled'}>${esc(WS.LAYOUTS[k].name)}</button>`).join('')
+    + `<button type="button" class="wl-mine" aria-haspopup="menu" aria-pressed="${!!myCur}" title="Your own layouts: apply, rename or delete (save one from a group's ⋯)" ${on ? '' : 'disabled'}>${myCur ? esc(clip(myCur.name, 16)) : 'Mine'} ▾</button>`;
+}
+function wsLayoutsWire() {
+  const box = $('#wsLayouts'); if (!box) return;
+  box.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b || b.disabled) return;
+    if (b.dataset.ly) return wsApplyLayout(b.dataset.ly);
+    if (b.classList.contains('wl-mine')) return wsMyLayoutsMenu(b);
+  };
+  wsLayoutsDraw();
+}
+// Your layouts: apply one, rename it, delete it (a search past 8).
+function wsMyLayoutsMenu(anchor) {
+  document.querySelector('.wl-list')?.remove();
+  const mine = myLayouts();
+  const m = document.createElement('div'); m.className = 'wl-list exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = `${mine.length > 8 ? '<div class="wl-lf"></div>' : ''}<div class="wl-rows">${mine.map((x) => `<div class="wl-row" data-lf-text="${esc(x.name.toLowerCase())}" data-id="${esc(x.id)}"><button type="button" role="menuitem" class="wl-apply ${WK.preset === `my:${x.id}` ? 'on' : ''}">${esc(x.name)}</button><button type="button" class="wl-ren" title="Rename" aria-label="Rename ${esc(x.name)}">✏</button><button type="button" class="wl-del" title="Delete" aria-label="Delete ${esc(x.name)}">🗑</button></div>`).join('') || '<span class="wt-none">None yet. In a group\'s ⋯, choose Save layout as…</span>'}</div>`;
+  document.body.append(m);
+  if (mine.length > 8) listFilter($('.wl-lf', m), { key: 'myLayouts', rows: () => m.querySelectorAll('.wl-row'), placeholder: 'Find a layout' });
+  const r = anchor.getBoundingClientRect(), w = m.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(r.right - w.width, innerWidth - w.width - 8))}px`; m.style.top = `${Math.min(r.bottom + 4, innerHeight - w.height - 8)}px`;
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  const away = (ev) => { if (!m.contains(ev.target) && ev.target !== anchor && !ev.target.closest?.('dialog')) close(); };
+  const key = (ev) => { if (ev.key === 'Escape' && !document.querySelector('dialog[open]')) { ev.preventDefault(); close(); anchor.focus(); } };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = async (ev) => {
+    const row = ev.target.closest('.wl-row'); if (!row) return;
+    const id = row.dataset.id, list = myLayouts(), x = list.find((y) => y.id === id); if (!x) return;
+    if (ev.target.closest('.wl-apply')) { close(); return wsApplyLayout(`my:${id}`); }
+    if (ev.target.closest('.wl-ren')) { close(); const name = await uiPrompt('Rename this layout', x.name); if (name && String(name).trim()) { x.name = String(name).trim().slice(0, 60); saveMyLayouts(list); } return; }
+    if (ev.target.closest('.wl-del')) { close(); if (await uiConfirm(`Delete the layout “${x.name}”? Your groups and tabs stay as they are.`, { ok: 'Delete', danger: true })) { saveMyLayouts(list.filter((y) => y.id !== id)); if (WK.preset === `my:${id}`) { WK.preset = null; paneSave(); } } }
+  };
+  (m.querySelector('.lf-q') || m.querySelector('.wl-apply'))?.focus();
+}
+// ⋯ → Save layout as…: what is on screen now, as one of your layouts (a name used again replaces it).
+async function wsSaveLayoutAs() {
+  const name = await uiPrompt('Save this layout as', WK.preset?.startsWith('my:') ? layoutName(WK.preset) : 'My layout');
+  if (!name || !String(name).trim()) return;
+  const n = String(name).trim().slice(0, 60), list = myLayouts();
+  const shape = WS.shapeOf(WK.lay, { follow: wsFollowGid(), pins: WK.pins, chats: G.panes, focus: G.paneHidden });
+  const was = list.find((x) => x.name.toLowerCase() === n.toLowerCase());
+  const id = was?.id || Date.now().toString(36);
+  saveMyLayouts([...list.filter((x) => x !== was), { id, name: n, shape }]);
+  WK.preset = `my:${id}`; paneSave(); wsLayoutsDraw();
+  flashTip($('#wsLayouts .wl-mine') || document.body, `Saved as “${n}”: in every project, under Mine`, 2200);
+}
+
 // After the tree changed: placed again and saved.
-function wsPlaced() { paneMarkAreas(); paneSave(); deskPlace(true); window.dispatchEvent(new Event('resize')); }
+function wsPlaced() { WK.preset = null; paneMarkAreas(); paneSave(); deskPlace(true); window.dispatchEvent(new Event('resize')); wsLayoutsDraw(); }
 // The chat moved from a menu: to one side of the window.
 function wsMoveChat(zone) {
   const r = WS.moveGroupToEdge(WK.lay, WS.CHAT_GROUP, zone);
@@ -7684,6 +7803,7 @@ function wsGroupMenu(e, a) {
     null,
     ...pinItems(a),
     [WK.max === a.gid ? '⤡ Restore the other groups' : '⤢ Maximise this group', () => wsMaxToggle(a.gid)],
+    ['💾 Save layout as…', () => wsSaveLayoutAs(), { title: 'Keep this arrangement as one of your layouts, offered in every project' }],
     [wsFollowGid() === a.gid && PA.list.length > 1 ? '👁 Follows the agent ✓' : '👁 This group follows the agent', () => wsSetFollow(a.gid), { disabled: wsFollowGid() === a.gid && G.followAgent !== false }],
     null,
     ['Close this group', () => paneCloseArea(a), { disabled: PA.list.length < 2, danger: true }],
@@ -7723,7 +7843,7 @@ function wsOpenFile(c, f, { from = null, into = null, keep = false } = {}) {
   // From the Files tab: beside it when there is another group to show it in; from the chat: the group nearest it.
   let gid = areaOf(into) ? into : null;
   if (!gid && from && areaOf(from)) gid = WS.nearestGroup(WK.lay, from, WP.rects, (g) => !visible(g) || g.id === from);
-  gid ||= WS.nearestGroup(WK.lay, from || (WP.chatFocus ? WS.CHAT_GROUP : PA.focus.gid), WP.rects, (g) => !visible(g)) || PA.focus.gid;
+  gid ||= wsOpenAt(f.kind === 'changes' ? 'changes' : 'file', c, from || (WP.chatFocus ? chatGroupOf(c) : PA.focus.gid)) || PA.focus.gid;
   const a = areaOf(gid) || PA.focus;
   const prev = keep ? null : fileTabs(a.gid).find((t) => WK.tabs.get(t)?.st.preview);
   const tid = newFileTab();
@@ -7802,7 +7922,7 @@ function paneSave() {
   const c = primaryChat(); if (!c || PA.chat !== c.id) return;
   wsSync();
   const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1, own = WT.pid === projOf(c);
-  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins });
+  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins, preset: WK.preset });
   if (s === PA.saved) return;
   PA.saved = s;
   const old = split ? WS.toAreas(WK.lay, tabs) : null;
@@ -7836,7 +7956,7 @@ function paneChat(c) {
   const r = c ? wsLoad(c) : null;
   const ok = r?.layout && WS.findGroup(r.layout, WS.CHAT_GROUP) && WS.sideGroups(r.layout).length;
   const lay = ok ? r.layout : wsDefaultLayout();
-  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {};
+  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : null; queueMicrotask(() => wsLayoutsDraw());
   PA.saved = '';
   const side = WS.sideGroups(lay).slice(0, PANE_MAX_AREAS);
   if (a0.gid !== side[0].id) { const old = a0.gid; a0.st.dsk = null; bindArea(a0, side[0].id); wsForget(old); }
@@ -7854,7 +7974,7 @@ function paneChat(c) {
     }
     PA.focus = areaOf(r.layout.focus) || a0; AREA = PA.focus; WP.chatFocus = r.layout.focus === WS.CHAT_GROUP;
     wsSync();
-    PA.saved = WS.serialise(WK.lay, wsTabState(), WT.pid === pid ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins });
+    PA.saved = WS.serialise(WK.lay, wsTabState(), WT.pid === pid ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins, preset: WK.preset });
   }
   paneMarkAreas();
   return PA.list.length > 1;
@@ -8264,7 +8384,7 @@ function wtSave() {
   if (c && projOf(c) === WT.pid && PA.chat === c.id) return paneSave();
   const r = readLayout(WT.pid), lay = WS.withChatTabs(r?.layout || WS.defaultLayout(), WT.tabs.filter((x) => x !== WS.chat2Id(r?.layout || WS.defaultLayout())), G.panes[0]);
   const keep = r || WT.tabs.length || WT.closed.length;
-  try { if (keep) localStorage.setItem(LAYOUT_KEY(WT.pid), WS.serialise(lay, r?.tabs || {}, WT.closed, { follow: r?.follow, max: r?.max, pins: r?.pins })); else localStorage.removeItem(LAYOUT_KEY(WT.pid)); } catch { /* kept until the page reloads */ }
+  try { if (keep) localStorage.setItem(LAYOUT_KEY(WT.pid), WS.serialise(lay, r?.tabs || {}, WT.closed, { follow: r?.follow, max: r?.max, pins: r?.pins, preset: r?.preset })); else localStorage.removeItem(LAYOUT_KEY(WT.pid)); } catch { /* kept until the page reloads */ }
 }
 // A chat comes to the front: its project's tabs are the strip, and it is one of them (after the one on screen).
 function wtOpen(c) {
@@ -8631,7 +8751,7 @@ addEventListener('focus', () => { const id = G.panes?.[0]; if (id && G.unseen?.h
 // Everything above, drawn again: after the sidebar redraws (chat states), and when the Running list or servers change.
 function wsChrome() {
   if (!$('#wsTop')) return;
-  wtDraw(); wsStatusDraw(); wsBadge();
+  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw();
   const nb = $('#wsBack'), nf = $('#wsFwd');
   if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
   if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
@@ -8639,7 +8759,7 @@ function wsChrome() {
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
-  wrInit(); wtWire(); wsStatusWire();
+  wrInit(); wtWire(); wsStatusWire(); wsLayoutsWire();
   if (!WT.pid) wtLoad(G.landingProject || 'scratch');
   wrSync(); wsChrome();
 }

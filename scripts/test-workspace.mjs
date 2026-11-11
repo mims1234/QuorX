@@ -405,6 +405,15 @@ test('workspace W4: layouts fit the project without closing anything; your own a
     assert.equal(W.cleanShape({ root: { t: 's', dir: 'row', kids: [{ t: 'g', id: 'chat' }, { t: 'g', id: 's1', kind: 'nope' }] } }), null);
     assert.equal(W.cleanShape(null), null);
   }
+  { // workspace W4: a second chat stays beside the first when the layout has room; the first area is kept first
+    const two = W.withChat2(W.LAYOUTS.build);
+    assert.equal(W.groups(two.root).map((g) => g.id).join(), 'chat,chat2,s1,s2');
+    assert.equal(W.withChat2(W.LAYOUTS.debug), W.LAYOUTS.debug, 'no room past the cap');
+    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout;
+    const r = W.fitLayout(lay, W.LAYOUTS.review, { order: ['g3', 'g1', 'g2'] });
+    assert.deepEqual(W.sideGroups(r.layout).map((g) => g.id), ['g3']);
+    assert.equal(W.parse(W.serialise(r.layout, {}, [], { preset: 'review' })).preset, 'review');
+  }
 });
 
 test('workspace W4: where things open: one rule set, never in a chat group', () => {

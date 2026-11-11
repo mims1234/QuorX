@@ -273,7 +273,8 @@ export function serialise(lay, tabs = {}, closed = [], extra = {}) {
   // extra: the group marked to follow the agent, the maximised one, and groups pinned to a chat ({ gid: chatId }).
   const pins = extra.pins && typeof extra.pins === 'object' ? Object.fromEntries(Object.entries(extra.pins).filter(([g, c]) => has(g) && typeof c === 'string' && c)) : {};
   return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}),
-    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(Object.keys(pins).length ? { pins } : {}) });
+    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(Object.keys(pins).length ? { pins } : {}),
+    ...(typeof extra.preset === 'string' && extra.preset ? { preset: extra.preset.slice(0, 80) } : {}) });
 }
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
@@ -299,7 +300,7 @@ export function parse(text) {
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
   const gid = (v) => (typeof v === 'string' && findGroup(lay, v) ? v : null);
   const pins = s.pins && typeof s.pins === 'object' ? Object.fromEntries(Object.entries(s.pins).filter(([g, c]) => gid(g) && typeof c === 'string' && c)) : {};
-  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), pins };
+  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), pins, preset: typeof s.preset === 'string' ? s.preset.slice(0, 80) : null };
 }
 
 // ---------- open chats, and the tabs you closed ----------
@@ -534,12 +535,19 @@ export function cleanShape(x) {
   return { root, ...(has(x.follow) ? { follow: x.follow } : {}), ...(x.pins && typeof x.pins === 'object' ? { pins: Object.fromEntries(Object.entries(x.pins).filter(([k, v]) => has(k) && (v === 0 || v === 1))) } : {}), ...(seen.has(CHAT2_GROUP) ? { chats: 2 } : {}), ...(x.focus ? { focus: true } : {}) };
 }
 const isPaneTab = (t, gid) => kindOf(t) in KIND_PANE && t === tabId(kindOf(t), gid);
+/** A shape with the second chat beside the first, when it has none and the cap allows (two chats stay on screen). */
+export function withChat2(shape) {
+  if (groups(shape.root).some((g) => g.id === CHAT2_GROUP) || groups(shape.root).length >= MAX_GROUPS) return shape;
+  const put = (n) => (n.t === 'g' ? (n.id === CHAT_GROUP ? split('row', [{ ...n, w: 1 }, slot(CHAT2_GROUP, null, 1)], n.w) : n) : { ...n, kids: n.kids.map(put) });
+  return { ...shape, root: put(copy(shape.root)), chats: 2 };
+}
 /**
  * The project's layout in a shape. chat2: the chat for the second chat group (null drops it from the shape).
  * Gives { layout, follow, pins: { gid: chatIndex }, kinds: { gid: pane }, added: [gid], removed: [gid] }.
  */
-export function fitLayout(lay, shape, { chat2 = null } = {}) {
-  const old = sideGroups(lay), slots = groups(shape.root).filter((g) => !isChatGroup(g.id));
+export function fitLayout(lay, shape, { chat2 = null, order = null } = {}) {
+  // order: which pane groups are kept first (the page's own first area holds the project's terminal, so it goes first).
+  const side = sideGroups(lay), old = order ? [...order.map((id) => side.find((g) => g.id === id)).filter(Boolean), ...side.filter((g) => !order.includes(g.id))] : side, slots = groups(shape.root).filter((g) => !isChatGroup(g.id));
   let next = lay.next;
   const ids = {}; slots.forEach((g, i) => { ids[g.id] = old[i]?.id || `g${next++}`; });
   // Tabs of the pane groups that aren't their five pane tabs (files): to the slot at the same place, else the last.
