@@ -17,6 +17,7 @@ import { termEvent, lineSplitter, newJob, endJob, markJob } from './terminal.js'
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, releaseJob, keepOnClose, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects, snapshotAsync, changesSinceAsync, pruneObjectsAsync } from './snapshot.js';
 import { freshPath } from './userenv.js';
+import { spaceInfo } from './worktrees.js';
 
 // The usual programs a server or launch config starts with. Every start, these included, is judged by the command
 // engine first (agent.js start_server); here it only has to be one plain program name or path.
@@ -455,13 +456,22 @@ async function freePort() {
   throw new Error('no free port between 5300 and 5999');
 }
 const slug = (s) => String(s || 'app').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'app';
-const view = (s) => ({ key: s.key, projectId: s.projectId, name: s.name, command: [s.cmd, ...s.args].join(' '), port: s.port, url: `http://localhost:${s.port}/`, status: s.status, started: s.started, code: s.code ?? null });
+const view = (s) => ({ key: s.key, projectId: s.projectId, ...(s.branch ? { branch: s.branch } : {}), name: s.name, command: [s.cmd, ...s.args].join(' '), port: s.port, url: `http://localhost:${s.port}/`, status: s.status, started: s.started, code: s.code ?? null });
 
 /** Starts (or restarts) a named server in the agent's folder; it gets a free port as PORT and {PORT}
  * (or the fixed `port` a launch config asks for). Its command is saved to the project's launch file. */
 export async function startServer({ projectId, name, cmd, args = [], port: fixed, source = 'agent', save = true }) {
   const root = workspaceDir(projectId);
   const key = `${projectId}/${slug(name)}`;
+  // A chat's own worktree runs the project's servers side by side with the project folder's: each on a free port of
+  // its own (as PORT and {PORT}), never a launch config's fixed one, which the other copy may already hold.
+  const wt = spaceInfo(projectId);
+  if (wt) {
+    fixed = null;
+    if (String(args[0] || '').replaceAll('\\', '/') === '.quorx/serve.mjs' && !fs.existsSync(path.join(root, '.quorx', 'serve.mjs'))) {
+      ensureAgentDir(root); fs.copyFileSync(new URL('./serve-static.mjs', import.meta.url), path.join(root, '.quorx', 'serve.mjs'));
+    }
+  }
   if (servers.has(key)) await stopServerWait(key, source);
   checkCommand(cmd, args.map(String));
   let port;
@@ -473,8 +483,8 @@ export async function startServer({ projectId, name, cmd, args = [], port: fixed
     if (!await portFree(port)) throw new Error(`port ${port} is already in use (stop whatever is using it, or clear the fixed port in the launch config)`);
   } else port = await freePort();
   const real = args.map((a) => String(a).replaceAll('{PORT}', String(port)));
-  if (save) saveLaunchConfig(projectId, { name, command: cmd, args: args.map(String), port: fixed || null });
-  const s = { key, projectId, name: String(name || 'app'), cmd, args: args.map(String), fixed: fixed || null, port, status: 'starting', started: Date.now(), log: [], source };
+  if (save) saveLaunchConfig(projectId, { name, command: cmd, args: args.map(String), port: fixed || null }, { keepPort: !!wt });
+  const s = { key, projectId, branch: wt?.branch || null, name: String(name || 'app'), cmd, args: args.map(String), fixed: fixed || null, port, status: 'starting', started: Date.now(), log: [], source };
   const job = `srv:${key}:${s.started}`;
   const split = lineSplitter((line, stream) => {
     if (line.trim()) { s.log.push(line); if (s.log.length > 400) s.log.splice(0, s.log.length - 400); }
@@ -538,8 +548,10 @@ const LAUNCH = '.quorx/launch.json';
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 const cleanConfig = (c) => ({ name: String(c.name || 'app').trim().slice(0, 40) || 'app', command: String(c.command || '').trim(), args: (Array.isArray(c.args) ? c.args : []).map(String), port: Number(c.port) > 0 ? Number(c.port) : null });
 
+// A chat's worktree shares the project's launch file: how to run the project is the same in every copy of it.
+const launchRoot = (id) => workspaceDir(spaceInfo(id)?.projectId || id);
 export function launchConfigs(projectId) {
-  const root = workspaceDir(projectId);
+  const root = launchRoot(projectId);
   const own = (readJson(path.join(root, LAUNCH))?.configurations || []).filter((c) => c?.command).map((c) => ({ ...cleanConfig(c), from: LAUNCH }));
   const claude = (readJson(path.join(root, '.claude', 'launch.json'))?.configurations || [])
     .filter((c) => c?.runtimeExecutable && PROGRAM.test(String(c.runtimeExecutable).trim()))
@@ -548,12 +560,14 @@ export function launchConfigs(projectId) {
   return [...own, ...claude];
 }
 /** Adds or replaces one config (by name; `oldName` renames). */
-export function saveLaunchConfig(projectId, cfg) {
+// keepPort: a start from a worktree (always on a free port) leaves the fixed port the project's own copy uses.
+export function saveLaunchConfig(projectId, cfg, { keepPort = false } = {}) {
   const c = cleanConfig(cfg);
   if (!c.command) throw new Error('a launch config needs a command');
   checkCommand(c.command, c.args);
-  const file = path.join(workspaceDir(projectId), LAUNCH);
+  const file = path.join(launchRoot(projectId), LAUNCH);
   const list = readJson(file)?.configurations || [];
+  if (keepPort) { const old = list.find((x) => slug(x.name) === slug(cfg.oldName || c.name)); if (old?.port) c.port = Number(old.port) || null; }
   const at = list.findIndex((x) => slug(x.name) === slug(cfg.oldName || c.name));
   const rest = list.filter((x) => slug(x.name) !== slug(c.name) && slug(x.name) !== slug(cfg.oldName || c.name));
   rest.splice(at < 0 ? rest.length : Math.min(at, rest.length), 0, c);
@@ -562,7 +576,7 @@ export function saveLaunchConfig(projectId, cfg) {
   return c;
 }
 export function removeLaunchConfig(projectId, name) {
-  const file = path.join(workspaceDir(projectId), LAUNCH);
+  const file = path.join(launchRoot(projectId), LAUNCH);
   const list = readJson(file)?.configurations;
   if (!list) return false;
   const left = list.filter((x) => slug(x.name) !== slug(name));

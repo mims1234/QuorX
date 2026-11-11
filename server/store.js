@@ -124,8 +124,15 @@ export function forgetProject(id) {
   writeProjects(list);
   return true;
 }
+// A chat's own git worktree (server/worktrees.js) has an id of its own that names its folder: it resolves here, so
+// everything that takes a project id for a folder works on it too.
+let spaceResolver = () => null;
+export const setSpaceResolver = (fn) => { spaceResolver = fn; };
+/** True for a project id, or the id of a chat's worktree: anything projectDir can resolve. */
+export const knownFolder = (id) => validId(id) && (listProjects().some((p) => p.id === id) || (() => { try { return !!spaceResolver(id); } catch { return true; } })());
 export function projectDir(id) {
   const p = listProjects().find((x) => x.id === id);
+  if (!p) { const w = spaceResolver(id); if (w) return w; }
   if (!p) throw new Error(`no project ${id}`);
   if (p.missing) throw Object.assign(new Error(`the folder of project "${p.name}" is missing (${p.dir}); it may have been moved, renamed or deleted. Reselect it in the project settings.`), { code: 'FOLDER_MISSING', projectId: id });
   fs.mkdirSync(p.dir, { recursive: true });

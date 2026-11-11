@@ -33,10 +33,11 @@ import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
-import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
+import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose, ptyList } from './server/pty.js';
+import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, staleWorktrees, listWorktrees, spaceInfo } from './server/worktrees.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage, knownFolder } from './server/store.js';
 import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace, redoFile } from './server/workspace.js';
 import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
@@ -432,7 +433,7 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       const full = b.path && fullLocalPath(b.path);
       if (full === null) return json(res, 400, { error: 'that is a network path: QuorX only opens folders on this computer' });
-      if (!full && (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId))) return json(res, 400, { error: 'unknown project' });
+      if (!full && (!knownFolder(b.projectId))) return json(res, 400, { error: 'unknown project' });
       let dir = full ? '' : workspaceDir(b.projectId), file = null;
       if (b.path) {
         try { const t = full || safePath(dir, String(b.path)); if (fs.statSync(t).isDirectory()) dir = t; else { file = t; dir = path.dirname(t); } }
@@ -446,7 +447,7 @@ const server = http.createServer(async (req, res) => {
     // that show them in File Explorer. A path is inside the project (relative to it) or a full one.
     if (url.pathname === '/api/paths/check' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
-      const root = validId(b.projectId) && listProjects().some((p) => p.id === b.projectId) ? workspaceDir(b.projectId) : null;
+      const root = knownFolder(b.projectId) ? workspaceDir(b.projectId) : null;
       const found = {}, media = {};
       for (const p of (Array.isArray(b.paths) ? b.paths : []).slice(0, 200).map(String)) {
         try {
@@ -462,7 +463,7 @@ const server = http.createServer(async (req, res) => {
     // One file shown inline in a chat (server/media.js): ?project=<id>&path=<as named>[&chat=<id>].
     if (url.pathname === '/api/media' && (req.method === 'GET' || req.method === 'HEAD')) {
       const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat') || '';
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 404, { error: 'not found' });
+      if (!knownFolder(pid)) return json(res, 404, { error: 'not found' });
       const mf = mediaFile(workspaceDir(pid), validId(cid) ? cid : '', url.searchParams.get('path'));
       return mf ? serveMedia(req, res, mf) : json(res, 404, { error: 'not found' });
     }
@@ -470,7 +471,7 @@ const server = http.createServer(async (req, res) => {
     // /ws/ never serves (dot folders stay off the pages address). The last 2 MB of a longer one.
     if (url.pathname === '/api/command-log' && req.method === 'GET') {
       const pid = url.searchParams.get('project'), rel = String(url.searchParams.get('path') || '');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       if (!isCommandLog(rel)) return json(res, 404, { error: 'not found' });
       try {
         const file = safePath(workspaceDir(pid), rel), size = fs.statSync(file).size, from = Math.max(0, size - 2e6);
@@ -482,7 +483,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       try {
         const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
         if (fs.statSync(file).size > 60e6) return json(res, 200, { error: 'too big to preview (over 60 MB)' });
@@ -492,7 +493,7 @@ const server = http.createServer(async (req, res) => {
     // One text file of a project, in windows of up to 100k characters (for the MCP server's read_file).
     if (url.pathname === '/api/files/read' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       try {
         const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
         const st = fs.statSync(file);
@@ -703,6 +704,42 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: removeLaunchConfig(pid, name) || forgot });
     }
 
+    // ---- a chat's own git worktree (server/worktrees.js) ----
+    // GET ?project= → can a chat here have one ({ git, branch }); GET ?chat= → its worktree and what it holds;
+    // POST { projectId, chatId, title, from? } makes it; DELETE ?chat= | ?space= [&discard=1] removes it (refused while
+    // it has changes, unless discard); GET /stale → worktrees whose chat is gone, for ⚙ Storage.
+    if (url.pathname === '/api/worktrees/stale' && req.method === 'GET') {
+      try { return json(res, 200, { list: staleWorktrees() }); } catch (e) { return json(res, 200, { error: e.message, list: [] }); }
+    }
+    if (url.pathname === '/api/worktrees') {
+      const q = url.searchParams;
+      if (req.method === 'GET' && q.get('project')) {
+        const pid = q.get('project');
+        if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+        try { const g = gitInfo(workspaceDir(pid)); return json(res, 200, { git: g.git, branch: g.branch || (g.head ? g.head.slice(0, 7) : null), why: g.why || null }); } catch (e) { return json(res, 200, { git: false, why: e.message }); }
+      }
+      if (req.method === 'GET' && q.get('chat')) {
+        const w = worktreeOf(q.get('chat'));
+        return json(res, 200, w ? { ...w, ...worktreeStatus(w) } : { none: true });
+      }
+      if (req.method === 'POST') {
+        const b = JSON.parse(await readBody(req, 1e4) || '{}');
+        try { return json(res, 200, createWorktree({ projectId: b.projectId, chatId: b.chatId, title: String(b.title || ''), from: b.from ? String(b.from) : '' })); }
+        catch (e) { return json(res, 200, { error: e.message }); }
+      }
+      if (req.method === 'DELETE') {
+        const space = q.get('space') || worktreeOf(q.get('chat'))?.space;
+        if (!space) return json(res, 200, { ok: true, none: true });
+        // Servers, commands and terminals running in it hold its files open: they end first.
+        const beforeRemove = async (sp) => {
+          for (const s of listServers(sp)) await forgetServer(sp, s.name, 'you').catch(() => {});
+          await stopAllIn(sp).catch(() => {});
+          for (const t of ptyList(sp)) ptyClose(sp, t.tab);
+        };
+        try { return json(res, 200, await removeWorktree(space, { discard: q.get('discard') === '1', beforeRemove })); } catch (e) { return json(res, 200, { error: e.message }); }
+      }
+    }
+
     // ---- command permissions: the rules the rule engine applies, per project and everywhere ----
     if (url.pathname === '/api/permissions' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
@@ -873,7 +910,7 @@ const server = http.createServer(async (req, res) => {
     // project folder. The agent never uses this route: its run_command keeps the allow-list.
     if (url.pathname === '/api/term/run' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 2e4));
-      if (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(b.projectId)) return json(res, 400, { error: 'unknown project' });
       const line = String(b.line ?? '').replace(/\r?\n/g, ' ');
       const tab = String(b.tab || '').replace(/[^\w-]/g, '').slice(0, 40) || 'u1';
       try { return json(res, 200, shellRun(b.projectId, tab, line, workspaceDir(b.projectId))); } catch (e) { return json(res, 200, { error: e.message }); }
@@ -883,7 +920,7 @@ const server = http.createServer(async (req, res) => {
       const op = url.pathname.slice(9);
       const b = req.method === 'POST' ? JSON.parse(await readBody(req, 200_000) || '{}') : {};
       const pid = String(b.projectId || url.searchParams.get('project') || ''), tab = String(b.tab || url.searchParams.get('tab') || '').replace(/[^\w-]/g, '').slice(0, 40);
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid) || !tab) return json(res, 400, { error: 'unknown project or tab' });
+      if (!knownFolder(pid) || !tab) return json(res, 400, { error: 'unknown project or tab' });
       if (op === 'open' && req.method === 'POST') { try { const t = ptyOpen(pid, tab, workspaceDir(pid), b.cols, b.rows); return json(res, 200, { ok: true, shell: t.shell }); } catch (e) { return json(res, 200, { error: e.message, fallback: true }); } }
       if (op === 'input' && req.method === 'POST') return json(res, 200, { ok: ptyWrite(pid, tab, b.data ?? '') });
       if (op === 'resize' && req.method === 'POST') return json(res, 200, { ok: ptyResize(pid, tab, b.cols, b.rows) });
@@ -924,7 +961,7 @@ const server = http.createServer(async (req, res) => {
 
     // ---- the sidebar's Running list: what runs in every project, and the chats driving your Chrome or your desktop ----
     if (url.pathname === '/api/running/all' && req.method === 'GET') {
-      try { const items = runningAll(listProjects().map((p) => p.id)); if (url.searchParams.get('usage')) await addUsage(items); return json(res, 200, { items, control: controlNow() }); }
+      try { const items = runningAll([...listProjects().map((p) => p.id), ...listWorktrees().map((w) => w.space)]).map((x) => { const w = spaceInfo(x.projectId); return w ? { ...x, project: w.projectId, branch: w.branch } : x; }); if (url.searchParams.get('usage')) await addUsage(items); return json(res, 200, { items, control: controlNow() }); }
       catch (e) { return json(res, 200, { error: e.message, items: [], control: [] }); }
     }
     // Stop: the chat's reply ends (its Chrome or desktop use with it). Take back: a lent Chrome tab is yours again.

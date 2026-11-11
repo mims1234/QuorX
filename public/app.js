@@ -224,7 +224,7 @@ function watchTrace(c, m, el) {
 // 👁 Follow the agent (all chats), unless this chat follows its latest steps (🧭) instead.
 const followsAgent = (c) => G.followAgent !== false && !c?.followSteps;
 function chatDoc(c) {
-  return { id: c.id, title: c.title, projectId: c.projectId, created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools, followSteps: !!c.followSteps,
+  return { id: c.id, title: c.title, projectId: c.projectId, ...(c.wt ? { wt: c.wt } : {}), created: c.created, approval: c.approval, paneHidden: c.paneHidden, tools: c.tools, followSteps: !!c.followSteps,
     quorium: c.quorium || null, qModels: c.qModels || {}, ...(c.qBase != null ? { qBase: c.qBase } : {}), mcp: c.mcp || [],
     agent: { ...c.agent, messages: c.agent.messages.map(stripMsg) } };
 }
@@ -319,6 +319,10 @@ function saveChat(c, now = false) {
   if (now) return go();
   timers.set(c.id, setTimeout(go, 700));
 }
+// The id that names a chat's folder: its own git worktree's (server/worktrees.js), else its project's. Everything
+// that acts on files (Files, the Terminal, servers, undo, /ws/ addresses) uses this; the chat's place in the sidebar,
+// its budget and its project settings still use c.projectId.
+const spaceOf = (c) => (c ? c.wt?.space || c.projectId : null);
 const newId = () => `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
 // Older saves held "layouts" of agent columns and versioned artifacts: keep the first agent and
@@ -331,7 +335,7 @@ function normalise(doc) {
     artifacts[id] = { ...last, id, kind: a.kind, title: a.title, versions: undefined, v: undefined };
   }
   const setup = { model: agent.setup?.model || G.settings.model, reasoning: agent.setup?.reasoning || G.settings.reasoning || 'off' };
-  return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', created: doc.created || Date.now(),
+  return { id: doc.id, title: doc.title || 'New chat', projectId: doc.projectId || 'scratch', ...(doc.wt?.space ? { wt: { space: String(doc.wt.space), branch: String(doc.wt.branch || ''), base: String(doc.wt.base || ''), path: String(doc.wt.path || '') } } : {}), created: doc.created || Date.now(),
     approval: doc.approval || G.settings.approval || 'strict', paneHidden: doc.paneHidden, followSteps: !!doc.followSteps,
     tools: { ...DEFAULT_CHAT_TOOLS, ...(doc.tools || {}) },
     mcp: Array.isArray(doc.mcp) ? doc.mcp.filter((x) => typeof x === 'string').slice(0, 30) : [],
@@ -593,7 +597,7 @@ function runPalette(i) {
 function openPalette() {
   const d = paletteDialog(), c = focused();
   PAL.files = null; PAL.msgs = null;
-  if (c) projectFiles(c.projectId).then((f) => { PAL.files = f; if (d.open && $('#palInput').value.trim()) drawPalette(); }).catch(() => {});
+  if (c) projectFiles(spaceOf(c)).then((f) => { PAL.files = f; if (d.open && $('#palInput').value.trim()) drawPalette(); }).catch(() => {});
   $('#palInput', d).value = '';
   drawPalette();
   if (!d.open) d.showModal();
@@ -720,7 +724,7 @@ async function updateSuggest(c) {
   } else {
     const q = tok.query;
     const chats = G.chats.filter((x) => x.id !== c.id && x.messages > 0);
-    const files = await projectFiles(c.projectId);
+    const files = await projectFiles(spaceOf(c));
     const pick = (list, n) => (q ? list : list.slice(0, n));
     const match = (s) => !q || String(s).toLowerCase().includes(q);
     const here = chats.filter((x) => x.projectId === c.projectId && match(x.title)).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
@@ -774,7 +778,7 @@ function chooseSuggest(c, i, how = 'run') {
   }
   if (it.kind === 'src') return chooseSource(c, it, before, after);
   if (it.kind === 'chat') c.ctx.push({ type: 'chat', id: it.value.id, title: it.value.title });
-  if (it.kind === 'file') c.ctx.push({ type: 'file', projectId: c.projectId, path: it.value.path, title: it.value.path });
+  if (it.kind === 'file') c.ctx.push({ type: 'file', projectId: spaceOf(c), path: it.value.path, title: it.value.path });
   if (it.kind === 'project') c.ctx.push({ type: 'project', id: it.value.id, title: `📁 ${it.value.name}` });
   c.ctx = [...new Map(c.ctx.map((x) => [`${x.type}:${x.id || x.path}`, x])).values()];
   // The chip above the box carries it: the @word you typed goes, so the message holds only your own words.
@@ -1481,7 +1485,9 @@ async function deleteChat(id) {
   const c = G.open.get(id) || G.chats.find((x) => x.id === id);
   if (G.open.get(id)?.running) return uiAlert('This chat is still running. Stop it first.');
   const f = await chatFootprint(id);
-  if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). The project folder and its files stay.${f ? `\n${footprintText(f)}` : ''}`)) return;
+  const wt = await getJ(`/api/worktrees?chat=${encodeURIComponent(id)}`).catch(() => null);
+  const own = wt && !wt.none && !wt.error ? wt : null;
+  if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). ${own ? `Its worktree (${own.branch}) is asked about next.` : 'The project folder and its files stay.'}${f ? `\n${footprintText(f)}` : ''}`)) return;
   footCache.delete(id);
   await fetch(`/api/chats/${id}`, { method: 'DELETE' });
   writeDraft(id, null);
@@ -1492,6 +1498,77 @@ async function deleteChat(id) {
   if (i >= 0 && G.panes.length > 1) closeSide(i);
   else if (i >= 0) { G.panes.splice(i, 1); if (next) showChat(next); else if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
   refreshSidebar();
+  if (own) await removeWorktreeAsk(own, { after: 'chat' });
+}
+
+// ---------- a worktree per chat ----------
+// In a project that is a git repo, a chat can work in its own git worktree (server/worktrees.js): a copy of the
+// project on a branch qx/<chat>, made from the project's current branch, so two chats can build at once without
+// stepping on each other's files, servers or undo. Picked in the start box ("Where it works") or when remixing.
+// Removing one asks first, and refuses a tree with changes that aren't committed unless "Discard changes" is ticked;
+// the branch always stays. A worktree whose chat is gone is listed in ⚙ Settings → Storage.
+const gitCache = new Map(); // project id → Promise<{ git, branch, why }>
+const gitOf = (pid) => { const hit = gitCache.get(pid); if (hit && Date.now() - hit.at < 30e3) return hit.p; const p = getJ(`/api/worktrees?project=${encodeURIComponent(pid)}`).catch(() => ({ git: false })); gitCache.set(pid, { at: Date.now(), p }); return p; };
+async function makeWorktree(c, title, from = '') {
+  const r = await postJ('/api/worktrees', { projectId: c.projectId, chatId: c.id, title: title || c.title || 'chat', ...(from ? { from } : {}) }).catch((e) => ({ error: e.message }));
+  if (r.error) { await uiAlert(`Couldn't make a worktree for this chat\n${r.error}\nIt works in the project folder instead.`); delete c.wantWt; return false; }
+  c.wt = { space: r.space, branch: r.branch, base: r.base, path: r.path };
+  delete c.wantWt;
+  renderChatHead(c);
+  return true;
+}
+// The header's ⎇ tag: the chat's branch, and its folder on a click.
+function drawBranchTag(c) {
+  const b = c.el && $('.ch-branch', c.el.root);
+  if (!b) return;
+  b.hidden = !c.wt && !c.wantWt;
+  if (b.hidden) return;
+  $('.ch-branch-name', b).textContent = c.wt ? c.wt.branch : 'own worktree';
+  b.classList.toggle('pending', !c.wt);
+  b.title = c.wt ? `This chat works in its own git worktree, on the branch ${c.wt.branch} (made from ${c.wt.base}).\nOther chats don't see its changes until the branch is merged.\nClick to open its folder.` : 'This chat gets its own git worktree when you send the first message.';
+}
+// The ⑂ Remix dialog's "In its own worktree" (remixWorktree): the remix gets its own branch and folder, made from the
+// original chat's branch when it has one. The box shows only in git projects: can(c) reads what gitOf found (the
+// remix button asks gitOf first, through ready). git takes a moment, so the original's box says so meanwhile.
+window.qxChatWorktree = async (c, n) => {
+  const ta = c.el && $('.input', c.el.root), ph = ta?.placeholder;
+  if (ta) { ta.disabled = true; ta.placeholder = 'Making the remix\'s own git worktree…'; }
+  try { return await makeWorktree(n, `remix ${c.title}`, c.wt?.space || ''); } finally { if (ta) { ta.disabled = false; ta.placeholder = ph; } }
+};
+const gitKnown = new Map(); // project id → is a git repo, as gitOf last found
+window.qxChatWorktree.ready = async (c) => { gitKnown.set(c.projectId, !!(await gitOf(c.projectId)).git); };
+window.qxChatWorktree.can = (c) => gitKnown.get(c.projectId) === true;
+// Remove a worktree: what it holds, and a "Discard changes" tick that a tree with changes needs. → true when removed.
+async function removeWorktreeAsk(w, { after = '' } = {}) {
+  const st = w.changes ? w : await getJ(`/api/worktrees?chat=${encodeURIComponent(w.chatId)}`).catch(() => ({}));
+  const changes = st.changes || [], n = st.count ?? changes.length, dirty = !st.missing && (st.clean === false || n > 0);
+  const d = document.createElement('dialog');
+  d.className = 'ask-dlg wt-dlg';
+  d.innerHTML = `<form class="ask" method="dialog">
+    <h3>${after === 'chat' ? 'Remove the chat\'s worktree too?' : 'Remove this worktree?'}</h3>
+    <div class="ask-body"><p><span class="wt-branch-tag">⎇ ${esc(w.branch || 'no branch')}</span> <code class="blurable wt-path" title="${esc(w.path || '')}">${esc(w.path || '')}</code></p>
+    ${st.missing ? '<p>Its folder is already gone; this only takes it off the list.</p>' : dirty ? `<p class="wt-dirty">⚠ ${n} change${n === 1 ? '' : 's'} not committed. Removing deletes ${n === 1 ? 'it' : 'them'}; commit first to keep ${n === 1 ? 'it' : 'them'}.</p><ul class="wt-changes">${changes.slice(0, 8).map((l) => `<li><code>${esc(l)}</code></li>`).join('')}${n > 8 ? `<li>…and ${n - 8} more</li>` : ''}</ul>
+      <label class="sq-check wt-discard"><input type="checkbox" class="wt-discard-in"><span>Discard these changes</span></label>` : '<p>Everything in it is committed.</p>'}
+    <p class="wt-note">The branch ${esc(w.branch || '')} stays in the repository${after === 'chat' ? '. Keep the worktree to find it later in ⚙ Settings → Storage' : ''}.</p></div>
+    <footer><button type="button" class="ask-cancel">Keep worktree</button><button type="submit" class="ask-ok danger" ${dirty ? 'disabled' : ''}>Remove worktree</button></footer>
+  </form>`;
+  document.body.appendChild(d);
+  const tick = $('.wt-discard-in', d), ok = $('.ask-ok', d);
+  if (tick) tick.onchange = () => { ok.disabled = !tick.checked; };
+  const answer = await new Promise((resolve) => {
+    const done = (v) => { d.close(); d.remove(); resolve(v); };
+    $('.ask-cancel', d).onclick = () => done(false);
+    d.addEventListener('cancel', (e) => { e.preventDefault(); done(false); });
+    $('form', d).onsubmit = (e) => { e.preventDefault(); if (!ok.disabled) done(true); };
+    d.showModal(); (tick || ok).focus();
+  });
+  if (!answer) return false;
+  const q = w.chatId && !w.orphan ? `chat=${encodeURIComponent(w.chatId)}` : `space=${encodeURIComponent(w.space)}`;
+  const r = await postJ(`/api/worktrees?${q}${tick?.checked ? '&discard=1' : ''}`, null, 'DELETE').catch((e) => ({ error: e.message }));
+  if (r.dirty) { await uiAlert(`The worktree wasn't removed\nIt has ${r.count} change${r.count === 1 ? '' : 's'} not committed now. Open it again to see them.`); return false; }
+  if (r.error) { await uiAlert(`The worktree wasn't removed\n${r.error}`); return false; }
+  for (const ch of G.open.values()) if (ch.wt?.space === w.space) { delete ch.wt; renderChatHead(ch); }
+  return true;
 }
 // ---------- ⚙ project settings: name, folder, and what each chat cost ----------
 async function openProjectSettings(p0, focusOn) {
@@ -2931,7 +3008,7 @@ function showPath(el, kind) {
 // Markdown rendered (or raw). Nothing is copied into the chat: the files load from the project (GET /api/media) as
 // they come into view, and a big Markdown file shows its first part only.
 const MM_SHOWN = 8, MM_MD_BYTES = 200e3, MM_PDF_INLINE = 60e6;
-const mediaSrc = (c, p, v) => `/api/media?project=${encodeURIComponent(c.projectId || '')}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(p)}${v ? `&v=${v}` : ''}`;
+const mediaSrc = (c, p, v) => `/api/media?project=${encodeURIComponent(spaceOf(c) || '')}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(p)}${v ? `&v=${v}` : ''}`;
 const MM_LABEL = { image: 'Picture', video: 'Video', audio: 'Audio', pdf: 'PDF', md: 'Markdown', file: 'File' };
 // The tool that made a piece of media, on its picture or card: which call produced which result.
 const madeByHTML = (tool) => (tool ? `<span class="mm-by" title="Made by this step's ${esc(tool)} call">${esc(TOOL_NAME[tool] || `🧩 ${tool}`)}</span>` : '');
@@ -3101,7 +3178,7 @@ async function drawMsgMedia(c, m) {
   const todo = paths.filter((p) => asked.get(p) !== (writes.get(p) || 1));
   if (!todo.length) return;
   for (const p of todo) if (asked.has(p)) PATHS.seen.delete(pathKey(c.projectId || '', c.id, p));
-  const seen = await askPaths(c.projectId || '', c.id, todo);
+  const seen = await askPaths(spaceOf(c) || '', c.id, todo);
   for (const p of todo) {
     const by = madeBy.get(p);
     // A made file the chat can't play (or that is gone) still shows as a name card under its step.
@@ -3117,7 +3194,7 @@ async function drawMsgMedia(c, m) {
   }
   const docs = el.querySelector('.u-docs'); if (docs && !docs.children.length) docs.remove();
 }
-const openPathEl = (el) => openFolder(el.dataset.pk || chatOfEl(el)?.projectId, el.dataset.path);
+const openPathEl = (el) => openFolder(el.dataset.pk || spaceOf(chatOfEl(el)), el.dataset.path);
 document.addEventListener('click', (e) => { const el = e.target.closest?.('.md-path'); if (el) { e.preventDefault(); openPathEl(el); } });
 document.addEventListener('keydown', (e) => { const el = e.key === 'Enter' && e.target.closest?.('.md-path'); if (el) { e.preventDefault(); openPathEl(el); } });
 
@@ -3173,6 +3250,7 @@ function renderLanding(box) {
       <div class="ld-sb-row">
         <button type="button" class="ld-chip" id="ldChip" aria-haspopup="menu" aria-expanded="false" title="Where this chat runs: a project, any folder, or a new project from a template"></button>
         <span class="ld-sb-path blurable" id="ldChipPath"></span>
+        <span class="ld-where" id="ldWhere" hidden></span>
         <span class="ld-sb-sp"></span>
         <span class="ld-sb-hint">Enter to start · Shift+Enter for a new line</span>
       </div>
@@ -3302,6 +3380,23 @@ function wireStartBox(box, first, projects) {
   d.el = { root: pane };
   wirePane(d, pane, 0);
   renderComposerBar(d); renderChatTools(d); renderAttachments(d); syncRunState(d);
+  // Where it works (git projects only): the project folder, or a worktree of its own made when the chat starts. The
+  // choice is kept per project while QuorX is open.
+  const where = $('#ldWhere', box);
+  const drawWhere = async () => {
+    const p = proj(), g = p ? await gitOf(p.id) : { git: false };
+    if (!box.isConnected || proj() !== p) return;
+    const own = !!(G.ldWt ||= {})[p?.id];
+    if (g.git) d.wantWt = own || undefined; else delete d.wantWt;
+    drawBranchTag(d);
+    where.hidden = !g.git;
+    if (!g.git) { where.innerHTML = ''; return; }
+    const opts = [['folder', 'Project folder', `Works in the project folder, with the project's other chats:\n${p.dir || ''}`],
+      ['wt', '⎇ Own worktree', `A copy of the project on a new branch qx/… made from ${g.branch || 'the current branch'}.\nIt builds at the same time as other chats without touching their files, and runs its servers on ports of its own.`]];
+    where.innerHTML = `<span class="ld-where-l">Works in</span><span class="st-segmented ld-where-seg" role="radiogroup" aria-label="Where this chat works">${opts.map(([k, l, t]) => { const on = (k === 'wt') === own; return `<button type="button" class="st-seg-btn ${on ? 'active' : ''}" role="radio" aria-checked="${on}" data-where="${k}" title="${esc(t)}">${l}</button>`; }).join('')}</span>`;
+    for (const b of where.querySelectorAll('[data-where]')) b.onclick = () => { G.ldWt[p.id] = b.dataset.where === 'wt'; drawWhere(); ta.focus(); };
+  };
+  drawWhere();
   const ta = $('.input', pane);
   ta.id = 'ldStartText';
   d.placeholder = 'What are we building? Describe it, or ask about your code…  @ to add files or chats · / for commands';
@@ -3315,7 +3410,7 @@ function wireStartBox(box, first, projects) {
   ta.oninput = () => { typed?.(); G.landingDraft = ta.value; };
   ta.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); } });
   // The chip's menu: recent projects (with what each has spent), then a folder, then templates.
-  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); closeMenu(); ta.focus(); };
+  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); drawWhere(); closeMenu(); ta.focus(); };
   const items = () => [...menu.querySelectorAll('.ld-mi:not([hidden])')];
   const closeMenu = () => { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) closeMenu(); };
@@ -3347,7 +3442,7 @@ function wireStartBox(box, first, projects) {
   // After a folder or template pick the list refresh may have redrawn the home screen: bring the start box that is on
   // screen now up to date (its chip shows the picked project, its menu is shut) and put the cursor back in it.
   const liveStart = () => {
-    if (box.isConnected && $('#ldChip', box) === chip) { d.projectId = proj()?.id || d.projectId; drawChip(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
+    if (box.isConnected && $('#ldChip', box) === chip) { d.projectId = proj()?.id || d.projectId; drawChip(); drawWhere(); closeMenu(); ta.value = G.landingDraft || ''; fit(); }
     else { const land = $('.landing'); if (land) renderLanding(land.parentElement); }
     const t = $('#ldStartText'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
   };
@@ -3945,6 +4040,7 @@ function paneHTML(c) {
           <div class="dir-a-crumbs">
             <button type="button" class="ch-proj-tag proj-hue-tag" title="Open the project folder in File Explorer"><svg class="proj-folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg><span class="ch-proj-name"></span></button>
             <a class="ch-gh" rel="noopener noreferrer" data-cl="1" aria-label="Open on GitHub" hidden></a>
+            <button type="button" class="ch-branch" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/></svg><span class="ch-branch-name"></span></button>
             <span class="ch-notes-wrap"><button type="button" class="ch-notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/></svg><span class="ch-notes-word"></span></button><div class="ch-notes-pop allow-pop" role="dialog" aria-label="This chat's notes" hidden></div></span>
             <button type="button" class="ch-sched" hidden></button>
             <span class="dir-a-crumb-sep">/</span>
@@ -4140,7 +4236,7 @@ function renderPanes() {
   });
   renderToolbars(); syncLayout(); if (PA.tpl) { eachArea(renderPane); paneMarkAreas(); } else renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
   for (const id of G.panes) checkSpace(G.open.get(id));
-  for (const pid of new Set(G.panes.map((id) => G.open.get(id)?.projectId))) refreshUndoable(pid);
+  for (const pid of new Set(G.panes.map((id) => spaceOf(G.open.get(id))))) refreshUndoable(pid);
   pollDev();
   releaseColdChats();
 }
@@ -4161,6 +4257,7 @@ function wirePane(c, root, i) {
   $('.tc-no', tconf).onclick = undoTitle;
   $('.ch-cost', root).onclick = () => toggleUsage(c);
   $('.ch-proj-tag', root).onclick = () => openFolder(c.projectId);
+  $('.ch-branch', root).onclick = () => { if (c.wt) openFolder(spaceOf(c)); };
   wireChatNotes(c, root);
   // Rename and delete on the header; the project tag opens the folder (servers and the terminal live in the pane's tab bar).
   $('.ch-rename', root).onclick = () => { const n = $('.ch-name', root); n.focus(); n.select(); };
@@ -4262,6 +4359,7 @@ function renderChatHead(c) {
   if (p?.color) head.style.setProperty('--pcx', p.color); else head.style.removeProperty('--pcx');
   $('.ch-proj-name', r).textContent = p?.name || c.projectId;
   $('.ch-proj-tag', r).title = `Open the project folder in File Explorer\n${p?.dir || ''}`;
+  drawBranchTag(c);
   const off = chatOffProject(c), nb = $('.ch-notes', r);
   if (nb) {
     nb.classList.toggle('off', off);
@@ -5904,7 +6002,7 @@ async function loadReview(c, m, slot) {
     };
     $('.rv-undo', fe).onclick = async () => {
       if (!await uiConfirm(`Undo ${rel}?\n\nIt goes back to how it was before this reply. The reply's version moves to .quorx/trash.`)) return;
-      const call = (force) => postJ('/api/review/undo', { projectId: c.projectId, runId, path: rel, force });
+      const call = (force) => postJ('/api/review/undo', { projectId: spaceOf(c), runId, path: rel, force });
       let x = await call(false);
       if (x.conflict) {
         if (!await uiConfirm(`${rel} changed again after this reply (a later reply or you).\n\nUndo it anyway? The newer version moves to .quorx/trash.`)) return;
@@ -5913,7 +6011,7 @@ async function loadReview(c, m, slot) {
       if (x.error) return uiAlert(`Could not undo ${rel}: ${x.error}`);
       (m.undoneFiles ||= []).push(rel);
       if (!x.left) m.undone = true;
-      saveChat(c); updateMsg(c, m); refreshUndoable(c.projectId);
+      saveChat(c); updateMsg(c, m); refreshUndoable(spaceOf(c));
       const f = $('#paneBody iframe'); if (f && !f.srcdoc) f.src = f.src;
     };
   }
@@ -6008,7 +6106,7 @@ document.addEventListener('focusout', hideReplyInfo);
 async function undoReply(c, m) {
   const runId = m.stats?.undoId || m.runId, files = m.stats.changed.filter((f) => !m.undoneFiles?.includes(f)); // minus files undone one by one
   if (!await uiConfirm(`Undo this reply's changes?\n\n${files.join('\n')}`)) return;
-  const call = (mode) => postJ('/api/checkpoints/restore', { projectId: c.projectId, runId, ...(mode ? { mode } : {}) });
+  const call = (mode) => postJ('/api/checkpoints/restore', { projectId: spaceOf(c), runId, ...(mode ? { mode } : {}) });
   let r = await call();
   if (r.conflicts?.length && !r.restored) {
     const mode = await undoChoice(files, r.conflicts);
@@ -6016,11 +6114,11 @@ async function undoReply(c, m) {
     r = await call(mode);
   }
   if (r.error) {
-    if (/cleared|nothing to undo/i.test(r.error)) { refreshUndoable(c.projectId); }
+    if (/cleared|nothing to undo/i.test(r.error)) { refreshUndoable(spaceOf(c)); }
     return uiAlert(`Could not undo: ${r.error}`);
   }
   m.undone = r.conflicts?.length && r.restored?.some((x) => x.endsWith('(kept: changed since)')) ? 'partial' : true;
-  saveChat(c); updateMsg(c, m); refreshUndoable(c.projectId);
+  saveChat(c); updateMsg(c, m); refreshUndoable(spaceOf(c));
   const f = $('#paneBody iframe'); if (f && !f.srcdoc) f.src = f.src;
 }
 function undoChoice(all, changed) {
@@ -6050,9 +6148,9 @@ async function refreshUndoable(projectId) {
   const list = await getJ(`/api/checkpoints?project=${encodeURIComponent(projectId)}`);
   if (!Array.isArray(list)) return;
   (G.undoable ||= {})[projectId] = new Set(list.map((x) => x.runId));
-  for (const c of G.open.values()) if (c.projectId === projectId && c.el) for (const m of c.agent.messages) if (m.stats?.changed?.length && !m.undone) updateMsg(c, m);
+  for (const c of G.open.values()) if (spaceOf(c) === projectId && c.el) for (const m of c.agent.messages) if (m.stats?.changed?.length && !m.undone) updateMsg(c, m);
 }
-const undoGone = (c, m) => { const set = G.undoable?.[c.projectId]; return !!set && !set.has(m.stats?.undoId || m.runId); };
+const undoGone = (c, m) => { const set = G.undoable?.[spaceOf(c)]; return !!set && !set.has(m.stats?.undoId || m.runId); };
 
 // ---------- files changed: a chip above the message box for what the replies since your last message changed ----------
 // It reads each reply's undo copy (the checkpoint the file tools and command snapshots fill: /api/review), so it shows
@@ -7460,6 +7558,14 @@ async function send(c, text) {
   text = text.trim();
   // A picture, a file or context on its own is a message too.
   if (c.running || (!text && !c.images.length && !(c.docs || []).some((d) => d.id && !d.busy) && !c.ctx.length && !c.comments?.length)) return;
+  // A chat that asked for its own worktree gets it before its first reply (git takes a moment: the box says so).
+  if (c.wantWt && !c.wt) {
+    if (c.makingWt) return;
+    const ta = c.el && $('.input', c.el.root), ph = ta?.placeholder;
+    c.makingWt = true;
+    if (ta) { ta.value = text; ta.disabled = true; ta.placeholder = 'Making this chat\'s own git worktree…'; }
+    try { await makeWorktree(c, text); } finally { c.makingWt = false; if (ta) { ta.disabled = false; ta.value = ''; ta.placeholder = ph; } }
+  }
   c.enhUndo = []; renderEnhUndo(c);
   askNotifyPermission();
   // A new message: the stopped reply above is no longer the last, so its ▶ Continue goes.
@@ -7764,7 +7870,7 @@ async function followRun(c, m, open) {
     }
     const due = raf || fullTimer; if (raf) { cancelAnimationFrame(raf); raf = 0; } clearTimeout(fullTimer); fullTimer = 0;
     updateMsg(c, m); if (due) stick();
-    syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(c.projectId); eachArea(() => { if (G.view.browser && focused() === c) renderPane(); });
+    syncRunState(c); saveChat(c, true); refreshSidebar(); checkSpace(c, true); refreshUndoable(spaceOf(c)); eachArea(() => { if (G.view.browser && focused() === c) renderPane(); });
     refreshBalance();
     // ⚙ Reviewer → "Review code changes": after a reply that changed code, a code review card (only when it finds something).
     if (G.settings.codeReview === 'auto' && m.stats && !m.error && (m.stats.changed || []).some((f) => CODE_FILE.test(f))) codeReview(c, 'reply', { auto: true, runId: m.runId });
@@ -7874,7 +7980,7 @@ document.addEventListener('click', (e) => {
   const c = [...G.open.values()].find((x) => paneMsg(x, f)) || focused();
   if (!c) return;
   // A command's full output: its log file in the project.
-  if (f.kind === 'output') return openFileInPane(c, { key: f.ref, name: f.ref, label: `Output · ${clip(b.dataset.name || '', 40)}`, src: `/api/command-log?project=${encodeURIComponent(c.projectId)}&path=${encodeURIComponent(f.ref)}`, kind: 'text' });
+  if (f.kind === 'output') return openFileInPane(c, { key: f.ref, name: f.ref, label: `Output · ${clip(b.dataset.name || '', 40)}`, src: `/api/command-log?project=${encodeURIComponent(spaceOf(c))}&path=${encodeURIComponent(f.ref)}`, kind: 'text' });
   const m = paneMsg(c, f), card = PANE_CARDS[f.kind];
   if (m && card) openFileInPane(c, { id: `${f.kind}:${f.run}:${f.ref}`, kind: f.kind, run: f.run, ref: f.ref, name: card.name(m, f) });
 });
@@ -8190,7 +8296,7 @@ function paneSplitTab(targetGid, tab, zone = 'bottom', { from = null } = {}) {
   }
   if (tab === 'term') {
     // A server's output when one is running and not shown yet, else everything (Activity).
-    const t = termState(c.projectId), shown = new Set(PA.list.flatMap((x) => (x === a ? [] : (x.n ? x.st.termLay?.panes || [] : t.main.panes).map((p) => p.filter))));
+    const t = termState(spaceOf(c)), shown = new Set(PA.list.flatMap((x) => (x === a ? [] : (x.n ? x.st.termLay?.panes || [] : t.main.panes).map((p) => p.filter))));
     const srv = [...t.jobs.values()].find((j) => j.server && j.status === 'running' && !shown.has(`srv:${j.server}`));
     a.st.termTf = [srv ? `srv:${srv.server}` : 'all'];
   }
@@ -8893,7 +8999,7 @@ function posKey(a) {
   if (v.ftab) return `file:${WK.tabs.get(v.ftab)?.st.f?.id || v.ftab}`;
   if (v.term || v.browser || v.run) return null;
   if (v.trace) return `steps:${v.trace}`;
-  if (v.files) return `files:${c.projectId}`;
+  if (v.files) return `files:${spaceOf(c)}`;
   return `plan:${c.id}:${v.id || 'last'}`;
 }
 function posNote(a, el) {
@@ -8978,7 +9084,7 @@ function renderPaneNow() {
     $('.pf-close', bar).onclick = () => wsCloseFileTab(tid);
     if (file.kind in PANE_CARDS) return drawPaneCard(fc, file, body);
     body.innerHTML = '<div class="fview pane-file"></div>';
-    G.filesProject = fc.projectId;
+    G.filesProject = spaceOf(fc);
     previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
     return;
   }
@@ -9034,7 +9140,7 @@ function watchFolder(c) {
   stopWatch();
   let last = null;
   const tick = async () => {
-    const r = await fetch(`/api/files/stamp?project=${encodeURIComponent(c.projectId)}`).then((x) => x.json()).catch(() => null);
+    const r = await fetch(`/api/files/stamp?project=${encodeURIComponent(spaceOf(c))}`).then((x) => x.json()).catch(() => null);
     if (!r || G.watch?.chat !== c.id) return;
     if (last != null && r.stamp !== last) reloadPreview();
     last = r.stamp;
@@ -9050,7 +9156,7 @@ function reloadPreview() {
 async function renderAppBar(c, a) {
   const bar = $('#appBar');
   bar.hidden = false;
-  const list = await fetch(`/api/servers?project=${c.projectId}`).then((r) => r.json()).catch(() => []);
+  const list = await fetch(`/api/servers?project=${spaceOf(c)}`).then((r) => r.json()).catch(() => []);
   const sv = list.find((x) => x.url === a.url) || list.find((x) => x.name === a.name);
   const running = sv?.status === 'running';
   bar.innerHTML = `<span class="dot ${running ? 'ok' : 'off'}"></span><b>${esc(a.name || 'app')}</b> <code>${esc(a.command || [a.cmd, ...(a.args || [])].join(' '))}</code>
@@ -9061,7 +9167,7 @@ async function renderAppBar(c, a) {
   if (stop) stop.onclick = async () => { await fetch('/api/servers/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: sv.key }) }); setTimeout(() => renderAppBar(c, a), 600); };
   if (start) start.onclick = async () => {
     start.disabled = true; start.textContent = 'Starting…';
-    const r = await fetch('/api/servers/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: c.projectId, name: a.name, cmd: a.cmd, args: a.args }) }).then((x) => x.json());
+    const r = await fetch('/api/servers/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: spaceOf(c), name: a.name, cmd: a.cmd, args: a.args }) }).then((x) => x.json());
     if (r.error) { uiAlert(r.error); return renderAppBar(c, a); }
     a.url = r.url; saveChat(c); renderPane();
   };
@@ -9590,7 +9696,7 @@ function wsContextLeft(c) {
 }
 function wsStatusDraw() {
   const bar = $('#wsStatus'); if (!bar) return;
-  const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = (pid && G.srvUp?.[pid]) || 0, ctx = c ? wsContextLeft(c) : null;
+  const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = ((c ? spaceOf(c) : pid) && G.srvUp?.[c ? spaceOf(c) : pid]) || 0, ctx = c ? wsContextLeft(c) : null;
   const sig = JSON.stringify([need.map((x) => [x.c.id, x.kind]), work, procs, srv, pid, ctx, c?.id]);
   if (bar.dataset.sig === sig) return;
   bar.dataset.sig = sig;
@@ -9763,7 +9869,7 @@ async function renderFiles(c) {
   const p = G.projects.find((x) => x.id === c.projectId);
   bar.hidden = false;
   bar.innerHTML = `🗂 <b>Explorer</b> <span class="dim">${esc(p?.name || c.projectId)}</span> <code title="${esc(p?.dir || '')}">${esc(p?.dir || '')}</code> <button type="button" class="os-open" title="Open this folder in File Explorer">📂 Open in File Explorer</button> <button type="button" class="back">✕ Close</button>`;
-  $('.os-open', bar).onclick = () => openFolder(c.projectId);
+  $('.os-open', bar).onclick = () => openFolder(spaceOf(c));
   $('.back', bar).onclick = () => { G.view.files = false; syncLayout(); renderPane(); };
   const arts = Object.values(c.agent.artifacts).sort((a, b) => (b.updated || 0) - (a.updated || 0));
   const fileIcon = (n) => ({ html: '🌐', css: '🎨', js: '📜', json: '🧾', py: '🐍', md: '📝', sh: '⌨️' }[langOf(n)] || (/\.(png|jpe?g|gif|webp|svg|ico)$/i.test(n) ? '🖼' : /\.(mp3|wav|ogg)$/i.test(n) ? '🎵' : /\.(mp4|webm)$/i.test(n) ? '🎬' : '📄'));
@@ -9800,8 +9906,9 @@ async function renderFiles(c) {
   };
   split.ondblclick = () => { filesBox.style.removeProperty('--tree-w'); try { localStorage.removeItem('oh-tree-w'); } catch { /* storage off */ } };
   const view = $('.fview', body);
-  const sep = p?.dir?.includes('\\') ? '\\' : '/';
-  const fullOf = (rel) => (p?.dir ? `${p.dir}${sep}${rel.replaceAll('/', sep)}` : rel);
+  // A chat with its own worktree shows (and copies paths from) that folder, not the project's.
+  const dir = c.wt?.path || p?.dir, sep = dir?.includes('\\') ? '\\' : '/';
+  const fullOf = (rel) => (dir ? `${dir}${sep}${rel.replaceAll('/', sep)}` : rel);
   const select = (b) => { for (const x of body.querySelectorAll('.fl')) x.classList.toggle('on', x === b); };
   for (const b of body.querySelectorAll('.fx-art')) b.onclick = () => {
     select(b);
@@ -9821,22 +9928,22 @@ async function renderFiles(c) {
     for (const b of box.querySelectorAll(':scope > .fl[data-p]')) {
       // A click opens the file as a preview tab in the group beside this one, when there is another group to show it
       // in; with this group alone it shows in the viewer here, as before. A double-click opens it as a tab to keep.
-      const fileOf = () => { const path = b.dataset.p; return { key: `ws:${c.projectId}:${path}`, name: path, src: `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`, size: Number(b.dataset.size) || 0, full: fullOf(path) }; };
+      const fileOf = () => { const path = b.dataset.p; return { key: `ws:${spaceOf(c)}:${path}`, name: path, src: `/ws/${spaceOf(c)}/${path.split('/').map(encodeURIComponent).join('/')}`, size: Number(b.dataset.size) || 0, full: fullOf(path) }; };
       const beside = () => PA.list.some((x) => x !== area && !x.el.hidden && x.el.style.display !== 'none');
       b.onclick = () => {
         select(b);
         const f = fileOf();
         if (beside()) return openFileInPane(c, f, { from: area.gid });
-        G.filesProject = c.projectId;
+        G.filesProject = spaceOf(c);
         previewFile(view, f);
       };
       b.ondblclick = () => openFileInPane(c, fileOf(), { from: beside() ? area.gid : null, into: beside() ? null : area.gid, keep: true });
-      b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
+      b.oncontextmenu = (e) => filesMenu(e, spaceOf(c), b.dataset.p, fullOf(b.dataset.p));
       b.draggable = true;
-      b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: c.projectId, path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
+      b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: spaceOf(c), path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
     }
     for (const d of box.querySelectorAll(':scope > .fx-dir')) {
-      $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, c.projectId, d.dataset.dir, fullOf(d.dataset.dir), false); };
+      $('summary', d).oncontextmenu = (e) => { e.stopPropagation(); filesMenu(e, spaceOf(c), d.dataset.dir, fullOf(d.dataset.dir), false); };
       const kids = $(':scope > .fx-kids', d), depth = Number(d.dataset.depth) + 1;
       const open = () => { if (!kids.dataset.read) { kids.dataset.read = '1'; kids.innerHTML = '<div class="fx-empty" style="--d:' + depth + '">Reading…</div>'; level(kids, d.dataset.dir, depth); } };
       d.addEventListener('toggle', () => { if (d.open) { openDirs.add(d.dataset.dir); open(); } else openDirs.delete(d.dataset.dir); });
@@ -9844,7 +9951,7 @@ async function renderFiles(c) {
     }
   };
   const level = async (box, rel, depth, offset = 0) => {
-    const r = await getJ(`/api/files/dir?project=${encodeURIComponent(c.projectId)}&path=${encodeURIComponent(rel)}&offset=${offset}`);
+    const r = await getJ(`/api/files/dir?project=${encodeURIComponent(spaceOf(c))}&path=${encodeURIComponent(rel)}&offset=${offset}`);
     if (!box.isConnected) return;
     if (!offset) box.innerHTML = '';
     box.querySelector(':scope > .fx-more')?.remove();
@@ -11331,7 +11438,7 @@ function saveStorageRules(rules) {
   G.storageRules = { ...(G.storageRules || {}), ...rules };
   if (DESK) window.ohDesktop.storage?.('rules', rules).catch(() => {});
 }
-const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, openFolder, keep: () => Number(G.settings?.undoKeep) || 10,
+const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, openFolder, listFilter, removeWorktree: (w) => removeWorktreeAsk(w), keep: () => Number(G.settings?.undoKeep) || 10,
   desk: DESK && window.ohDesktop.storage ? (op, arg) => window.ohDesktop.storage(op, arg) : null,
   openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
@@ -13122,10 +13229,10 @@ async function renderServers(c) {
   if (pop.contains(document.activeElement) && document.activeElement.matches('.lf-q')) return;
   // Only the newest draw lands: a 2 s refresh still on its way must not put back the list from before a click.
   const seq = (c.srvPop.seq = (c.srvPop.seq || 0) + 1);
-  const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`);
+  const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(spaceOf(c))}`);
   if (!c.srvPop || c.srvPop.editing || c.srvPop.busy || c.srvPop.seq !== seq) return;
   if (pop.contains(document.activeElement) && document.activeElement.matches('.lf-q')) return;
-  devBadges(c.projectId, r); pagesNotice(c.projectId, r);
+  devBadges(spaceOf(c), r); pagesNotice(spaceOf(c), r);
   const p = projectOf(c);
   const head = `<div class="srv-head"><span class="srv-h-ico">${SVG_SERVER}</span><b>Servers</b><span class="srv-sub">${esc(p?.name || c.projectId)}</span><span class="srv-spacer"></span>
     <button type="button" class="srv-btn srv-add" title="Add a server command to this project">＋ Add</button><button type="button" class="srv-btn srv-term" title="Watch every command and server in this project">${SVG_TERM} Terminal</button></div>`;
@@ -13161,7 +13268,7 @@ async function renderServers(c) {
     }).join('') || '<div class="srv-empty">No project servers yet. The dev server, API or game the agent starts is saved here, so you can run and stop it later; or add one yourself.</div>'}</div>
     ${jobs.length ? `<div class="srv-sec">Running now</div><div class="srv-list">${jobs.map((j) => `<div class="srv-row job"><span class="srv-dot busy"></span><div class="srv-main"><div class="srv-name"><b>${j.source === 'agent' ? '🤖 agent' : '👤 you'}</b><span class="srv-state busy">${esc(ago(j.at).replace('just now', 'started just now'))}</span></div><code class="srv-cmd">${esc(j.label)}</code></div><div class="srv-acts"><button type="button" class="srv-btn stop" data-job="${esc(j.job)}">■ Stop</button></div></div>`).join('')}</div>` : ''}
     ${pagesPart(pages)}
-    <div class="srv-foot" title="Each server gets a free port as PORT / {PORT} unless it has a fixed one${rows.some((x) => x.from === '.claude/launch.json') ? '. .claude/launch.json is read too' : ''}.">Project servers: <code>.quorx/launch.json</code> · free port as <code>{PORT}</code> · Pages: always on, inside QuorX</div>`;
+    <div class="srv-foot" title="Each server gets a free port as PORT / {PORT} unless it has a fixed one${rows.some((x) => x.from === '.claude/launch.json') ? '. .claude/launch.json is read too' : ''}.">Project servers: <code>.quorx/launch.json</code> · free port as <code>{PORT}</code> · Pages: always on, inside QuorX</div>${c.wt ? `<div class="srv-foot srv-wt" title="This chat has its own git worktree: its servers and pages run from that copy of the project, each server on a free port of its own (a fixed port in the launch file is left to the project folder's copy)."><span class="wt-branch-tag">⎇ ${esc(c.wt.branch)}</span> These run in this chat's worktree, on ports of their own</div>` : ''}`;
   wirePages(c, pop, pages);
   $('.srv-add', pop).onclick = () => editServer(c, {});
   $('.srv-term', pop).onclick = () => { closeServers(c); openTerminal(c); };
@@ -13177,14 +13284,14 @@ async function renderServers(c) {
         const live = s.status === 'running' || s.status === 'starting' || s.status === 'not listening';
         if (!await uiConfirm(`${live ? 'Stop and delete' : 'Delete'} "${s.name}"? It's taken out of .quorx/launch.json too.`)) return;
         c.srvPop.busy = true; b.disabled = true;
-        await postJ(`/api/launch?project=${encodeURIComponent(c.projectId)}&name=${encodeURIComponent(s.name)}`, null, 'DELETE');
+        await postJ(`/api/launch?project=${encodeURIComponent(spaceOf(c))}&name=${encodeURIComponent(s.name)}`, null, 'DELETE');
         if (c.srvPop) c.srvPop.busy = false;
         renderServers(c); return pollDev();
       }
       c.srvPop.busy = true; b.disabled = true; b.classList.add('busy'); b.title = act === 'stop' ? 'Stopping…' : 'Starting…';
       const res = act === 'stop' ? await postJ('/api/servers/stop', { key: s.key })
         : act === 'restart' ? await postJ('/api/servers/restart', { key: s.key })
-        : await postJ('/api/servers/start', s.from ? { projectId: c.projectId, name: s.name } : { projectId: c.projectId, name: s.name, cmd: s.command, args: s.args, port: s.port });
+        : await postJ('/api/servers/start', s.from ? { projectId: spaceOf(c), name: s.name } : { projectId: spaceOf(c), name: s.name, cmd: s.command, args: s.args, port: s.port });
       if (c.srvPop) c.srvPop.busy = false;
       if (res.error) uiAlert(`${s.name}: ${res.error}`);
       else if (act === 'start' && res.url) showServerInPane(c, { ...s, url: res.url, key: res.key, status: res.status });
@@ -13209,12 +13316,12 @@ function editServer(c, s) {
   </form>`;
   const f = $('.srv-form', pop), err = $('.srv-err', pop);
   const save = async (run) => {
-    const cfg = { projectId: c.projectId, oldName: s.name, name: f.name.value.trim(), command: f.command.value, args: f.args.value.trim().split(/\s+/).filter(Boolean), port: Number(f.port.value) || null };
+    const cfg = { projectId: spaceOf(c), oldName: s.name, name: f.name.value.trim(), command: f.command.value, args: f.args.value.trim().split(/\s+/).filter(Boolean), port: Number(f.port.value) || null };
     if (!cfg.name) { err.textContent = 'Give it a name.'; err.hidden = false; return; }
     const r = await postJ('/api/launch', cfg);
     if (r.error) { err.textContent = r.error; err.hidden = false; return; }
     c.srvPop.editing = null;
-    if (run) { pop.innerHTML = '<div class="srv-empty">Starting…</div>'; const res = await postJ('/api/servers/start', { projectId: c.projectId, name: cfg.name }); if (res.error) uiAlert(res.error); else if (res.url) showServerInPane(c, { ...cfg, url: res.url, key: res.key, status: res.status }); }
+    if (run) { pop.innerHTML = '<div class="srv-empty">Starting…</div>'; const res = await postJ('/api/servers/start', { projectId: spaceOf(c), name: cfg.name }); if (res.error) uiAlert(res.error); else if (res.url) showServerInPane(c, { ...cfg, url: res.url, key: res.key, status: res.status }); }
     renderServers(c); pollDev();
   };
   f.onsubmit = (e) => { e.preventDefault(); save(false); };
@@ -13233,7 +13340,7 @@ function devBadges(projectId, r) {
   const busy = (r.jobs || []).length + (r.servers || []).filter((s) => s.status === 'starting').length;
   if ((G.srvUp ||= {})[projectId] !== running) { G.srvUp[projectId] = running; wsStatusDraw(); } // the status bar's 🖥
   // The pane's 🖥 and Terminal tab show the project of the chat the pane is showing.
-  if (focused()?.projectId !== projectId) return;
+  if (spaceOf(focused()) !== projectId) return;
   const sb = $('#paneSrvBtn'), tb = $('#paneTabs [data-tab="term"]');
   if (sb) { const n = $('.hdr-count', sb); n.textContent = running || ''; n.hidden = !running; sb.classList.toggle('has-live', !!running); sb.title = `Servers: ${running ? `${running} running` : 'none running'} · run, stop and edit this project's dev servers`; }
   if (tb) { tb.classList.toggle('busy', !!busy); tb.title = busy ? `Terminal\n${busy} command${busy > 1 ? 's' : ''} running now` : 'Terminal\nYour own terminals, and every command and server in this project, live'; }
@@ -13243,22 +13350,22 @@ function devAfter(projectId, r) {
   const running = (r.servers || []).filter((s) => s.status === 'running').length, busy = (r.jobs || []).length;
   (G.devCount ||= {})[projectId] = { running, busy };
   const fc = focused();
-  if (fc?.projectId === projectId) eachArea(() => { renderPaneTabs(fc); if (G.view.term) drawRunning(fc, r); });
+  if (fc && spaceOf(fc) === projectId) eachArea(() => { renderPaneTabs(fc); if (G.view.term) drawRunning(fc, r); });
 }
 async function pollDev() {
   if (document.hidden) return;
   getJ('/api/ext/state').then((r) => { const k = (x) => `${!!x?.connected}${!!x?.outdated}`, was = k(G.ext); G.ext = r && !r.error ? r : null; if (was !== k(G.ext)) for (const ch of G.open.values()) renderComposerBar(ch); extPairNotice(); }).catch(() => {});
-  const ids = new Set(G.panes.map((id) => G.open.get(id)?.projectId).filter(Boolean));
+  const ids = new Set(G.panes.map((id) => spaceOf(G.open.get(id))).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
     const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r); pagesNotice(pid, r);
-    // CPU and memory only while that project's Running tab is on screen (the counts don't need them).
-    const shown = focused()?.projectId === pid && G.view.term && G.term?.sec === 'run';
+    // CPU and memory only while that folder's Running tab is on screen (the counts don't need them).
+    const shown = spaceOf(focused()) === pid && G.view.term && G.term?.sec === 'run';
     const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}${shown ? '&usage=1' : ''}`);
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
-      if (fc?.projectId === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); syncLent(fc); }
+      if (fc && spaceOf(fc) === pid) { renderPaneTabs(fc); if (G.view.term && G.term?.sec === 'run') drawRunningPane(fc, run); syncLent(fc); }
     }
   }
 }
@@ -13296,8 +13403,8 @@ function wirePages(c, pop, pages) {
       const act = b.dataset.pact;
       if (act === 'open') { closeServers(c); openInBrowser(c, pageUrl(pg.url)); return toPreview(); }
       c.srvPop.busy = true; b.disabled = true;
-      const res = act === 'keep' ? await postJ('/api/pages', { projectId: c.projectId, action: 'keep', entry: pg.entry })
-        : await postJ(`/api/pages?project=${encodeURIComponent(c.projectId)}&entry=${encodeURIComponent(pg.entry)}`, null, 'DELETE');
+      const res = act === 'keep' ? await postJ('/api/pages', { projectId: spaceOf(c), action: 'keep', entry: pg.entry })
+        : await postJ(`/api/pages?project=${encodeURIComponent(spaceOf(c))}&entry=${encodeURIComponent(pg.entry)}`, null, 'DELETE');
       if (c.srvPop) c.srvPop.busy = false;
       if (res?.error) { b.disabled = false; return uiAlert(`${pg.title}: ${res.error}`); }
       await renderServers(c);
@@ -13312,7 +13419,7 @@ function pagesNotice(projectId, r) {
   if (!r || r.error) return;
   const n = r.pagesNotice;
   for (const c of G.open.values()) {
-    if (!c.el || c.projectId !== projectId) continue;
+    if (!c.el || spaceOf(c) !== projectId) continue;
     const old = $('.pages-notice', c.el.root);
     if (!n) { old?.remove(); continue; }
     if (old && old.dataset.at === String(n.at)) continue;
@@ -13329,8 +13436,8 @@ function pagesNotice(projectId, r) {
       b.disabled = true;
       const res = await postJ('/api/pages', { projectId, action });
       if (res?.error) { b.disabled = false; return uiAlert(res.error); }
-      for (const ch of G.open.values()) if (ch.el && ch.projectId === projectId) $('.pages-notice', ch.el.root)?.remove();
-      for (const ch of G.open.values()) if (ch.srvPop && ch.projectId === projectId) renderServers(ch);
+      for (const ch of G.open.values()) if (ch.el && spaceOf(ch) === projectId) $('.pages-notice', ch.el.root)?.remove();
+      for (const ch of G.open.values()) if (ch.srvPop && spaceOf(ch) === projectId) renderServers(ch);
       pollDev();
     };
     $('.pn-undo', box).onclick = (e) => done('undo', e.currentTarget);
@@ -13365,7 +13472,7 @@ setInterval(() => {
 // above or below and resized by dragging the bar between them), what is Running (each with a Stop), and the Servers.
 function openTerminal(c, filter, sec = 'term') {
   if (focused() === c) aimArea('term');
-  const t = termState(c.projectId);
+  const t = termState(spaceOf(c));
   if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
   t.sec = sec; termSave(t);
   G.view = { id: G.view.id, src: false, files: false, term: true };
@@ -13773,8 +13880,8 @@ function termLocal(t, u, label, lines) {
 // command, job, server and agent terminal in the project stops, your terminal tabs close (their shells end), a reply
 // working in this project stops, and the pane goes back. Files stay as they are.
 async function closeAllTerm(c) {
-  const t = termState(c.projectId);
-  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`).catch(() => null);
+  const t = termState(spaceOf(c));
+  const r = await getJ(`/api/running?project=${encodeURIComponent(spaceOf(c))}`).catch(() => null);
   const items = (r?.items || []).filter((x) => x.kind !== 'your-term');
   const replies = [...G.open.values()].filter((h) => (h.projectId || 'scratch') === (c.projectId || 'scratch') && h.running);
   const lines = [
@@ -13784,7 +13891,7 @@ async function closeAllTerm(c) {
   ];
   if (!(await uiConfirm(`Close the terminal and stop everything in it?\n${lines.join('\n') || 'Nothing is running.'}\nYour files stay as they are.`, { ok: 'Close all', danger: true }))) return;
   for (const h of replies) h.running?.abort();
-  if (items.length) await postJ('/api/running/stop-all', { projectId: c.projectId }).catch(() => {});
+  if (items.length) await postJ('/api/running/stop-all', { projectId: spaceOf(c) }).catch(() => {});
   for (const u of t.terms) { postJ('/api/term/close', { projectId: t.projectId, tab: u.id }).catch(() => {}); dropXterm(t.projectId, u.id, true); }
   closeTermStream(); G.term = null;
   G.view.term = false; if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane();
@@ -13792,7 +13899,7 @@ async function closeAllTerm(c) {
 const SVG_RUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
 function renderTerm(c) {
   const body = $('#paneBody'), bar = $('#appBar');
-  const p = projectOf(c), t = termState(c.projectId);
+  const p = projectOf(c), t = termState(spaceOf(c));
   if (c.srvPop?.inline) closeServers(c);
   bar.hidden = false;
   const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
@@ -13805,10 +13912,10 @@ function renderTerm(c) {
   termOpenStream(t);
   if (t.sec === 'run') {
     $('.run-stopall', bar).onclick = async (e) => {
-      const n = G.runCount?.[c.projectId]?.n || 0;
+      const n = G.runCount?.[spaceOf(c)]?.n || 0;
       if (!n || !(await uiConfirm(`Stop everything running in this project?\n${n} thing${n > 1 ? 's' : ''}: commands, background jobs, servers and the agent’s terminals, with all they started. Your terminal tabs stay open. A reply that is working is told, and carries on without them.`, { ok: 'Stop all', danger: true }))) return;
       e.target.disabled = true;
-      await postJ('/api/running/stop-all', { projectId: c.projectId });
+      await postJ('/api/running/stop-all', { projectId: spaceOf(c) });
       refreshRunning(c);
     };
     body.innerHTML = '<div class="run" id="runPane"><div class="run-empty dim">Checking…</div></div>';
@@ -13850,7 +13957,7 @@ function renderTerm(c) {
       const [cmd] = line.split(/\s+/);
       if (cmd === 'clear' || cmd === 'cls') { (t.clearedBy ||= {})[u.id] = Date.now(); termDraw(t, 'all'); return; }
       // Your terminals are a real shell; the line goes to it as typed.
-      const rs = await postJ('/api/term/run', { projectId: c.projectId, line, tab: u.id });
+      const rs = await postJ('/api/term/run', { projectId: spaceOf(c), line, tab: u.id });
       if (rs.error) { say(`⚠ ${esc(rs.error)}`, true); termLocal(t, u, line, [`⚠ ${rs.error}`]); return; }
       say(hintHTML); termPaneInput(t, q);
     };
@@ -13878,13 +13985,13 @@ function renderTerm(c) {
   termFilters(t); renderTermInput(t);
   termDraw(t, 'all');
   const area = AREA;
-  getJ(`/api/servers/overview?project=${encodeURIComponent(c.projectId)}`).then((r) => inArea(area, () => drawRunning(c, r)));
+  getJ(`/api/servers/overview?project=${encodeURIComponent(spaceOf(c))}`).then((r) => inArea(area, () => drawRunning(c, r)));
 }
 // The section buttons count what runs and how many servers are up.
 function termSecCounts(c) {
   const bar = $('#appBar'); if (!bar || !G.view.term) return;
   const put = (k, n, tip) => { const el = $(`.tsec[data-sec="${k}"] .tsec-n`, bar); if (el) { el.textContent = n || ''; el.hidden = !n; el.title = tip; } };
-  const rn = G.runCount?.[c.projectId]?.n || 0, sn = G.devCount?.[c.projectId]?.running || 0;
+  const rn = G.runCount?.[spaceOf(c)]?.n || 0, sn = G.devCount?.[spaceOf(c)]?.running || 0;
   put('run', rn, `${rn} running`); put('srv', sn, `${sn} server${sn === 1 ? '' : 's'} up`);
 }
 
@@ -13973,7 +14080,7 @@ function renderPaneTabs(c) {
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
   // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
-  const dev = c && G.devCount?.[c.projectId], rn = c && G.runCount?.[c.projectId];
+  const dev = c && G.devCount?.[spaceOf(c)], rn = c && G.runCount?.[spaceOf(c)];
   const tb = $('[data-tab="term"]', box), tn = $('[data-tab="term"] .pt-n', box);
   tn.textContent = rn?.n || ''; tn.classList.toggle('busy', !!rn?.n); tb.classList.toggle('busy', !!dev?.busy);
   if (c && G.view.term) termSecCounts(c);
@@ -14078,7 +14185,7 @@ function onAgentCommand(c) {
   const fa = agentArea(c);
   if (!onScreen(c) || !fa || !followsAgent(c) || inArea(fa, () => G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
   if ($('#pane')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, .xterm-helper-textarea, [contenteditable]')) return;
-  const t = termState(c.projectId);
+  const t = termState(spaceOf(c));
   asAgent(c, () => openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all'));
 }
 // The Browser tab is a small browser of its own: the agent's page for this chat (live, and watch-only
@@ -14204,7 +14311,7 @@ function fitDeviceFrame(t, stage) {
 // A new tab: quick links to what this chat built and the project's running servers.
 async function newTabPage(c, stage) {
   const arts = Object.values(c.agent.artifacts).filter((a) => ['html', 'md', 'site', 'app'].includes(a.kind));
-  const srv = await getJ(`/api/servers?project=${encodeURIComponent(c.projectId)}`);
+  const srv = await getJ(`/api/servers?project=${encodeURIComponent(spaceOf(c))}`);
   const links = [...arts.map((a) => ({ label: `${ICON[a.kind] || '📄'} ${a.title}`, url: absUrl(artifactUrl(c, a)) })),
     ...(Array.isArray(srv) ? srv.filter((x) => x.status === 'running' && !arts.some((a) => a.url === x.url)).map((x) => ({ label: `🖥 ${x.name}`, url: x.url })) : [])].filter((x) => x.url);
   if (!stage.isConnected) return;
@@ -14452,8 +14559,8 @@ async function afterStop(res, projectId, id, again) {
   if (await uiConfirm(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}.\nKill ${res.left > 1 ? 'them' : 'it'} now? Killing ends ${res.left > 1 ? 'them' : 'it'} at once, without a chance to save.`, { ok: 'Kill', danger: true })) await killRow(projectId, id, again);
 }
 async function refreshRunning(c) {
-  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}&usage=1`);
-  if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
+  const r = await getJ(`/api/running?project=${encodeURIComponent(spaceOf(c))}&usage=1`);
+  if (r && !r.error) (G.runCount ||= {})[spaceOf(c)] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
   renderPaneTabs(c);
   drawRunningPane(c, r);
 }
@@ -14509,13 +14616,13 @@ function drawRunningPane(c, r) {
       G.runStopping.add(x.id);
       // A Stop still going after a few seconds: Kill shows next to it.
       const slow = x.kind === 'your-term' ? 0 : setTimeout(() => { if (G.runStopping.has(x.id)) { runLeft().add(x.id); refreshRunning(c); } }, 4000);
-      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id }).finally(() => { clearTimeout(slow); G.runStopping.delete(x.id); });
-      if (x.kind === 'your-term' && G.term?.projectId === c.projectId) { dropXterm?.(c.projectId, x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
+      const res = await postJ('/api/running/stop', { projectId: spaceOf(c), id: x.id }).finally(() => { clearTimeout(slow); G.runStopping.delete(x.id); });
+      if (x.kind === 'your-term' && G.term?.projectId === spaceOf(c)) { dropXterm?.(spaceOf(c), x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
       refreshRunning(c); pollDev();
-      await afterStop(res, c.projectId, x.id, () => { refreshRunning(c); pollDev(); });
+      await afterStop(res, spaceOf(c), x.id, () => { refreshRunning(c); pollDev(); });
     };
     const killBtn = $('.run-kill', row);
-    if (killBtn) killBtn.onclick = async () => { killBtn.disabled = true; killBtn.textContent = 'Killing…'; await killRow(c.projectId, x.id, () => { refreshRunning(c); pollDev(); }); };
+    if (killBtn) killBtn.onclick = async () => { killBtn.disabled = true; killBtn.textContent = 'Killing…'; await killRow(spaceOf(c), x.id, () => { refreshRunning(c); pollDev(); }); };
     const out = $('.run-out', row);
     if (out) out.onclick = () => openTerminal(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
     const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
@@ -14617,7 +14724,7 @@ function rlRows() {
     const label = x.kind === 'your-term' ? `Terminal · ${x.label}` : x.label, term = x.kind === 'your-term';
     rows.proc.push(rlRow(`p:${x.projectId}:${x.id}`, rlSeg(x.kind), `${label} ${x.detail || ''} ${RL_KIND[x.kind] || ''} ${pname(x.projectId)} ${cname(x.chatId)} ${x.source || ''}`,
       rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code><span class="run-use-slot">${useHTML(x.use)}</span>`),
-      rlMeta([rlProj(x.projectId), rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
+      rlMeta([rlProj(x.project || x.projectId), x.branch ? `<span class="wt-branch-tag">⎇ ${esc(x.branch)}</span>` : '', rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
       `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>${!term && runLeft().has(x.id) ? `<button type="button" class="run-kill danger" data-kill="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="End every process it left, by force, at once (nothing gets a chance to save)">⨯ Kill</button>` : ''}`));
   }
   for (const t of RUNV.tabs || []) {
@@ -14805,7 +14912,7 @@ async function rewindTo(c, m) {
   if (i < 0) return;
   const later = msgs.slice(i);
   const changed = later.filter((x) => x.role === 'assistant' && x.stats?.changed?.length && !x.undone);
-  await refreshUndoable(c.projectId);
+  await refreshUndoable(spaceOf(c));
   const gone = changed.filter((x) => undoGone(c, x)), undoable = changed.filter((x) => !undoGone(c, x));
   const files = [...new Set(undoable.flatMap((x) => x.stats.changed))];
   const choice = await rewindDialog(later.length, files, gone);
@@ -14814,11 +14921,11 @@ async function rewindTo(c, m) {
   if (choice === 'files') {
     for (const x of [...undoable].reverse()) {
       const runId = x.stats.undoId || x.runId;
-      let r = await postJ('/api/checkpoints/restore', { projectId: c.projectId, runId });
+      let r = await postJ('/api/checkpoints/restore', { projectId: spaceOf(c), runId });
       if (r.conflicts?.length && !r.restored) {
         const mode = await undoChoice(x.stats.changed, r.conflicts);
         if (!mode) { problems.push(`stopped before undoing the reply at ${stamp(x.doneAt || x.at)}; nothing after that was rewound`); return finish(true); }
-        r = await postJ('/api/checkpoints/restore', { projectId: c.projectId, runId, mode });
+        r = await postJ('/api/checkpoints/restore', { projectId: spaceOf(c), runId, mode });
       }
       if (r.error) problems.push(`${stamp(x.doneAt || x.at)}: ${r.error}`); else x.undone = true;
     }
@@ -14828,14 +14935,14 @@ async function rewindTo(c, m) {
   }
   return finish(false);
   async function finish(stopped) {
-    if (stopped) { uiAlert(`Rewind stopped: ${problems.join('; ')}.`); refreshUndoable(c.projectId); return; }
+    if (stopped) { uiAlert(`Rewind stopped: ${problems.join('; ')}.`); refreshUndoable(spaceOf(c)); return; }
     c.agent.messages = msgs.slice(0, i);
     if (c.agent.summaryAt && c.agent.summaryAt >= (m.at || 0)) { c.agent.summary = ''; c.agent.summaryAt = 0; }
     // An emptied chat is still saved, so a reload doesn't bring the old conversation back.
     if (c.agent.messages.length) await saveChat(c, true);
     else await fetch(`/api/chats/${c.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(chatDoc(c)) }).catch(() => {});
     G.view = { id: null, src: false, files: false }; G.traceRun = null;
-    renderPanes(); refreshSidebar(); refreshUndoable(c.projectId);
+    renderPanes(); refreshSidebar(); refreshUndoable(spaceOf(c));
     // Your message goes back in the box, with its attached files, to edit and send again.
     const ta = c.el && $('.input', c.el.root);
     if (ta) { ta.value = m.content || ''; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
@@ -14871,6 +14978,7 @@ function rewindDialog(count, files, gone) {
 async function remixFrom(c, m) {
   const i = c.agent.messages.indexOf(m);
   if (i < 0) return;
+  await window.qxChatWorktree?.ready?.(c);
   const pick = await remixDialog(c);
   if (!pick) return;
   const copy = JSON.parse(JSON.stringify(c.agent.messages.slice(0, i + 1).filter((x) => x.role === 'user' || x.role === 'assistant'), (k, v) => (k === 'el' || (typeof Node !== 'undefined' && v instanceof Node) ? undefined : v)));
@@ -14910,7 +15018,7 @@ function remixDialog(c) {
     let model = c.agent.setup.model;
     const dlg = document.createElement('dialog');
     dlg.className = 'pf-dialog rmx-dialog';
-    const wt = typeof window.qxChatWorktree === 'function';
+    const wt = typeof window.qxChatWorktree === 'function' && window.qxChatWorktree.can?.(c) !== false;
     const modelRow = () => { const mm = (G.models || []).find((x) => x.id === model); return `<span class="rmx-model" title="${esc(model)}">${esc(mm?.name || short(model))}</span><span class="rmx-price">${mm ? esc(priceText(mm)) : ''}</span>`; };
     dlg.innerHTML = `<form class="pf" method="dialog">
       <h3>⑂ Remix this reply</h3>
