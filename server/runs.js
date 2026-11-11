@@ -71,7 +71,7 @@ export function startRun({ runId, chatId, onEnd }, work) {
   Promise.resolve().then(() => work(emit, r.ac.signal))
     .catch((e) => {
       const spent = e?.stats ? { stats: e.stats } : {}; // what the reply had spent when it ended (server/agent.js)
-      if (!r.ac.signal.aborted) { console.error(e); emit({ t: 'error', msg: e.message, ...spent }); } else emit({ t: 'error', msg: 'Stopped.', stopped: true, ...spent });
+      if (!r.ac.signal.aborted) { console.error(e); emit({ t: 'error', msg: e.message, ...spent, ...(e?.limit ? { limit: e.limit } : {}) }); } else emit({ t: 'error', msg: 'Stopped.', stopped: true, ...spent });
     })
     .finally(() => {
       flush();

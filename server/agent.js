@@ -15,7 +15,7 @@ import { chat, chatStream, routeLimits, generationCost, chatModels, imageModels,
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
 import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, sourceLimit, forgetSourceHealth, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
-import { isLimitHit, resetAt, limitPlan, limitFallbackFor, limitChoice, switchBackDue, LIMIT_SECS } from './limitswitch.js';
+import { isLimitHit, resetAt, limitPlan, limitFallbackFor, limitChoice, limitPickedModel, waitOffered, switchBackDue, LIMIT_SECS, LIMIT_WAIT_HOURS } from './limitswitch.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -1758,7 +1758,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (signal.aborted || e?.limitCancel) throw e;
       // Nothing done yet: report the error as before. After real work, keep it and say what happened.
       if (run.steps === 1 && !resumed) throw e;
-      run.stop = 'model_error'; run.modelError = clip(e.message, 300); run.modelCode = errorCode(e);
+      run.stop = 'model_error'; run.modelError = clip(e.message, 300); run.modelCode = errorCode(e); if (e?.limit) run.modelLimit = e.limit;
       reply += `${reply ? '\n\n' : ''}⚠ The model stopped responding (${clip(e.message, 160)}). Everything done so far is kept; send a message to carry on.`;
       emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} kept failing: ${clip(e.message, 160)}. The reply ends here; the work so far is kept.`, at: at() });
       break;
@@ -2040,7 +2040,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   }
   if (filesId !== runId) stats.undoId = filesId;
   stats.ms = at();
-  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(run.modelError ? { modelError: run.modelError, modelCode: run.modelCode } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+  Object.assign(stats, { steps: run.steps, stop: run.stop, ...(run.loopEnd ? { loopEnd: true } : {}), ...(run.modelError ? { modelError: run.modelError, modelCode: run.modelCode } : {}), ...(run.modelLimit ? { modelLimit: run.modelLimit } : {}), ...(req.scheduledBy ? { scheduled: true } : {}), budgetStop: run.budgetStop, retries: run.retries, trimmed: run.trimmed, tools: run.tools, questions: run.questions, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   // The next reply sees what this one did and how its checks ended (the page adds this to history).
   const did = journal.length ? `What I did: ${clip(journal.join('; '), 900)}.` : '';
   const checkNote = stats.verify ? (stats.verify.ok ? 'Checks passed.' : `Checks still found ${stats.verify.problems.length} problem(s): ${clip(stats.verify.problems.join('; '), 300)}.`) : '';
@@ -2235,13 +2235,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       }
     }
     // A usage limit, and the user chose a fallback for this source: the card decides (switch, wait for the reset, stop).
+    let lim = null;
     if (role === 'writer' && !run.inSwitch) {
-      const lim = kind === 'skipped' ? sourceLimit(s.source, sm) : isLimitHit(kind, lastErr?.retryAfter) ? { kind, reset: resetAt(lastErr?.retryAfter) } : null;
+      lim = kind === 'skipped' ? sourceLimit(s.source, sm) : isLimitHit(kind, lastErr?.retryAfter) ? { kind, reset: resetAt(lastErr?.retryAfter) } : null;
       const got = lim && await limitCard(body, s, lim, why, sig, onText, onThink, onCall);
       if (got) return got;
     }
     const to = sourceFallbackFor(sm, S, catalogue);
-    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Providers → When a call fails).`), { status: 400, source: s.source });
+    if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Providers → When a call fails).`), { status: 400, source: s.source, ...(lim ? { limit: { source: s.source, name, from: sm, kind: lim.kind, reset: lim.reset || 0, waitOk: waitOffered(lim.reset, S.limitWaitHours) } } : {}) });
     const rest = !!run.sourceOff[s.source], first = rest && !run.sourceOffSaid?.[s.source];
     if (first) (run.sourceOffSaid ??= {})[s.source] = true;
     emit({ t: 'source_fallback', step: role === 'writer' ? run.stepNow ?? null : null, role, from: sm, to, source: s.source, kind, why: clip(why, 300), rest, at: at() });
@@ -2266,14 +2267,18 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // Switch now (or the countdown runs out) moves the agent's calls to the fallback until the reset, Wait for reset holds
   // the reply and carries on on the same model, Cancel stops the reply like ■ does, so ▶ Continue picks it up later.
   // In 🔒 Strict a paid fallback asks first, with no countdown. Returns the call's { r }, or null with no fallback set.
+  // Also: "Wait for reset" is offered only when the reset is close (⚙ Settings → Providers, 6 hours by default); a chat set
+  // to "wait it out here" counts down to waiting instead of switching (and gets a card even with no fallback chosen);
+  // "Another model…" on the card stops the countdown and switches to the model picked there.
   async function limitCard(body, s, lim, why, sig, onText, onThink, onCall) {
-    const sm = body.model, to = limitFallbackFor(s.source, sm, S);
-    if (!to) return null;
-    const info = catalogue.find((m) => m.id === to) || null, name = s.def.name;
-    const plan = limitPlan({ approval: S.approval, info, secs: S.limitSwitchSecs ?? LIMIT_SECS, scheduled: !!req.scheduledBy, schedMs: schedCardMs() });
+    const sm = body.model, fb = limitFallbackFor(s.source, sm, S), mode = req.limitMode === 'wait' ? 'wait' : 'app';
+    const canWait = waitOffered(lim.reset, S.limitWaitHours ?? LIMIT_WAIT_HOURS);
+    if (!fb && !(mode === 'wait' && canWait)) return null;
+    const info = (fb && catalogue.find((m) => m.id === fb)) || null, name = s.def.name;
+    const plan = limitPlan({ approval: S.approval, info, secs: S.limitSwitchSecs ?? LIMIT_SECS, scheduled: !!req.scheduledBy, schedMs: schedCardMs(), mode, canWait });
     const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
     emit({ t: 'question', id, gate: 'limit', question: `${name} hit its usage limit.`, why: clip(why, 300), options: ['Switch now', 'Wait for reset', 'Cancel'],
-      limit: { source: s.source, name, from: sm, to, kind: lim.kind, reset: lim.reset || 0, cost: plan.cost, ask: plan.ask, ...(info?.price ? { price: info.price } : {}) },
+      limit: { source: s.source, name, from: sm, to: fb || '', kind: lim.kind, reset: lim.reset || 0, cost: plan.cost, ask: plan.ask, mode, waitOk: canWait, waitHours: S.limitWaitHours ?? LIMIT_WAIT_HOURS, ...(info?.price ? { price: info.price } : {}) },
       ...(plan.ms ? { wait: waitInfo(plan.ms, plan.onTimeout) } : {}), at: at() });
     const answered = new Promise((resolve, reject) => {
       questions.set(key, resolve);
@@ -2281,8 +2286,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     });
     const ans = await userOrTimeout(id, plan.ms, answered);
     if (ans.timedOut) questions.delete(key);
-    const pick = limitChoice(ans, { reset: lim.reset, onTimeout: plan.onTimeout });
-    emit({ t: 'answer', id, choice: ['switch', 'wait', 'cancel'].indexOf(pick), text: '', ...(ans.timedOut ? { by: 'timeout' } : {}), at: at() });
+    // A model picked on the card: anything outside the source that is out of usage.
+    const picked = limitPickedModel(ans), own = picked && sourceOf(picked)?.source === s.source;
+    const to = picked && !own && picked !== sm ? picked : fb;
+    const pick = limitChoice(picked && !to ? {} : ans, { reset: lim.reset, onTimeout: plan.onTimeout, canWait, hasTo: !!to });
+    emit({ t: 'answer', id, choice: ['switch', 'wait', 'cancel'].indexOf(pick), text: '', ...(pick === 'switch' ? { to } : {}), ...(ans.timedOut ? { by: 'timeout' } : {}), at: at() });
     const when = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     if (pick === 'switch') {
       run.limitSwitch = { source: s.source, from: sm, to, until: lim.reset || 0, back: !!lim.reset };
