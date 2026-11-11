@@ -391,7 +391,11 @@ function wireView(sid, view) {
       e.preventDefault(); const h = wc.navigationHistory;
       if (input.key === 'ArrowLeft' && h.canGoBack()) h.goBack(); else if (input.key === 'ArrowRight' && h.canGoForward()) h.goForward();
     }
+    // Ctrl+F: the page opens its find bar for this tab (it searches the page with find below).
+    if (input.type === 'keyDown' && (input.control || input.meta) && !input.alt && !input.shift && String(input.key).toLowerCase() === 'f') { e.preventDefault(); send({ sid, type: 'find-open' }); }
   });
+  // Find in the page: how many matches, and which one is current.
+  wc.on('found-in-page', (_e, r) => send({ sid, type: 'find', at: r.activeMatchOrdinal || 0, of: r.matches || 0 }));
   wc.on('zoom-changed', (_e, dir) => zoomTab(dir));
   // A tab making sound gets a speaker on it in the pane.
   wc.on('audio-state-changed', (e) => send({ sid, type: 'audio', audible: !!e.audible }));
@@ -505,6 +509,14 @@ handle('nav', (sid, op) => {
   return true;
 });
 handle('close', (sid) => closeTab(sid));
+// Find in a real tab's page (the page's find bar): op 'find' with the text and { forward, findNext }, or 'stop'.
+handle('find', (sid, op, text, opts = {}) => {
+  const t = tabs.get(sid); if (!t || t.view.webContents.isDestroyed()) return false;
+  const wc = t.view.webContents;
+  if (op === 'stop' || !text) { wc.stopFindInPage('clearSelection'); return true; }
+  wc.findInPage(String(text).slice(0, 200), { forward: opts.forward !== false, findNext: !!opts.findNext, matchCase: false });
+  return true;
+});
 // The sidebar's Running list: every real tab (yours and each chat's agent tab) with its page and sound, and closing one.
 handle('tabs', (op, sid) => {
   if (op === 'close') return closeTab(String(sid || ''));
