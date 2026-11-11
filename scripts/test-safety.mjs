@@ -926,6 +926,49 @@ test('let through in YOLO: an action the deciders allowed (not a command) is wri
 
 // ffmpeg and ffprobe come as "Allow always, everywhere" rules: in a YOLO video chat every render, loudness pass and
 // contact sheet went to a vote that timed out and skipped it. They are ordinary rules: off or deleted, they stay so.
+// Files that define what runs later (CI workflows, git hooks, dev containers): an agent edit always asks, in YOLO too.
+test('run later: which files count as CI, hooks or dev container setup', async () => {
+  const { runsLaterWhy } = await import('../server/editguard.js');
+  for (const f of ['.github/workflows/ci.yml', '.GitHub\\Workflows\\Release.YML', './.github/actions/setup/action.yml', '.gitlab-ci.yml', 'azure-pipelines.yml', '.circleci/config.yml', '.travis.yml', 'bitbucket-pipelines.yml', 'Jenkinsfile', '.buildkite/pipeline.yml', '.drone.yml', 'appveyor.yml', 'cloudbuild.yaml', '.husky/pre-commit', 'lefthook.yml', '.pre-commit-config.yaml', '.devcontainer/devcontainer.json', '.github/workflows./ci.yml']) {
+    assert.ok(runsLaterWhy(f), `${f} asks`);
+  }
+  for (const f of ['src/app.js', 'package.json', 'README.md', '.github/ISSUE_TEMPLATE/bug.md', '.github/CODEOWNERS', 'docs/.github/workflows-notes.md', 'workflows/ci.yml', 'my.gitlab-ci.yml.bak']) assert.equal(runsLaterWhy(f), '', `${f} doesn't`);
+  assert.match(runsLaterWhy('.github/workflows/ci.yml'), /GitHub Actions workflow.*every push/);
+});
+
+test('run later: in YOLO an edit to a CI workflow asks you with the reason; allowed it is written (once per file), refused or unanswered it is not', async () => {
+  const wf = '.github/workflows/ci.yml', yml = 'on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n';
+  const steps = (b, i) => [reply('', [['write_file', { path: wf, content: yml }]]), reply('', [['edit_file', { path: wf, find: 'ubuntu-latest', replace: 'windows-latest' }]]), reply('', [['write_file', { path: 'src/app.js', content: 'ok' }]])][i] || reply('Done.');
+  const answer = (approve) => (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve }), 10); };
+  { // allowed: one card for the file, the edit after it doesn't ask again, an ordinary file never asks
+    const { events, dir } = await agentRun(steps, { settings: { approval: 'yolo' }, onEvent: answer(true) });
+    const cards = of(events, 'approval').filter((e) => e.mode === 'strict');
+    assert.equal(cards.length, 1, 'one card, for the workflow');
+    assert.deepEqual([cards[0].tool, cards[0].what, cards[0].noAlways], ['run_later', `Create ${wf}`, true]);
+    assert.match(cards[0].why, /GitHub Actions workflow.*always asks first, in ⚡ YOLO too/);
+    assert.match(fs.readFileSync(path.join(dir, wf), 'utf8'), /windows-latest/, 'written, then edited without a second card');
+    assert.equal(fs.readFileSync(path.join(dir, 'src/app.js'), 'utf8'), 'ok');
+  }
+  { // refused: nothing written, and the agent hears why
+    const { events, bodies, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: wf, content: yml }]])][i] || reply('OK.'), { settings: { approval: 'yolo' }, onEvent: answer(false) });
+    assert.equal(of(events, 'approval_done').at(-1).approve, false);
+    assert.equal(fs.existsSync(path.join(dir, wf)), false, 'not written');
+    assert.match(toolOut(bodies, 1), /declined.*GitHub Actions workflow.*it stays as it was/s);
+  }
+  { // nobody answers in YOLO: the change is skipped after the wait, and the reply goes on
+    const { events, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: wf, content: yml }]])][i] || reply('OK.'), { settings: { approval: 'yolo', yoloWaitSecs: 1 } });
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.approve, done.by], [false, 'timeout']);
+    assert.equal(fs.existsSync(path.join(dir, wf)), false);
+  }
+  { // deleting one asks too, and the card says so
+    const { events, dir } = await agentRun((b, i) => [reply('', [['delete_file', { path: '.husky/pre-commit' }]])][i] || reply('OK.'), { settings: { approval: 'yolo' }, prep: (d) => { fs.mkdirSync(path.join(d, '.husky')); fs.writeFileSync(path.join(d, '.husky/pre-commit'), 'npm test'); }, onEvent: answer(false) });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.deepEqual([card.what, card.yes, card.no], ['Delete .husky/pre-commit', 'Allow deleting it', 'Keep it']);
+    assert.ok(fs.existsSync(path.join(dir, '.husky/pre-commit')), 'kept');
+  }
+});
+
 test('rules: ffmpeg and ffprobe are built-in allow rules everywhere; turning one off or deleting it sticks', async () => {
   const rules = loadRules(null), ff = rules.find((r) => r.id === 'builtin-ffmpeg'), fp = rules.find((r) => r.id === 'builtin-ffprobe');
   assert.deepEqual([ff?.match, ff?.effect, ff?.scope, ff?.by, ff?.on], ['ffmpeg *', 'allow', 'everywhere', 'button', true]);

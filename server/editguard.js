@@ -26,3 +26,36 @@ export function editGuard() {
     get size() { return seen.size; },
   };
 }
+
+// ---------- files that define what runs later ----------
+// A CI workflow, a git hook manager's config or a dev container's setup runs commands later, somewhere else (on every
+// push, on the next commit, when the container is built), with no card in the way. So an agent edit to one always asks
+// the user, even in ⚡ YOLO, with the reason on the card. Package manifests are left out on purpose: the agent edits
+// them all the time, and their scripts are read before any command runs them (cmdpolicy.js).
+const RUNS_LATER = [
+  [/^\.github\/workflows\//, 'a GitHub Actions workflow: it runs on GitHub on every push or pull request it names'],
+  [/^\.github\/actions\//, 'a GitHub Actions action that workflows run'],
+  [/^\.gitlab-ci\.ya?ml$|^\.gitlab\/ci\//, 'GitLab CI: it runs on every push'],
+  [/^azure-pipelines\.ya?ml$|^\.azure-pipelines\/|^\.azuredevops\/pipelines?\//, 'an Azure Pipelines file: it runs on every push'],
+  [/^\.circleci\//, 'CircleCI: it runs on every push'],
+  [/^\.travis\.ya?ml$/, 'Travis CI: it runs on every push'],
+  [/^bitbucket-pipelines\.ya?ml$/, 'Bitbucket Pipelines: it runs on every push'],
+  [/^jenkinsfile$|^\.jenkins\//, 'a Jenkins pipeline: it runs on the build server'],
+  [/^\.buildkite\//, 'Buildkite: it runs on every push'],
+  [/^\.drone\.ya?ml$|^\.woodpecker(\.ya?ml|\/)/, 'a Drone or Woodpecker pipeline: it runs on every push'],
+  [/^appveyor\.ya?ml$|^\.appveyor\.ya?ml$/, 'AppVeyor: it runs on every push'],
+  [/^cloudbuild\.ya?ml$|^\.cloudbuild\//, 'Google Cloud Build: it runs when a build is triggered'],
+  [/^\.husky\//, 'a git hook (Husky): it runs on your next commit or push'],
+  [/^lefthook(-local)?\.ya?ml$|^\.lefthook(-local)?\.ya?ml$/, 'git hooks (Lefthook): they run on your next commit or push'],
+  [/^\.pre-commit-config\.ya?ml$/, 'pre-commit hooks: they run on your next commit'],
+  [/^\.devcontainer\//, 'a dev container setup: its commands run when the container is built or opened'],
+];
+/**
+ * Why an agent edit to this project file must ask first ('' when it needn't): the file defines commands that run
+ * later, out of sight. `rel` is the path inside the project.
+ */
+export function runsLaterWhy(rel) {
+  const r = String(rel || '').replaceAll('\\', '/').replace(/^\.?\/+/, '').replace(/[. ]+(?=\/|$)/g, '').toLowerCase();
+  const hit = RUNS_LATER.find(([re]) => re.test(r));
+  return hit ? hit[1] : '';
+}
