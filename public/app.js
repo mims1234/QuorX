@@ -8205,7 +8205,8 @@ function settingsPanels(S) {
         + stRow('Address', '', `<code>${esc(location.origin)}</code>`)
         + stRow('OpenRouter key', '', G.cfg.hasKey ? stTag('ok', 'active') : stStatus('bad', 'none yet'))
         + stRow('Your data', 'Chats, projects, keys and logs stay in this folder.', '<code>data/</code>')
-        + stRow('Open source', 'Apache License 2.0. Forks are welcome, under a name of their own.', `<span class="sx-links"><a class="st-btn secondary sm" href="${QX_REPO}" target="_blank" rel="noopener noreferrer">Source on GitHub</a><a class="st-btn secondary sm" href="${QX_REPO}/issues/new" target="_blank" rel="noopener noreferrer">Report a problem</a></span>`)
+        + stRow('Open source', 'Apache License 2.0. Forks are welcome, under a name of their own.', `<span class="sx-links"><a class="st-btn secondary sm" href="${QX_REPO}" target="_blank" rel="noopener noreferrer">Source on GitHub</a><a class="st-btn secondary sm" href="${QX_REPO}/issues/new" target="_blank" rel="noopener noreferrer">Open an issue</a></span>`)
+        + stRow('Report a problem', 'A zip of the end of QuorX’s logs and its versions, with API keys, tokens, emails, your user name and local paths taken out. You see every file in it before saving, and pick the folder. Nothing is sent anywhere.', '<button type="button" class="st-btn secondary sm" data-act="reportBundle">Build a report…</button>')
         + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>')
         + '</section>',
       ...(DESK ? ['<div id="stDesktop"></div>'] : []),
@@ -8662,6 +8663,7 @@ function wireSettings() {
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
+    if (act === 'reportBundle') reportProblem();
     if (act === 'tour') { $('#settings').close(); startTour({ fill: fillStart }); }
     if (act === 'exportChats') exportChats(e.target);
     if (act === 'clearPrefs' && await uiConfirm('Clear this browser\'s preferences? Chats, projects and keys stay.')) { try { localStorage.removeItem(STORE); localStorage.removeItem('agent001-v1'); } catch { /* ignore */ } location.reload(); }
@@ -10241,6 +10243,58 @@ const postJ = (url, body, method = 'POST') => fetch(url, { method, headers: { 'C
 const getJ = (url) => fetch(url).then((r) => r.json()).catch((e) => ({ error: e.message }));
 const baseName = (d) => String(d || '').split(/[\\/]/).filter(Boolean).pop() || String(d || '');
 const mbText = (b) => `${((b || 0) / 1e6).toFixed(b < 1e7 ? 1 : 0)} MB`;
+
+// ---------- report a problem ----------
+// ⚙ About → Report a problem: the harness builds a zip of recent logs and versions with keys, tokens, emails, the
+// user name and local paths replaced by tags (server/diagbundle.js). This shows every file in it, cleaned, before
+// anything is saved, and saves it to a folder you pick. Nothing is uploaded: you attach it to an issue yourself.
+const REPORT_DIR = 'qx.reportDir';
+const FOUND_WORDS = { secret: ['saved key', 'saved keys'], key: ['API key', 'API keys'], token: ['token', 'tokens'], email: ['email', 'emails'], user: ['user name', 'user names'], path: ['local path', 'local paths'], ip: ['IP address', 'IP addresses'] };
+const foundText = (f) => Object.entries(f || {}).filter(([, n]) => n > 0).map(([k, n]) => `${n.toLocaleString()} ${FOUND_WORDS[k]?.[n === 1 ? 0 : 1] || k}`).join(' · ');
+async function reportProblem() {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'pf-dialog rp-dialog';
+  dlg.setAttribute('aria-label', 'Report a problem');
+  dlg.innerHTML = `<form class="pf rp" method="dialog"><h3>Report a problem</h3><p class="pf-hint">Building a cleaned copy of the recent logs…</p></form>`;
+  document.body.appendChild(dlg); dlg.showModal();
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  const r = await postJ('/api/diagnostics/preview', {});
+  if (!r || r.error) { $('.rp', dlg).innerHTML = `<h3>Report a problem</h3><p class="pf-warn">The report could not be built: ${esc(r?.error || 'no answer')}</p><div class="pf-acts"><button type="button" class="rp-close">Close</button></div>`; $('.rp-close', dlg).onclick = close; return; }
+  let dir = ''; try { dir = localStorage.getItem(REPORT_DIR) || ''; } catch { /* storage unavailable */ }
+  const total = r.files.reduce((n, f) => n + f.kept, 0), cleaned = foundText(r.found);
+  $('.rp', dlg).innerHTML = `<h3>Report a problem</h3>
+    <p class="pf-hint">A zip of the end of QuorX's logs and its versions, for a bug report. <b>Nothing is sent anywhere.</b> Read what is inside, save it, then attach it to <a href="${QX_REPO}/issues/new" target="_blank" rel="noopener noreferrer">an issue on GitHub</a> if you like.</p>
+    <div class="rp-sum"><span class="rp-n">${r.files.length} files · ${fmtBytes(total)}</span>${cleaned ? `<span class="rp-clean" title="Replaced with tags like &lt;key&gt; and &lt;path&gt; before you see it">Cleaned: ${esc(cleaned)}</span>` : '<span class="rp-clean">Nothing needed cleaning</span>'}</div>
+    <div class="rp-files">${r.files.map((f, i) => `<details class="rp-file"><summary><b>${esc(f.name)}</b><small>${fmtBytes(f.kept)}${f.cut ? ' · the end only' : ''}</small>${foundText(f.found) ? `<span class="rp-f-clean">${esc(foundText(f.found))}</span>` : ''}</summary>${f.clipped ? '<p class="rp-more">Shown: the last part. The zip has all of it, cleaned the same way.</p>' : ''}<pre class="rp-pre" data-i="${i}"></pre></details>`).join('')}</div>
+    <div class="pf-field"><span>Save in</span><span class="pf-row"><input class="pf-dir rp-dir" value="${esc(dir)}" placeholder="Pick a folder on this PC, or type its full path" spellcheck="false"><button type="button" class="pf-browse rp-browse">📂 Choose…</button></span></div>
+    <p class="pf-warn rp-err" hidden></p><p class="rp-done" hidden></p>
+    <div class="pf-acts"><button type="button" class="rp-close">Close</button><button type="button" class="pf-save rp-save">Save zip</button></div>`;
+  // The cleaned text goes in as text (never as HTML), and only when its file is opened.
+  for (const d of dlg.querySelectorAll('.rp-file')) d.addEventListener('toggle', () => { const pre = $('.rp-pre', d); if (d.open && !pre.textContent) pre.textContent = r.files[+pre.dataset.i].preview || '(empty)'; });
+  const dirIn = $('.rp-dir', dlg), err = $('.rp-err', dlg), save = $('.rp-save', dlg), browse = $('.rp-browse', dlg);
+  const fail = (m) => { err.textContent = m; err.hidden = !m; };
+  $('.rp-close', dlg).onclick = close;
+  browse.onclick = async () => {
+    browse.disabled = true; browse.textContent = 'Pick it in the window on your PC…'; fail('');
+    const p = await postJ('/api/pick-folder', { start: dirIn.value.trim() });
+    browse.disabled = false; browse.textContent = '📂 Choose…';
+    if (p.error) return fail(/type the path|^not found$/i.test(p.error) ? 'The folder window can\'t open here: type the full path of a folder instead.' : p.error);
+    if (p.path) dirIn.value = p.path;
+  };
+  save.onclick = async () => {
+    const folder = dirIn.value.trim();
+    if (!folder) return fail('Pick a folder to save the report in.');
+    save.disabled = true; fail('');
+    const s = await postJ('/api/diagnostics/save', { id: r.id, folder });
+    save.disabled = false;
+    if (!s || s.error) return fail(s?.error || 'The report could not be saved.');
+    try { localStorage.setItem(REPORT_DIR, folder); } catch { /* storage unavailable */ }
+    const done = $('.rp-done', dlg);
+    done.innerHTML = `✓ Saved <code class="blurable">${esc(baseName(s.file))}</code> in <code class="blurable">${esc(folder)}</code>. Nothing was sent.`;
+    done.hidden = false; save.textContent = 'Saved'; save.disabled = true;
+  };
+}
 
 // New project, or change/reselect a project's folder: a name, any folder (typed or picked with the
 // computer's own folder dialog), or empty for a folder inside this app's workspaces folder.
