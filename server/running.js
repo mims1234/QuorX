@@ -3,10 +3,13 @@
 // agent's, including the ones that moved to the background), the agent's own terminals, and your terminal tabs.
 // Each row can be stopped from there. The agent keeps working while things run; this is where you see them and
 // end what you don't want.
-import { serverOverview, serverLog, stopServerWait, listServers } from './workspace.js';
-import { runningJobs, stopJob } from './terminal.js';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { serverOverview, serverLog, stopServerWait, listServers, serverProc } from './workspace.js';
+import { runningJobs, stopJob, jobProc } from './terminal.js';
+import { jobUsage, forceKillJob } from './jobhost.js';
 import { listBackground } from './bgjobs.js';
-import { listTerms, termTail, termStop } from './agentterm.js';
+import { listTerms, termTail, termStop, termProc } from './agentterm.js';
 import { ptyList, ptyClose } from './pty.js';
 
 const tail = (text, n = 4) => String(text || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-n);
@@ -67,4 +70,52 @@ export async function stopAllIn(projectId) {
   const todo = items.filter((x) => x.kind !== 'your-term');
   const results = await Promise.all(todo.map((x) => stopRunning(projectId, x.id).catch((e) => ({ error: e.message }))));
   return { stopped: todo.length, left: results.reduce((n, r) => n + (r?.left || 0), 0) };
+}
+
+// ---------- what each row uses (CPU and memory), and Kill ----------
+// The Running list and the pane's Running tab already ask for the list every 2-3 seconds; with ?usage=1 the same
+// request also reads every row's Windows job in one call to the job host (processor time so far and the memory its
+// processes hold). Two readings in a row give the CPU share, so a row's first reading shows memory only.
+const LAST = new Map(); // Windows job → { cpu (100 ns units), at (ms) }: the reading before
+const procFor = (id) => {
+  const [kind, ...rest] = String(id || '').split(':'), key = rest.join(':');
+  return kind === 'srv' ? serverProc(key) : kind === 'job' ? jobProc(key) : kind === 'aterm' ? termProc(key) : null;
+};
+
+/** The share of the whole computer's processors a job used between two readings (0-100, one decimal), or null. */
+export function cpuShare(prev, cur, now, cores = os.cpus().length) {
+  const dt = now - (prev?.at || 0), used = Number(cur?.cpu) - Number(prev?.cpu);
+  if (!prev || !(dt > 0) || !(used >= 0) || !(cores > 0)) return null;
+  return Math.round(Math.min(100, (used / 1e4 / dt / cores) * 100) * 10) / 10;
+}
+
+/** Adds `use: { cpu, mem, n }` to each row whose processes QuorX tracks in a Windows job (none elsewhere). */
+export async function addUsage(items, { usage = jobUsage, now = Date.now(), cores = os.cpus().length } = {}) {
+  const procs = items.map((x) => procFor(x.id));
+  const u = await usage(procs.map((p) => p?.qxJob)).catch(() => ({}));
+  const seen = new Set();
+  items.forEach((x, i) => {
+    const job = procs[i]?.qxJob, r = job && u[job];
+    if (!r) return;
+    seen.add(job);
+    x.use = { cpu: cpuShare(LAST.get(job), r, now, cores), mem: Number(r.mem) || 0, n: Number(r.n) || 0 };
+    LAST.set(job, { cpu: Number(r.cpu) || 0, at: now });
+  });
+  if (LAST.size > 200) for (const k of LAST.keys()) if (!seen.has(k)) LAST.delete(k);
+  return items;
+}
+
+/**
+ * Kill: for a row whose Stop left processes behind (or is taking too long). Every process still in its job is ended
+ * by force, then the row's usual Stop runs so the list and the agent hear it ended. Your terminal tabs just close.
+ */
+export async function killRunning(projectId, id, { kill = forceKillJob } = {}) {
+  if (String(id).startsWith('pty:')) return stopRunning(projectId, id);
+  const p = procFor(id);
+  if (!p) return { already: true };
+  let r = { left: 0, names: [], mode: 'basic' };
+  if (p.qxJob) r = await kill(p.qxJob);
+  else if (p.pid) await new Promise((res) => (process.platform === 'win32' ? execFile('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true }, () => res()) : (() => { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } res(); })()));
+  stopRunning(projectId, id).catch(() => {});
+  return { left: r.left || 0, names: r.names || [], mode: r.mode };
 }

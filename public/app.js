@@ -10662,7 +10662,9 @@ async function pollDev() {
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
     const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r);
-    const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}`);
+    // CPU and memory only while that project's Running tab is on screen (the counts don't need them).
+    const shown = focused()?.projectId === pid && G.view.term && G.term?.sec === 'run';
+    const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}${shown ? '&usage=1' : ''}`);
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
@@ -11596,8 +11598,34 @@ const RUN_GROUPS = [
 ];
 const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
 const dur = (ms) => (ms < 59500 ? `${Math.max(0, Math.round(ms / 1000))}s` : secs(ms));
+// CPU and memory of a row (servers, commands, agent terminals: what the Windows job of each holds; browser tabs: their
+// page's process in the desktop app). CPU is a share of the whole computer, like Task Manager; the first reading has
+// no CPU yet. Plain numbers, not tags or buttons; heavy use turns amber.
+const useMem = (b) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`);
+function useHTML(use) {
+  if (!use) return '';
+  const hot = (use.cpu ?? 0) >= 50 || use.mem >= 1.5 * 1024 ** 3;
+  const tip = `What it uses now${use.n > 1 ? `, across its ${use.n} processes` : ''}: processor ${use.cpu == null ? '(measuring…)' : `${use.cpu}% of this computer`}, memory ${useMem(use.mem)}`;
+  return `<span class="run-use${hot ? ' hot' : ''}" title="${esc(tip)}"><span class="use-cpu">CPU ${use.cpu == null ? '…' : `${use.cpu < 10 ? use.cpu.toFixed(1) : Math.round(use.cpu)}%`}</span><span class="use-mem">${useMem(use.mem)}</span></span>`;
+}
+// Kill: shown on a row whose Stop left processes behind, or whose Stop is still going after a few seconds.
+const runLeft = () => (G.runLeft ||= new Set());
+async function killRow(projectId, id, again) {
+  const res = await postJ('/api/running/kill', { projectId, id });
+  if (res.error) uiAlert(res.error);
+  else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} could not be killed: ${(res.names || []).join(', ')}. Windows may need them ended from Task Manager.`);
+  else runLeft().delete(id);
+  again?.();
+}
+// After a Stop: processes left → offer Kill straight away (and keep the Kill button on the row).
+async function afterStop(res, projectId, id, again) {
+  if (res.error) return uiAlert(res.error);
+  if (!res.left) { runLeft().delete(id); return; }
+  runLeft().add(id);
+  if (await uiConfirm(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}.\nKill ${res.left > 1 ? 'them' : 'it'} now? Killing ends ${res.left > 1 ? 'them' : 'it'} at once, without a chance to save.`, { ok: 'Kill', danger: true })) await killRow(projectId, id, again);
+}
 async function refreshRunning(c) {
-  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}`);
+  const r = await getJ(`/api/running?project=${encodeURIComponent(c.projectId)}&usage=1`);
   if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
   renderPaneTabs(c);
   drawRunningPane(c, r);
@@ -11613,9 +11641,10 @@ function runRowHTML(c, x) {
     x.kind === 'server' && x.url ? `<button type="button" class="run-open" title="Open it in the pane's browser">Open</button>` : '',
     x.kind !== 'agent-term' ? `<button type="button" class="run-out" title="Show its output in the Terminal tab">Output</button>` : '',
     `<button type="button" class="run-stop danger" title="${x.kind === 'your-term' ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${x.kind === 'your-term' ? '✕ Close' : '■ Stop'}</button>`,
+    x.kind !== 'your-term' && runLeft().has(x.id) ? '<button type="button" class="run-kill danger" title="End every process it left, by force, at once (nothing gets a chance to save)">⨯ Kill</button>' : '',
   ].join('');
   return `<div class="run-row" data-id="${esc(x.id)}" data-kind="${esc(x.kind)}">
-    <div class="run-top"><i class="tr-dot ${x.status === 'starting' ? 'busy' : 'ok'}"></i>${tag}<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code></div>
+    <div class="run-top"><i class="tr-dot ${x.status === 'starting' ? 'busy' : 'ok'}"></i>${tag}<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code><span class="run-use-slot">${useHTML(x.use)}</span></div>
     <div class="run-meta">${[who, from, x.started ? `<span class="run-time" title="Started ${esc(new Date(x.started).toLocaleString())}">${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}</span>` : '', port].filter(Boolean).join('<span class="run-sep">·</span>')}</div>
     ${x.tail?.length ? `<pre class="run-tail">${esc(x.tail.join('\n'))}</pre>` : ''}
     <div class="run-acts">${acts}</div>
@@ -11632,11 +11661,12 @@ function drawRunningPane(c, r) {
   const html = (groups || `<div class="run-empty"><b>Nothing is running in this project.</b><br>Long commands the agent starts keep running here in the background while it carries on; servers, the agent’s terminals and your terminal tabs show here too, each with a Stop.</div>`) + elsewhere;
   // Rows are rebuilt only when what runs changes. Output and times update in place, so a Stop click never lands on a
   // button that a redraw has just replaced (output changes every second or two).
-  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length])) + elsewhere;
+  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length, runLeft().has(x.id)])) + elsewhere;
   if (box.dataset.sig === sig) {
     for (const x of items) {
       const row = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"]`); if (!row) continue;
       const t = $('.run-time', row); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`;
+      const u = $('.run-use-slot', row), uh = useHTML(x.use); if (u && u.innerHTML !== uh) u.innerHTML = uh;
       const pre = $('.run-tail', row), text = (x.tail || []).join('\n'); if (pre && pre.textContent !== text) pre.textContent = text;
     }
     return;
@@ -11650,12 +11680,15 @@ function drawRunningPane(c, r) {
     stopBtn.onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'Stopping…';
       G.runStopping.add(x.id);
-      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id }).finally(() => G.runStopping.delete(x.id));
-      if (res.error) uiAlert(res.error);
-      else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+      // A Stop still going after a few seconds: Kill shows next to it.
+      const slow = x.kind === 'your-term' ? 0 : setTimeout(() => { if (G.runStopping.has(x.id)) { runLeft().add(x.id); refreshRunning(c); } }, 4000);
+      const res = await postJ('/api/running/stop', { projectId: c.projectId, id: x.id }).finally(() => { clearTimeout(slow); G.runStopping.delete(x.id); });
       if (x.kind === 'your-term' && G.term?.projectId === c.projectId) { dropXterm?.(c.projectId, x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
       refreshRunning(c); pollDev();
+      await afterStop(res, c.projectId, x.id, () => { refreshRunning(c); pollDev(); });
     };
+    const killBtn = $('.run-kill', row);
+    if (killBtn) killBtn.onclick = async () => { killBtn.disabled = true; killBtn.textContent = 'Killing…'; await killRow(c.projectId, x.id, () => { refreshRunning(c); pollDev(); }); };
     const out = $('.run-out', row);
     if (out) out.onclick = () => openTerminal(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
     const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
@@ -11672,9 +11705,18 @@ const RL_SEG = { server: 'Servers', command: 'Commands', terminal: 'Terminals', 
 const RL_KIND = { ...RUN_KIND, 'agent-tab': 'Agent tab', 'your-tab': 'Your tab', chrome: 'Chrome', lent: 'Lent Chrome tab', desktop: 'Computer use' };
 const rlSeg = (kind) => (kind === 'server' ? 'server' : kind === 'background' || kind === 'command' ? 'command' : 'terminal');
 async function loadRunningAll() {
-  const [d, tabs] = await Promise.all([getJ('/api/running/all'), DESK && window.ohDesktop.tabs ? window.ohDesktop.tabs('list').catch(() => null) : Promise.resolve(null)]);
+  // CPU and memory only while the list is open (the sidebar count alone doesn't need them): the servers' and commands'
+  // from the server, each browser tab's from the desktop app's own process readout.
+  const open = !!$('#runningAll')?.open;
+  const [d, tabs, perf] = await Promise.all([getJ(`/api/running/all${open ? '?usage=1' : ''}`), DESK && window.ohDesktop.tabs ? window.ohDesktop.tabs('list').catch(() => null) : Promise.resolve(null),
+    open && DESK && window.ohDesktop.perf ? window.ohDesktop.perf().catch(() => null) : Promise.resolve(null)]);
   RUNV.data = d && !d.error ? d : { items: [], control: [], error: d?.error || 'no answer' };
   RUNV.tabs = Array.isArray(tabs) ? tabs : null; // null: not the desktop app (or an older one), so no tabs section
+  if (RUNV.tabs && perf?.tabs) {
+    // A tab's page runs in its own process; percentCPUUsage is "100 = one core", so it is shared out over the cores.
+    const cores = navigator.hardwareConcurrency || 1, byPid = new Map((perf.procs || []).map((p) => [p.pid, p]));
+    for (const t of RUNV.tabs) { const p = perf.tabs.find((x) => x.sid === t.sid); if (p?.pid) t.use = { cpu: Math.round(((byPid.get(p.pid)?.cpu || 0) / cores) * 10) / 10, mem: (p.mb || 0) * 1024 ** 2, n: 1 }; }
+  }
   drawRunCount();
   return RUNV.data;
 }
@@ -11703,16 +11745,16 @@ function rlRows() {
     const port = x.url ? `<a class="run-url" href="${esc(x.url)}" rel="noopener" data-cl="1">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
     const label = x.kind === 'your-term' ? `Terminal · ${x.label}` : x.label, term = x.kind === 'your-term';
     rows.proc.push(rlRow(`p:${x.projectId}:${x.id}`, rlSeg(x.kind), `${label} ${x.detail || ''} ${RL_KIND[x.kind] || ''} ${pname(x.projectId)} ${cname(x.chatId)} ${x.source || ''}`,
-      rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code>`),
+      rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code><span class="run-use-slot">${useHTML(x.use)}</span>`),
       rlMeta([rlProj(x.projectId), rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
-      `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>`));
+      `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>${!term && runLeft().has(x.id) ? `<button type="button" class="run-kill danger" data-kill="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="End every process it left, by force, at once (nothing gets a chance to save)">⨯ Kill</button>` : ''}`));
   }
   for (const t of RUNV.tabs || []) {
     const lent = !t.agent && lentChatOf(t.sid), chatId = t.agent ? t.chatId : lent || null, ch = chatId && G.chats.find((x) => x.id === chatId);
     const sound = t.audible && !t.muted ? '<span class="rl-sound on" title="Playing sound now">🔊 playing</span>' : t.muted ? `<span class="rl-sound" title="Muted">🔇 muted${t.audible ? ' (playing)' : ''}</span>` : '';
     const blank = !t.url || t.url === 'about:blank', tchat = esc(t.agent ? t.chatId || '' : '');
     rows.tab.push(rlRow(`t:${t.sid}`, 'tab', `${t.title} ${t.url} ${t.agent ? 'agent tab' : 'your tab'} ${t.audible && !t.muted ? 'sound playing' : ''} ${t.muted ? 'muted' : ''} ${cname(chatId)}`,
-      rlTop('ok', t.agent ? 'agent-tab' : 'your-tab', `<span class="rl-title" title="${esc(t.title || t.url)}">${esc(t.title || (blank ? 'Empty tab' : t.url))}</span>${sound}`),
+      rlTop('ok', t.agent ? 'agent-tab' : 'your-tab', `<span class="rl-title" title="${esc(t.title || t.url)}">${esc(t.title || (blank ? 'Empty tab' : t.url))}</span>${sound}<span class="run-use-slot">${useHTML(t.use)}</span>`),
       rlMeta([blank ? '' : `<code class="rl-url" title="${esc(t.url)}">${esc(clip(t.url.replace(/^https?:\/\//, ''), 60))}</code>`, ch ? rlProj(ch.projectId) : '', chatId ? `${lent ? '<span>lent to</span> ' : ''}${rlChat(chatId)}` : '<span>yours, in no chat</span>']),
       `<button type="button" class="rl-go" data-tab="${esc(t.sid)}" data-tchat="${tchat}" title="Show this tab in the pane's Browser tab">Go to tab</button><button type="button" class="danger rl-close" data-close="${esc(t.sid)}" data-tchat="${tchat}" title="Close this tab${t.agent ? ' (the agent opens a new one if it needs a page again)' : ''}">✕ Close</button>`));
   }
@@ -11744,9 +11786,13 @@ async function openRunningAll() {
 function drawRunningAll() {
   const body = $('#rlBody'), d = RUNV.data; if (!body || !d || !$('#runningAll').open) return;
   // Rebuilt only when what runs changes; times tick in place, so a click never lands on a button just replaced.
-  const sig = JSON.stringify([d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
+  const sig = JSON.stringify([d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId, runLeft().has(x.id)]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
   if (body.dataset.sig === sig) {
     for (const t of body.querySelectorAll('.run-time[data-started]')) t.textContent = `${t.dataset.word} ${dur(Date.now() - Number(t.dataset.started))}`;
+    // CPU and memory change every reading: written in place, like the times.
+    const put = (key, use) => { const s = body.querySelector(`.rl-row[data-key="${CSS.escape(key)}"] .run-use-slot`), h = useHTML(use); if (s && s.innerHTML !== h) s.innerHTML = h; };
+    for (const x of d.items) put(`p:${x.projectId}:${x.id}`, x.use);
+    for (const t of RUNV.tabs || []) put(`t:${t.sid}`, t.use);
     return;
   }
   body.dataset.sig = sig;
@@ -11776,10 +11822,15 @@ function wireRunningAll(body) {
   };
   for (const b of body.querySelectorAll('[data-stop]')) b.onclick = async () => {
     b.disabled = true; b.textContent = 'Stopping…';
-    const res = await postJ('/api/running/stop', { projectId: b.dataset.pid, id: b.dataset.stop });
-    if (res.error) uiAlert(res.error); else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+    const id = b.dataset.stop, pid = b.dataset.pid, term = id.startsWith('pty:');
+    // A Stop still going after a few seconds: Kill shows next to it.
+    let done = false;
+    const slow = term ? 0 : setTimeout(() => { if (!done) { runLeft().add(id); again(); } }, 4000);
+    const res = await postJ('/api/running/stop', { projectId: pid, id }).finally(() => { done = true; clearTimeout(slow); });
     again();
+    await afterStop(res, pid, id, again);
   };
+  for (const b of body.querySelectorAll('[data-kill]')) b.onclick = async () => { b.disabled = true; b.textContent = 'Killing…'; await killRow(b.dataset.pid, b.dataset.kill, again); };
   const all = $('.rl-stopall', body);
   if (all) all.onclick = async () => {
     const pids = [...new Set(RUNV.data.items.filter((x) => x.kind !== 'your-term').map((x) => x.projectId))];
