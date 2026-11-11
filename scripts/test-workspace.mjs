@@ -337,3 +337,28 @@ test('workspace W2: groups placed by rectangles; bars resize neighbours; the cha
     assert.deepEqual(v.load({ f: { name: 'x' } }), {});
   }
 });
+
+test('workspace W3: a second chat in a group of its own; only some groups shown; pins saved', () => {
+  let lay = W.defaultLayout();
+  let r = W.placeChat2(lay, 'b', W.CHAT_GROUP, 'right');
+  assert.equal(r.ok, true); lay = r.layout;
+  assert.equal(shape(lay.root), 'row(chat[chat:main] chat2[chat:b] g1[artifact:g1,browser:g1,steps:g1,terminal:g1,files:g1])');
+  assert.equal(W.chat2Id(lay), 'b');
+  assert.deepEqual(W.chatGroups(lay).map((g) => g.id), ['chat', 'chat2']);
+  assert.deepEqual(W.sideGroups(lay).map((g) => g.id), ['g1'], 'the second chat is not a pane group');
+  // Placed again: the same group shows the other chat, nothing new is added.
+  lay = W.placeChat2(lay, 'c').layout;
+  assert.equal(W.chat2Id(lay), 'c');
+  assert.equal(W.groups(lay).length, 3);
+  // At the cap a second chat is refused like any new group.
+  const full = W.addGroup(W.addGroup(W.defaultLayout(), 'g1', 'bottom', ['x']).layout, 'g1', 'right', ['y']).layout;
+  assert.equal(W.placeChat2(full, 'b').reason, 'max');
+  // Only some groups: the others give their space away; the tree is not changed.
+  const only = W.keepGroups(lay, ['chat', 'chat2']);
+  assert.equal(shape(only.root).replace(/\[[^\]]*\]/g, ''), 'row(chat chat2)');
+  assert.equal(W.groups(lay).length, 3);
+  assert.equal(W.nearestGroup(lay, 'chat2', {}), 'g1', 'files never open in a chat group');
+  // A group pinned to a chat is saved; a pin on a group that is gone is not.
+  const back = W.parse(W.serialise(lay, {}, [], { pins: { g1: 'b', g9: 'c', chat: '' } }));
+  assert.deepEqual(back.pins, { g1: 'b' });
+});

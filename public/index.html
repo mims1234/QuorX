@@ -141,6 +141,8 @@
   <aside class="pane" id="pane" aria-label="Artifacts">
     <!-- The pane is a small browser: tabs for what it can show, then an address bar for the open one. -->
     <div class="pane-tabs icons-only" id="paneTabs" role="tablist" aria-label="What the pane shows">
+      <!-- With two chats on screen: whose this group is (the chat you use, or the chat it is pinned to). -->
+      <i class="pa-own own-sq" hidden></i>
       <button type="button" role="tab" data-tab="art" aria-label="Artifact" title="Artifact&#10;Plans and documents the agent wrote for this chat"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span class="pt-label">Artifact</span> <span class="pt-n"></span></button>
       <button type="button" role="tab" data-tab="browser" aria-label="Browser" title="Browser&#10;What the agent's own browser is looking at, your own tabs, and the sites and apps it runs"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg><span class="pt-label">Browser</span> <span class="pt-dot"></span></button>
       <button type="button" role="tab" data-tab="trace" aria-label="Steps" title="Steps&#10;Everything a reply did, in order"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M11 6h9M11 12h9M11 18h9"/><circle cx="6" cy="12" r="1.2" fill="currentColor"/></svg><span class="pt-label">Steps</span></button>
