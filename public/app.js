@@ -323,7 +323,7 @@ function normalise(doc) {
     quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
     // What this chat allows on its own (rules, tools and when they were allowed and used, apps, folders): kept on load,
     // or the next save dropped them.
-    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.compactEst ? { compactEst: agent.compactEst } : {}), ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -3487,6 +3487,7 @@ function paneHTML(c) {
               <button type="button" class="cmp-act-btn enhUndo" title="Undo the last ✨ Enhance: your words back" aria-label="Undo enhance" hidden>↶</button>
             </div>
             <div class="cmp-actions-right">
+              <span class="cmp-ctx-slot"></span>
               <button type="button" class="cmp-stop-btn stopBtn" title="Stop the agent" aria-label="Stop" hidden>${CMP_ICO.stop}</button>
               <button type="submit" class="cmp-send-btn sendBtn" title="Send (Enter)" aria-label="Send">${CMP_ICO.send}</button>
             </div>
@@ -3798,6 +3799,7 @@ function renderComposerBar(c) {
   const budChip = $('.cmp-budget', chipsEl);
   budChip.onclick = () => editBudget(c, undefined, budChip);
   drawBudgetChip(c);
+  drawContextMeter(c);
   if (!c.bud) loadChatBudget(c);
   // 👁 🧭 Chrome, computer use and always-allowed: in a row when there is room, behind one tray button when not.
   const trayOn = [followsAgent(c), c.followSteps, c.tools?.chrome, c.tools?.apps, chatAllowedCount(c) > 0].filter(Boolean).length;
@@ -3976,6 +3978,98 @@ function wireQuickSettings(c, quick, chips, followSlot) {
     if (e.key !== 'Escape' || !ch || !quick.isConnected || document.querySelector('dialog[open]') || (ch._cq == null && !ch._tray)) return;
     e.stopPropagation(); ch._cq = undefined; ch._tray = false; renderComposerBar(ch);
   }, { capture: true, signal });
+}
+// ---------- the context meter: how much of the model's context this chat has left, and Compact ----------
+// Each model call reports the tokens it sent and got back (llm_done → m.ctxUse on the reply); the newest one is what
+// the next call starts from. The model list gives the window. contextNumbers is the arithmetic alone, so anything else
+// that shows a chat's context (a status bar) uses the same numbers and colours as the ring.
+const CTX_AMBER = 25, CTX_RED = 8; // % left
+function contextNumbers(use, max) {
+  const known = !!use && use.in > 0;
+  const input = known ? use.in : 0, output = known ? use.out || 0 : 0, used = input + output;
+  const hasCache = known && use.read != null;
+  const left = max && known ? Math.max(0, 1 - used / max) : null;
+  const pct = left == null ? null : Math.round(left * 100);
+  const tone = pct == null ? 'none' : pct <= CTX_RED ? 'red' : pct <= CTX_AMBER ? 'amber' : 'ok';
+  return { known, max: max || 0, used, input, output, cacheRead: hasCache ? use.read : null, cacheWrite: hasCache ? use.write || 0 : null,
+    fresh: hasCache ? Math.max(0, input - use.read - (use.write || 0)) : null, free: max && known ? Math.max(0, max - used) : null, left, pct, tone, estimated: !!use?.estimated, model: use?.model || '' };
+}
+// This chat's figures: the newest call's, or the estimate left by a Compact made since then.
+function contextUse(c) {
+  const a = c.agent;
+  const last = a.messages.findLast((m) => m.role === 'assistant' && m.ctxUse?.in > 0)?.ctxUse || null;
+  const est = a.compactEst && (!last || (last.at || 0) < a.compactEst.at) ? { ...a.compactEst, estimated: true } : null;
+  return contextNumbers(est || last, G.byId?.get(a.setup.model)?.ctx || 0);
+}
+const ctxK = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
+const CTX_COLOR = { ok: 'var(--accent)', amber: 'var(--amber)', red: 'var(--bad)', none: 'var(--dim)' };
+function ctxRingSVG(u, size = 18) {
+  const r = size / 2 - 2.5, C = 2 * Math.PI * r, fill = u.left == null ? 0 : u.left;
+  return `<svg class="ctx-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="3"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${CTX_COLOR[u.tone]}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(C * fill).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`;
+}
+const ctxLabel = (u) => (u.pct != null ? `${u.estimated ? '≈' : ''}${u.pct}% left` : u.known ? `${ctxK(u.used)} used` : 'Context');
+function drawContextMeter(c) {
+  const slot = c.el && $('.cmp-ctx-slot', c.el.root);
+  if (!slot) return;
+  const u = contextUse(c), open = !!$('.ctx-pop:not([hidden])', slot);
+  const tip = u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens)${u.estimated ? ', estimated after Compact' : ''}. Click for details and Compact.`
+    : u.known ? `${ctxK(u.used)} tokens used; this model's context size isn't listed. Click for details and Compact.` : 'How much of the model\'s context this chat uses shows after the first reply. Click for Compact.';
+  slot.innerHTML = `<button type="button" class="cmp-ctx-btn" data-tone="${u.tone}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}" aria-label="${esc(tip)}">${ctxRingSVG(u)}<span class="ctx-lbl">${esc(ctxLabel(u))}</span></button><div class="ctx-pop" role="dialog" aria-label="Context" ${open ? '' : 'hidden'}></div>`;
+  const btn = $('.cmp-ctx-btn', slot), pop = $('.ctx-pop', slot);
+  if (open) drawContextPop(c, pop, u);
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
+  const outside = (e) => { if (!slot.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
+  btn.onclick = () => {
+    if (!pop.hidden) return close();
+    drawContextPop(c, pop, contextUse(c)); pop.hidden = false; btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+  };
+  if (open) { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true); }
+}
+function drawContextPop(c, pop, u) {
+  const n = (v) => (v || 0).toLocaleString();
+  const parts = u.known ? (u.cacheRead != null ? [['Cache read', u.cacheRead, 'var(--accent)'], ['Cache write', u.cacheWrite, 'var(--amber)'], ['Fresh input', u.fresh, 'var(--violet)'], ['Output', u.output, 'var(--ok)']] : [['Input', u.input, 'var(--violet)'], ['Output', u.output, 'var(--ok)']]) : [];
+  const total = u.max || u.used || 1;
+  const rows = [['Used', u.used, '', 'ctx-used'], ...parts.filter(([k]) => k !== 'Fresh input' && k !== 'Input'), ...(u.free != null ? [['Free', u.free, '', 'ctx-free']] : [])];
+  const busy = !!c.running;
+  pop.innerHTML = `<div class="ctx-head"><b>Context</b><span class="ctx-of">${u.known ? `${u.estimated ? '≈ ' : ''}${ctxK(u.used)}${u.max ? ` / ${ctxK(u.max)}` : ''}` : u.max ? `${ctxK(u.max)} window` : ''}</span></div>`
+    + (u.known ? `<div class="ctx-bar">${parts.map(([k, v, col]) => `<span title="${esc(k)}" style="width:${Math.min(100, (v / total) * 100).toFixed(2)}%;background:${col}"></span>`).join('')}</div>
+      <div class="ctx-rows">${rows.map(([k, v, col, cls]) => `<div class="${cls || ''}"><span class="k">${col ? `<span class="sw" style="background:${col}"></span>` : ''}${k}</span><span class="v">${n(v)}</span></div>`).join('')}</div>
+      <div class="ctx-note">${u.estimated ? 'Estimated after Compact; the next reply gives the real figure.' : `From the last model call${u.model ? ` (${esc(short(u.model))})` : ''}.`}${u.cacheRead == null ? ' This source doesn\'t report cache tokens.' : ''}${u.max ? '' : ' This model\'s context size isn\'t listed.'}</div>`
+      : '<div class="ctx-note">Shows after the first reply: what the last model call sent and got back.</div>')
+    + `<button type="button" class="primary ctx-compact" ${busy ? 'disabled' : ''}>Compact conversation</button>
+      <div class="ctx-note">${busy ? 'Wait for the reply to finish, or stop it, to compact.' : `Older turns become a short summary written by ${esc(short(c.agent.setup.model))}; the last 8 messages stay as they are.`}</div>
+      <div class="ctx-err" hidden></div>`;
+  $('.ctx-compact', pop).onclick = (e) => compactConversation(c, e.currentTarget, $('.ctx-err', pop));
+}
+// The same summary a reply writes on a long chat (server: compactChat), asked for now. The chat keeps it like that one
+// (summary + the time the kept turns start), so the next reply sends the summary and only the turns after it.
+async function compactConversation(c, btn, err) {
+  if (c.running) return;
+  const a = c.agent, before = contextUse(c);
+  btn.disabled = true; btn.textContent = 'Compacting…'; err.hidden = true;
+  await saveChat(c, true);
+  const r = await postJ(`/api/chats/${c.id}/compact`, { sourceFallback: G.settings.sourceFallback, fallbackModel: G.settings.fallbackModel });
+  if (!r || r.error) { btn.disabled = false; btn.textContent = 'Compact conversation'; err.hidden = false; err.classList.toggle('soft', !!r?.nothing); err.textContent = r?.error || 'No answer from QuorX.'; return; }
+  a.summary = r.summary; a.summaryAt = r.cutoffAt;
+  if (r.cost) (a.extraUsage ||= []).push({ kind: 'summary', model: r.model, cost: r.cost, at: Date.now(), runId: r.id });
+  // Until the next call says, the context is the last figure less what the summary replaced (≈ 3.5 characters a token).
+  const freed = Math.max(0, Math.round((r.oldChars - r.summary.length) / 3.5));
+  const after = before.known ? Math.max(Math.round(r.summary.length / 3.5), before.used - freed) : 0;
+  if (before.known) a.compactEst = { in: after, out: 0, at: Date.now() };
+  const m = { role: 'compacted', at: Date.now(), turns: r.turns, oldTok: Math.round(r.oldChars / 3.5), sumTok: Math.round(r.summary.length / 3.5), summary: r.summary, cost: r.cost || 0 };
+  a.messages.push(m);
+  const box = c.el && $('.msgs', c.el.root);
+  if (box) { box.querySelector('.hint')?.remove(); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
+  saveChat(c); renderChatHead(c); drawBudgetChip(c);
+  const pop = c.el && $('.cmp-ctx-slot .ctx-pop', c.el.root); if (pop) pop.hidden = true;
+  drawContextMeter(c);
+}
+// The note Compact leaves in the chat. Like a /usage card it is yours: never part of the agent's history.
+function compactedHTML(m) {
+  const tok = m.oldTok ? ` (≈${ctxK(m.oldTok)} tokens) became a summary of ≈${ctxK(m.sumTok)}` : ' became a summary';
+  return `<div class="cp-line">🗜 Conversation compacted: ${m.turns} older message${m.turns === 1 ? '' : 's'}${tok}. The meter shows the real figure after the next reply.${m.cost ? ` <span class="cp-cost">${money(m.cost, 4)}</span>` : ''}</div><details class="cp-sum"><summary>Summary</summary><div class="cp-body"></div></details>`;
 }
 // The footer row folds one step at a time until it fits (composer.css says what each step hides): measured, not a
 // fixed width, as a long Quorium or model name, or many changed settings, need more room than a short one.
@@ -4469,6 +4563,7 @@ function syncRunState(c) {
   if (ta) { ta.dataset.idle ??= ta.placeholder; ta.placeholder = busy ? 'Message the agent while it works: a correction, a question, "use YOLO"…' : ta.dataset.idle; }
   $('.stopBtn', c.el.root).hidden = !busy;
   c.el.root.classList.toggle('busy', busy);
+  drawContextMeter(c); // Compact waits for the reply to end
   renderChatHead(c);
 }
 
@@ -4497,6 +4592,13 @@ function renderMsg(c, m) {
   if (m.role === 'usage') {
     el.className = 'msg usage';
     el.innerHTML = `${usageHTML(m.usage, m.at)}<button type="button" class="ghost uc-x" title="Remove this card">✕</button>`;
+    $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
+    return el;
+  }
+  if (m.role === 'compacted') {
+    el.className = 'msg usage compacted';
+    el.innerHTML = `${compactedHTML(m)}<button type="button" class="ghost uc-x" title="Remove this note (the summary stays in use)">✕</button>`;
+    $('.cp-body', el).textContent = m.summary || '';
     $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
     return el;
   }
@@ -6609,6 +6711,8 @@ async function followRun(c, m, open) {
         }
         // A step that ended in tool calls was working out loud: move its text into the trace.
         if (e.t === 'llm_done' && e.toolCalls.length) moveAside(e);
+        // The context meter: what this call sent and got back is where the next call starts.
+        if (e.t === 'llm_done' && e.tokensIn > 0) { m.ctxUse = { in: e.tokensIn, out: e.tokensOut || 0, ...(e.cacheRead != null ? { read: e.cacheRead, write: e.cacheWrite || 0 } : {}), model: e.model || '', at: (m.at || 0) + (e.at || 0) }; drawContextMeter(c); }
         // A retried call starts its text again (an OpenCode call that fell back to OpenRouter too); a reply
         // sent back to fix problems was not the answer.
         if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer')) { moveAside(e); lastStep = -1; }
