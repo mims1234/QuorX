@@ -1912,7 +1912,7 @@ function toggleProjectFold(id) {
 
 // ---------- opening chats into the panes ----------
 async function showChat(id, pane = G.focus) {
-  if (POP && G.panes.length && id !== POP.chat) { window.ohDesktop?.popout?.('tell', { type: 'show-chat', id }); return; }
+  if (POP && G.panes.length && id !== POP.chat) { popCall('tell', { type: 'show-chat', id }); return; }
   const c = await getChat(id);
   if (!c) return uiAlert('Could not open that chat.');
   G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
@@ -7389,7 +7389,7 @@ function setChatFocus(i) {
   paneMarkAreas();
 }
 async function openBeside(id, { target = WS.CHAT_GROUP, zone = 'right', focus = true } = {}) {
-  if (POP) { window.ohDesktop?.popout?.('tell', { type: 'show-chat', id }); return; }
+  if (POP) { popCall('tell', { type: 'show-chat', id }); return; }
   if (isPhone() || !G.panes.length) return showChat(id);
   const c = await getChat(id); if (!c) return uiAlert('Could not open that chat.');
   const at = G.panes.indexOf(id);
@@ -7683,7 +7683,42 @@ function wsOpenAt(kind, c, from = null) {
 // there comes too). Its box is remembered per project and kind (WS.popKey). Real browser tabs move into it without
 // loading again (the desktop app re-parents the view); terminals reconnect with their scrollback; chats, approvals and
 // Stop go through the server, so both windows are one app. In a browser (not the desktop app) Pop out is hidden.
-const canPop = () => DESK && !!window.ohDesktop?.popout && !POP && !isPhone();
+const canPop = () => (DESK ? !!window.ohDesktop?.popout : !!popChan) && !POP && !isPhone();
+// The desktop app's pop-out calls; in a browser the same is done with window.open (a window of the browser's own) and
+// a BroadcastChannel between the two pages. A browser has no real tabs to move: its Browser tab streams pictures.
+const popChan = 'BroadcastChannel' in window ? new BroadcastChannel('quorx-popouts') : null;
+const popWins = new Map();
+let popLast = null, popClosing = false;
+function popCall(op, a, b) {
+  if (window.ohDesktop?.popout) return window.ohDesktop.popout(op, a, b);
+  if (!popChan) return Promise.resolve(false);
+  if (op === 'open') {
+    const bx = a?.bounds || {}, at = Number.isFinite(bx.x) ? `,left=${Math.round(bx.x)},top=${Math.round(bx.y)}` : '';
+    const w = window.open(a.url, `quorx-${a.id}`, `popup,width=${Math.round(bx.width || 960)},height=${Math.round(bx.height || 640)}${at}`);
+    if (w) popWins.set(a.id, w);
+    return Promise.resolve(!!w);
+  }
+  if (op === 'list') return Promise.resolve([...popWins].filter(([, w]) => !w.closed).map(([id]) => id));
+  if (op === 'state') { popLast = b; popChan.postMessage({ op, id: a, state: b }); return Promise.resolve(true); }
+  if (op === 'tell') { popChan.postMessage({ op, msg: a }); return Promise.resolve(true); }
+  if (op === 'dock') { popClosing = true; popChan.postMessage({ op: 'closed', id: a, state: popLast, bounds: { x: screenX, y: screenY, width: outerWidth, height: outerHeight } }); window.close(); return Promise.resolve(true); }
+  return Promise.resolve(false);
+}
+if (popChan) {
+  // The pop-out page closing (✕ on its window) docks it back too.
+  if (POP) addEventListener('pagehide', () => { if (!popClosing && !window.ohDesktop?.popout) popChan.postMessage({ op: 'closed', id: POP.id, state: popLast, bounds: { x: screenX, y: screenY, width: outerWidth, height: outerHeight } }); });
+  else {
+    // A window closed without saying so (the browser killed it): its last state docks back, once it's seen closed.
+    const live = new Map();
+    setInterval(() => { for (const [id, w] of popWins) if (w.closed) { popWins.delete(id); popDock(id, live.get(id) || null, null); live.delete(id); } }, 1000);
+    popChan.addEventListener('message', (m) => { const d = m.data || {}; if (d.op === 'state') live.set(d.id, d.state); if (d.op === 'closed') { popWins.delete(d.id); live.delete(d.id); } });
+  }
+  if (!POP) popChan.onmessage = (m) => {
+    const d = m.data || {};
+    if (d.op === 'closed') popDock(d.id, d.state, d.bounds);
+    if (d.op === 'tell' && d.msg?.type === 'show-chat' && d.msg.id) { showChat(d.msg.id); window.focus(); }
+  };
+}
 const POPPED_KEY = 'oh-popped', popBoxKey = (pid) => `oh-pop-boxes:${pid}`;
 let popped = (() => { try { return WS.cleanPopped(JSON.parse(localStorage.getItem(POPPED_KEY) || '[]')); } catch { return []; } })();
 function popSave() { try { localStorage.setItem(POPPED_KEY, JSON.stringify(popped)); } catch { /* storage off */ } }
@@ -7722,7 +7757,7 @@ async function popOut(src, at = null) {
   const key = WS.popKey(entry.rec || { chat: entry.chat }), box = popBoxes(entry.project)[key];
   const bounds = at ? { x: at.x - 80, y: at.y - 16, width: box?.width || 960, height: box?.height || 640 } : box || { width: 960, height: 640 };
   const url = `${location.origin}/?qxpop=${encodeURIComponent(JSON.stringify({ ...entry, v: 1 }))}`;
-  const ok = await window.ohDesktop.popout('open', { id, url, bounds, title: `QuorX · ${clip(entry.title, 60)}` }).catch(() => false);
+  const ok = await popCall('open', { id, url, bounds, title: `QuorX · ${clip(entry.title, 60)}` }).catch(() => false);
   if (src.type !== 'chat') wsPlaced();
   if (!ok) popDock(id, null, null);
 }
@@ -7760,8 +7795,8 @@ function popDock(id, state, bounds) {
 }
 // The main window started again (Ctrl+R, a restart): pop-outs that closed meanwhile dock back now.
 async function popSync() {
-  if (!canPop() || !popped.length) return;
-  const open = new Set(await window.ohDesktop.popout('list').catch(() => []) || []);
+  if (!canPop() || !popped.length || !DESK) return; // a browser can't list its windows after a reload: they dock back as they close
+  const open = new Set(await popCall('list').catch(() => []) || []);
   for (const e of [...popped]) if (!open.has(e.id)) popDock(e.id, null, null);
 }
 if (!POP) window.ohDesktop?.on?.((ev) => {
@@ -7792,7 +7827,7 @@ function popState() {
     const g = POP.rec && WS.findGroup(WK.lay, POP.rec.gid), a = g && areaOf(g.id);
     const files = g ? Object.fromEntries(g.tabs.filter(isFileTab).map((t) => [t, WS.tabKind('viewer').save(WK.tabs.get(t)?.st || {})])) : {};
     const state = { rec: g ? { tabs: g.tabs, active: g.active } : null, files, st: a ? { bActive: a.st.bActive || null, termTf: a.st.termTf || null } : {}, btabs: projTabs(POP.project).map(({ sid, url, title }) => ({ sid, url: url || '', title: title || '' })) };
-    window.ohDesktop?.popout?.('state', POP.id, state).catch(() => {});
+    popCall('state', POP.id, state).catch(() => {});
   }, 250);
 }
 async function popBoot() {
@@ -7803,7 +7838,7 @@ async function popBoot() {
   bar.className = 'pop-bar';
   bar.innerHTML = `<span class="pop-ico" aria-hidden="true">🗗</span><b class="pop-name"></b><span class="pop-sp"></span><button type="button" class="pv-btn pop-dock" title="Put this back in the main window (closing this window does the same)">⧉ Dock back</button>`;
   $('.pop-name', bar).textContent = POP.title || '';
-  $('.pop-dock', bar).onclick = () => window.ohDesktop?.popout?.('dock', POP.id);
+  $('.pop-dock', bar).onclick = () => popCall('dock', POP.id);
   document.body.prepend(bar);
   document.body.dataset.mview = POP.rec ? 'preview' : 'chat';
   await showChat(POP.chat);
@@ -7940,7 +7975,7 @@ function pinItems(a) {
 }
 // ⋯ on a group's strip: split it, move its tab, maximise, follow the agent, close.
 function wsGroupMenu(e, a) {
-  if (POP) return popMenu(e, [['⧉ Dock back into the main window', () => window.ohDesktop?.popout?.('dock', POP.id)]]);
+  if (POP) return popMenu(e, [['⧉ Dock back into the main window', () => popCall('dock', POP.id)]]);
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), tab = inArea(a, () => (G.view.ftab ? { type: 'file', tid: G.view.ftab } : { type: 'pane', tab: paneTab(), from: a }));
   const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
   popMenu(e, [
@@ -7959,7 +7994,7 @@ function wsGroupMenu(e, a) {
 }
 // Right-click on a tab: split it off, move it to another group, keep or close a file.
 function wsTabMenu(e, a, src) {
-  if (POP) { const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null; return popMenu(e, [...(st?.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ...(st ? [['Close', () => wsCloseFileTab(src.tid)]] : []), ['⧉ Dock back into the main window', () => window.ohDesktop?.popout?.('dock', POP.id)]]); }
+  if (POP) { const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null; return popMenu(e, [...(st?.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ...(st ? [['Close', () => wsCloseFileTab(src.tid)]] : []), ['⧉ Dock back into the main window', () => popCall('dock', POP.id)]]); }
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), phone = isPhone();
   const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null, name = st ? baseName(st.f?.label || st.f?.name || 'File') : PANE_TAB_NAMES[src.tab] || 'Tab';
   const capped = { disabled: cap || phone, title: cap ? CAP_TIP : '' };
