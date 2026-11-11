@@ -420,7 +420,7 @@ test('workspace W4: where things open: one rule set, never in a chat group', () 
   assert.notEqual(W.openTarget('steps', { lay, rects, shows, chat: 'b', owner: { g1: 'a', g2: 'a', g3: 'b' }, chatGroup: 'chat2' }), 'g2');
   // Files: the nearest group to where you clicked; a side question or Changes: beside its chat.
   assert.equal(W.openTarget('file', { lay, rects, from: 'g3' }), 'g3');
-  assert.equal(W.openTarget('changes', { lay, rects: { ...rects, g2: { x: 220, y: 0, w: 100, h: 50 } }, chatGroup: 'chat2' }), 'g2');
+  assert.equal(W.openTarget('changes', { lay, rects, chatGroup: 'chat2' }), 'g2');
   // Never a chat group, whatever is asked.
   for (const k of ['server', 'steps', 'file', 'page', 'side', 'changes']) assert.ok(!W.isChatGroup(W.openTarget(k, { lay, rects, from: 'chat', shows, chat: 'a' })), k);
   assert.equal(W.openTarget('file', { lay: W.createLayout(W.group('chat', ['chat:a'])) }), null);
