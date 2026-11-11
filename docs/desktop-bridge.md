@@ -44,11 +44,13 @@ All calls return a promise.
 | `storage` | Settings → Storage: measure, clear, and the app's own cleanup rules | `'measure'` · `'clear'`, `[parts]` · `'rules'`, `{ updateCleanup, agentCacheOnStart }` | per step |
 | `openHome` | Opens the data folder in File Explorer | | `true` |
 | `focusWindow` | Brings the window forward (a clicked notification) | | `true` |
-| `notify` | A Windows notification; clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `notify` | A Windows notification (a newer one for the same chat replaces the older); clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `badge` | The taskbar icon's badge: how many chats need you, drawn by the page | count, a PNG data URL (nothing at 0) | `true` |
 | `zoom` | QuorX's own zoom, remembered between starts | `'in' \| 'out' \| 'reset' \| 'get'` | the zoom factor |
 | `openExternal` | Opens a web address in your own browser | `url` (http or https only) | `true` |
 | `showFile` | Shows a downloaded file in File Explorer | a path inside Downloads | `true` |
 | `perf` | The performance readout: every process with memory and processor, each tab, lost 3D views | | `{ totalMb, appMb, gpuMb, tabsMb, cpu, gpuCpu, procs, tabs, webglLost }` |
+| `navButtons` | Always `true` (a value, not a call): the mouse's side buttons arrive as `ws-nav` events, so the page ignores its own | | `true` |
 | `on` | Listens to the shell's events (below) | `fn(event)` | a function that stops listening |
 
 ## Events
@@ -72,6 +74,7 @@ Sent on the `oh-desktop` channel; each has a `type`.
 | `notify-click` | A notification was clicked, or the extension asked to open a chat (`chatId`) |
 | `zoom-key` | Ctrl + / − / 0 was pressed in the window; the page decides what it zooms (`dir`) |
 | `zoom-wheel` | Ctrl+wheel in the window (`dir`) |
+| `ws-nav` | The mouse's back or forward button, with the pointer and focus outside your browser tabs: the page steps back or forward through the workspace (`dir`: `back` or `forward`). Inside a tab the shell takes that page back or forward itself |
 | `update` | The update state changed (the same object `update('state')` returns) |
 
 ## For another shell

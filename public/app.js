@@ -6740,7 +6740,6 @@ const planArts = (c) => Object.values(c?.agent?.artifacts || {}).filter((a) => a
 function openInBrowser(c, url) {
   if (focused() === c) aimArea('browser');
   if (!c || !url) return;
-  if (focused() === c) wsSeen('tab', WS.tabId('browser', AREA.gid), { chat: c.id });
   let origin = url; try { origin = new URL(url, location.href).origin; } catch { /* keep as is */ }
   const t = projTabs(c.projectId).find((x) => { try { return x.url && new URL(x.url, location.href).origin === origin; } catch { return false; } });
   if (t) { Object.assign(t, { url, opened: null, shot: null }); G.bActive = t.sid; } else newBTab(c.projectId, url);
@@ -7019,10 +7018,10 @@ function paneFocus(a) {
   deskPlace(true);
 }
 // Something asks the pane for one of its tabs (the agent browsing, 🧭 Steps on a reply): an area already showing it takes it.
+// Also a step for back / forward: the Browser or Terminal brought to the front (opening a page, a server's output).
 function aimArea(tab) {
-  if (!paneSplit() || paneTab() === tab) return;
-  const a = PA.list.find((x) => inArea(x, paneTab) === tab);
-  if (a) paneFocus(a);
+  if (paneSplit() && paneTab() !== tab) { const a = PA.list.find((x) => inArea(x, paneTab) === tab); if (a) paneFocus(a); }
+  const c = focused(); if (c) wsSeen('tab', WS.tabId(WS.PANE_KINDS[tab] || 'artifact', AREA.gid), { chat: c.id });
 }
 function paneView(c, tab, id = G.view?.id ?? null) {
   if (tab === 'trace') {
@@ -11234,7 +11233,6 @@ setInterval(pollDev, 3000);
 // above or below and resized by dragging the bar between them), what is Running (each with a Stop), and the Servers.
 function openTerminal(c, filter, sec = 'term') {
   if (focused() === c) aimArea('term');
-  if (focused() === c) wsSeen('tab', WS.tabId('terminal', AREA.gid), { chat: c.id });
   const t = termState(c.projectId);
   if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
   t.sec = sec; termSave(t);
