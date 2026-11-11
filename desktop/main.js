@@ -933,6 +933,17 @@ async function linkLoop() {
   }
 }
 
+// ---------- what the harness is working on (keep-awake, the quit prompt) ----------
+// { replies, servers, commands } from the harness (server/running.js busyNow), or null when it can't be asked
+// (restarting, or an older harness): then nothing is held awake and quitting asks nothing extra.
+async function fetchBusy() {
+  if (!origin) return null;
+  try {
+    const r = await fetch(`${origin}/api/busy`, { headers: keyed(), signal: AbortSignal.timeout(1500) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+
 // The (hidden) menu, without Electron's zoom shortcuts: Ctrl + / − / 0 are QuorX's own (the app, each browser tab,
 // the terminal), and the menu's would zoom the app a second time.
 function appMenu() {
