@@ -411,3 +411,15 @@ test('workspace W3: a second chat in a group of its own; only some groups shown;
   const back = W.parse(W.serialise(lay, {}, [], { pins: { g1: 'b', g9: 'c', chat: '' } }));
   assert.deepEqual(back.pins, { g1: 'b' });
 });
+
+test('shortcuts: find (Ctrl+F) and search inside chats (Ctrl+Shift+F) are on the table and can be changed; Settings-only keys never clash', () => {
+  const def = K.bindings({});
+  assert.equal(K.actionFor('Ctrl+F', def), 'find');
+  assert.equal(K.actionFor('Ctrl+Shift+F', def), 'chatsearch');
+  assert.equal(K.clashWith('find', 'Ctrl+F', def), null, 'Settings keeps its own Ctrl+F apart');
+  assert.equal(K.clashWith('tab.close', 'Ctrl+Shift+F', def).id, 'chatsearch');
+  const mine = K.bindings({ keys: { find: 'Ctrl+Alt+F' } });
+  assert.equal(K.actionFor('Ctrl+Alt+F', mine), 'find');
+  assert.equal(K.actionFor('Ctrl+F', mine), null);
+  assert.equal(K.conflicts(def).size, 0);
+});

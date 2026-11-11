@@ -17,6 +17,9 @@ const tabJumps = Array.from({ length: 9 }, (_, i) => ({
  */
 export const SHORTCUTS = [
   { id: 'palette', group: 'find', keys: 'Ctrl+K', label: 'Search chats, commands, settings and files' },
+  { id: 'chatsearch', group: 'find', keys: 'Ctrl+Shift+F', label: 'Search inside chats', help: 'Your messages and the agent’s replies, with filters. Also from the search box.' },
+  { id: 'find', group: 'find', keys: 'Ctrl+F', label: 'Find in the tab you are using', help: 'The chat you are typing in, or the group you used last. Inside a page of the Browser tab, Ctrl+F always finds in that page.' },
+  { id: 'find.step', group: 'find', keys: 'Enter', label: 'Next match (Shift+Enter: the one before)', fixed: true, help: 'In the find bar. Esc closes it.' },
   { id: 'tab.next', group: 'tabs', keys: 'Ctrl+Tab', label: 'Next chat tab' },
   { id: 'tab.prev', group: 'tabs', keys: 'Ctrl+Shift+Tab', label: 'Previous chat tab' },
   ...tabJumps,
@@ -24,6 +27,7 @@ export const SHORTCUTS = [
   { id: 'tab.reopen', group: 'tabs', keys: 'Ctrl+Shift+T', label: 'Reopen the last closed tab', help: 'A chat, an area, a file or a page.' },
   { id: 'nav.back', group: 'move', keys: 'Alt+ArrowLeft', label: 'Back', help: 'To what was in front before. Inside a page of the Browser tab, Alt+← goes back in that page.' },
   { id: 'nav.forward', group: 'move', keys: 'Alt+ArrowRight', label: 'Forward' },
+  { id: 'groups.resize', group: 'move', keys: '← → ↑ ↓', label: 'Resize groups', fixed: true, help: 'With the bar between two groups focused.' },
   { id: 'nav.mouse', group: 'move', keys: 'Mouse back / forward', label: 'Back and forward with the mouse\'s side buttons', fixed: true, help: 'Over a page of the Browser tab they go back in that page.' },
   { id: 'mic', group: 'mic', keys: 'Ctrl+,', label: 'Speak into the message box', setting: 'micKey', help: 'Starts while you are typing in a chat\'s message box. Toggle or hold: see How the key works below.' },
   { id: 'send', group: 'typing', keys: 'Enter', label: 'Send', fixed: true },
@@ -32,8 +36,8 @@ export const SHORTCUTS = [
   { id: 'command', group: 'typing', keys: '/', label: 'Commands (/usage, /model, /strict, …)', fixed: true, help: 'At the start of the message box.' },
   { id: 'suggest', group: 'typing', keys: '↑ ↓ then Enter or Tab', label: 'Pick a suggestion', fixed: true },
   { id: 'escape', group: 'typing', keys: 'Escape', label: 'Close a dialog or suggestions', fixed: true },
-  { id: 'settings.filter', group: 'settings', keys: 'Ctrl+F', label: 'Filter the open Settings list', fixed: true, help: 'While Settings is open.' },
-  { id: 'settings.search', group: 'settings', keys: '/', label: 'Search every setting', fixed: true, help: 'While Settings is open and you are not typing.' },
+  { id: 'settings.filter', group: 'settings', keys: 'Ctrl+F', label: 'Filter the open Settings list', fixed: true, where: 'settings', help: 'While Settings is open.' },
+  { id: 'settings.search', group: 'settings', keys: '/', label: 'Search every setting', fixed: true, where: 'settings', help: 'While Settings is open and you are not typing.' },
   { id: 'zoom.in', group: 'zoom', keys: 'Ctrl+=', label: 'Zoom in', fixed: true, help: 'QuorX, the terminal\'s text or a page, whichever has the focus. Ctrl+wheel too.' },
   { id: 'zoom.out', group: 'zoom', keys: 'Ctrl+-', label: 'Zoom out', fixed: true },
   { id: 'zoom.reset', group: 'zoom', keys: 'Ctrl+0', label: 'Back to 100%', fixed: true },
@@ -89,11 +93,14 @@ export function checkCombo(combo) {
   if (!fkey && !parts.some((p) => p === 'Ctrl' || p === 'Alt' || p === 'Meta')) return { ok: false, error: 'Use Ctrl or Alt with a key (or an F key), so typing never sets it off.' };
   return SYSTEM[c] ? { ok: true, warn: `${c} also ${SYSTEM[c]}: here it runs this shortcut instead.` } : { ok: true };
 }
-/** Another shortcut that already has these keys (the clash that refuses a change): its entry, or null. */
+/**
+ * Another shortcut that already has these keys (the clash that refuses a change): its entry, or null. Keys that only
+ * work inside Settings (where: 'settings') don't clash with the app's, which are off while Settings is open.
+ */
 export function clashWith(id, combo, map) {
   const c = normCombo(combo);
   if (!c) return null;
-  for (const [other, k] of map) if (other !== id && k === c) return byId.get(other);
+  for (const [other, k] of map) if (other !== id && k === c && (byId.get(other)?.where || '') === (byId.get(id)?.where || '')) return byId.get(other);
   return null;
 }
 /** Shortcuts that share keys right now (e.g. from an older settings file): Map id → the other entries. */
