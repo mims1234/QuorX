@@ -13,7 +13,7 @@ import { spawn, execFile, spawnSync } from 'node:child_process';
 import { projectDir, listProjects } from './store.js';
 import { SECRET_FILES } from './keys.js';
 import { projectEnv } from './projectsecrets.js';
-import { termEvent, lineSplitter, newJob, endJob } from './terminal.js';
+import { termEvent, lineSplitter, newJob, endJob, markJob } from './terminal.js';
 import { jobsAvailable, adoptPid, jobCount, killJob, closeJob, releaseJob, keepOnClose, startDetached } from './jobhost.js';
 import { snapshot, changesSince, objectFor, pruneObjects, snapshotAsync, changesSinceAsync, pruneObjectsAsync } from './snapshot.js';
 import { freshPath } from './userenv.js';
@@ -391,7 +391,7 @@ export function runLine(root, line, { shell = 'direct', timeout = 180e3, signal,
       let stopping = null, timedOut = false;
       const stop = (why) => (stopping ??= endProc(proc).then((r) => ({ ...r, why })));
       const job = term ? newJob(term.projectId, label, term.source, () => stop('you'), { chatId: term.chatId, tab: term.tab }) : null;
-      if (job) onJob?.(job);
+      if (job) { markJob(job, { qxJob: proc.qxJob || null, pid: proc.pid || 0 }); onJob?.(job); } // the Running list reads its use and can kill it
       const split = lineSplitter((text, stream) => termEvent(term.projectId, { kind: 'out', job, text, stream }));
       if (job) termEvent(term.projectId, { kind: 'start', job, source: term.source, chatId: term.chatId, label, tab: term.tab, cwd: term.cwd });
       let log = null;
@@ -535,6 +535,8 @@ export async function forgetServer(projectId, name, by = 'you') {
   servers.delete(key);
   return true;
 }
+/** A running server's process (its Windows job and pid), for the Running list's CPU and memory and its Kill. */
+export const serverProc = (key) => { const p = servers.get(key)?.proc; return p ? { qxJob: p.qxJob || null, pid: p.pid || 0, exited: p.exitCode != null || p.signalCode != null } : null; };
 export const listServers = (projectId) => [...servers.values()].filter((s) => !projectId || s.projectId === projectId).map(view);
 export const serverLog = (key) => servers.get(key)?.log.slice(-200).join('\n') ?? '';
 export const serverFor = (projectId, name) => servers.get(`${projectId}/${slug(name)}`);

@@ -131,3 +131,13 @@
 .sf-adv-title { font: 700 13px var(--font-ui); color: var(--text); }
 .sf-adv-sub { font-size: 11.5px; color: var(--muted); min-width: 0; }
 .sf-adv-body { display: flex; flex-direction: column; gap: 18px; margin-top: 18px; }
+
+/* CPU and memory on a running row (useHTML in app.js): plain numbers in the row's top line, not a tag or a button.
+   Heavy use turns amber. Kill (only after a Stop left processes, or hangs) is filled red so it differs from Stop. */
+.run-use-slot { flex: none; display: inline-flex; }
+.run-use-slot:empty { display: none; }
+.run-use { display: inline-flex; align-items: baseline; gap: 8px; font: 11.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.run-use .use-cpu { min-width: 6.5ch; text-align: right; }
+.run-use.hot { color: var(--warn); }
+.run-acts .run-kill { color: #fff; background: var(--bad); border: 1px solid var(--bad); font-weight: 600; }
+.run-acts .run-kill:hover:not(:disabled) { filter: brightness(1.1); }
