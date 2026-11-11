@@ -508,8 +508,9 @@ function paletteItems(q) {
   const out = [];
   const chats = [...G.chats].filter((x) => x.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
   for (const x of (words.length ? chats : chats.slice(0, 6))) if (hit(`${x.title} ${projName(x.projectId)}`)) out.push({ group: 'Chats', icon: '💬', label: x.title, hint: `${projName(x.projectId)} · ${ago(x.lastAt || Date.now())}`, run: () => showChat(x.id) });
+  if (q.length >= 2 && PAL.msgs?.q === q) out.push(...PAL.msgs.items); // inside chats: asked of the server as you type
   for (const [k, desc, fn] of COMMANDS) if ((c || PAL_GLOBAL.has(k)) && hit(`/${k} ${desc}`)) out.push({ group: 'Commands', icon: '⚡', label: `/${k}`, hint: desc, run: () => (c ? runCommand(c, `/${k}`) : fn(null, '')) });
-  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
+  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', 'Your messages and the agent’s replies · Ctrl+Shift+F', () => openChatSearch(q)], ['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
   for (const [icon, label, hint, run] of acts) if (hit(`${label} ${hint}`)) out.push({ group: 'Actions', icon, label, hint, run });
   if (words.length) for (const p of G.projects) if (hit(`${p.name} new chat project`)) out.push({ group: 'Projects', icon: '📁', label: `New chat in ${p.name}`, hint: `${p.spent ? `$${p.spent.toFixed(3)} spent` : 'project'}`, run: () => newChat(p.id) });
   for (const [group, items] of SETTINGS_NAV) for (const [id, icon, label] of items) if (words.length && hit(`${label} settings ${group}`)) out.push({ group: 'Settings', icon, label, hint: `⚙ Settings · ${group}`, run: () => openSettings(id) });
@@ -535,22 +536,23 @@ function paletteDialog() {
     </div>`;
   document.body.appendChild(d);
   const input = $('#palInput', d);
-  input.oninput = () => drawPalette();
+  input.oninput = () => { drawPalette(); paletteMessages(input.value.trim()); };
   input.onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); $('#palette').close(); openChatSearch(input.value.trim()); return; }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); PAL.active = (PAL.active + (e.key === 'ArrowDown' ? 1 : -1) + PAL.items.length) % Math.max(1, PAL.items.length); paintActive(); }
     if (e.key === 'Enter') { e.preventDefault(); runPalette(PAL.active); }
   };
   d.addEventListener('mousedown', (e) => { if (e.target === d) d.close(); });
   return d;
 }
-function drawPalette() {
-  const q = $('#palInput').value.trim(), list = $('#palList');
-  PAL.items = paletteItems(q); PAL.active = 0;
+function drawPalette({ keep = false } = {}) {
+  const q = $('#palInput').value.trim(), list = $('#palList'), was = PAL.active;
+  PAL.items = paletteItems(q); PAL.active = keep && was < PAL.items.length ? was : 0;
   let last = '';
   list.innerHTML = PAL.items.length ? PAL.items.map((it, i) => {
     const head = it.group !== last ? `<div class="pal-group" role="presentation">${esc(it.group)}</div>` : '';
     last = it.group;
-    return `${head}<div class="pal-item" role="option" id="pal-${i}" data-i="${i}" aria-selected="false"><span class="pal-ico" aria-hidden="true">${esc(it.icon)}</span><span class="pal-label">${esc(it.label)}</span><span class="pal-hint">${esc(it.hint || '')}</span></div>`;
+    return `${head}<div class="pal-item ${it.cls || ''}" role="option" id="pal-${i}" data-i="${i}" aria-selected="false"><span class="pal-ico" aria-hidden="true">${esc(it.icon)}</span><span class="pal-label">${it.html ?? esc(it.label)}</span><span class="pal-hint">${esc(it.hint || '')}</span></div>`;
   }).join('') : `<div class="pal-empty">Nothing matches “${esc(q)}”.</div>`;
   for (const el of list.querySelectorAll('.pal-item')) {
     el.onmousemove = () => { if (PAL.active !== +el.dataset.i) { PAL.active = +el.dataset.i; paintActive(false); } };
@@ -573,7 +575,7 @@ function runPalette(i) {
 }
 function openPalette() {
   const d = paletteDialog(), c = focused();
-  PAL.files = null;
+  PAL.files = null; PAL.msgs = null;
   if (c) projectFiles(c.projectId).then((f) => { PAL.files = f; if (d.open && $('#palInput').value.trim()) drawPalette(); }).catch(() => {});
   $('#palInput', d).value = '';
   drawPalette();
@@ -696,6 +698,273 @@ async function showSkills(c) {
   const off = new Set(G.settings.skillsOff || []);
   uiAlert(list.length ? list.map((k) => `${off.has(k.name) ? '✕' : '✓'} ${k.name} (${k.source}): ${k.description}`).join('\n') + '\n\nSwitch skills on or off in ⚙ Settings.' : 'No skills yet.');
 }
+
+// ---------- search inside chats: Ctrl+K's Messages group, the Search chats window (Ctrl+Shift+F), and the jump ----------
+// Titles alone don't find "the chat where we fixed the login" once there are dozens. The server searches what you wrote
+// and what the agent answered in every saved chat (server/chatsearch.js; never tool output, never the trash). Ctrl+K
+// shows the best few under its chat titles; Ctrl+Shift+F opens a window with filters and every match, grouped by chat.
+// Either opens the chat scrolled to the message, with the words lit up for a moment.
+const CS_PAGE = 20;
+const csWords = (q) => String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+// A snippet from the server, its matches in <mark>.
+function markSnippet(h) {
+  let out = '', at = 0;
+  for (const [a, b] of h.marks || []) { out += esc(h.snippet.slice(at, a)) + `<mark>${esc(h.snippet.slice(a, b))}</mark>`; at = b; }
+  return out + esc(h.snippet.slice(at));
+}
+// For a one-line row: the snippet from a few words before its first match, so the match is in view.
+function leadSnippet(h, before = 28) {
+  const first = h.marks?.[0]?.[0] || 0;
+  if (first <= before) return h;
+  let s = first - before;
+  const sp = h.snippet.indexOf(' ', s);
+  if (sp >= 0 && sp < first) s = sp + 1;
+  return { ...h, snippet: '…' + h.snippet.slice(s), marks: h.marks.map(([a, b]) => [a - s + 1, b - s + 1]) };
+}
+const csHitIcon = (h) => (h.role === 'user' ? '🧑' : '🤖');
+const csWhen = (t) => (t ? ago(t) : '');
+// Ctrl+K: a moment after you stop typing (2+ characters), the best match in each of a few chats.
+let palMsgTimer = 0, palMsgSeq = 0;
+function paletteMessages(q) {
+  clearTimeout(palMsgTimer);
+  if (q.length < 2) { PAL.msgs = null; return; }
+  const seq = ++palMsgSeq;
+  palMsgTimer = setTimeout(async () => {
+    const r = await getJ(`/api/search/chats?q=${encodeURIComponent(q)}&limit=6&per=1`);
+    if (seq !== palMsgSeq || !$('#palette')?.open || $('#palInput').value.trim() !== q || r.error) return;
+    const items = (r.chats || []).map((c) => ({ group: 'Messages', cls: 'pal-msg', icon: csHitIcon(c.hits[0]), html: markSnippet(leadSnippet(c.hits[0])), label: c.hits[0].snippet,
+      hint: `${c.title} · ${c.project}`, run: () => openChatAt(c.id, c.hits[0].i, q) }));
+    items.push({ group: 'Messages', cls: 'pal-more', icon: '🔎', label: items.length ? 'Every match, with filters' : 'No messages match: search with filters', hint: 'Ctrl+Shift+F', run: () => openChatSearch(q) });
+    PAL.msgs = { q, items };
+    drawPalette({ keep: true });
+  }, 180);
+}
+
+// Opens a chat at one of its messages: drawn if it is far up a long chat, scrolled to the middle, its words lit up.
+async function openChatAt(id, i, q) {
+  await showChat(id);
+  closeDrawer(); if (isPhone()) setMView('chat');
+  const c = G.open.get(id);
+  for (let n = 0; n < 90 && c && !c.el?.root?.isConnected; n++) await new Promise((r) => requestAnimationFrame(r));
+  if (!c?.el) return;
+  const words = csWords(q), msgs = c.agent.messages;
+  const has = (m) => m && (m.role === 'user' || m.role === 'assistant') && words.every((w) => String(m.content || '').toLowerCase().includes(w));
+  // The message at that place, unless the chat changed since it was searched: then the first one that matches.
+  const m = has(msgs[i]) ? msgs[i] : msgs.find(has) || msgs[i];
+  if (!m) return;
+  if (!m.el?.isConnected) c.drawTo?.(m);
+  if (!m.el?.isConnected) return;
+  c.follow = false; // or the chat would jump back to its newest message
+  m.el.scrollIntoView({ block: 'center' });
+  flashMatch(m.el, words);
+}
+// The words lit up in the message (CSS highlights: the message itself is not changed), and the message outlined,
+// for a few seconds.
+function flashMatch(el, words) {
+  el.classList.remove('msg-hit'); void el.offsetWidth; el.classList.add('msg-hit');
+  clearTimeout(flashMatch.t);
+  flashMatch.t = setTimeout(() => { el.classList.remove('msg-hit'); CSS.highlights?.delete('qx-hit'); }, 3200);
+  if (!window.CSS?.highlights || !window.Highlight || !words.length) return;
+  const ranges = [], walk = document.createTreeWalker($('.utext, .body', el) || el, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode()) && ranges.length < 80;) {
+    const low = n.data.toLowerCase();
+    if (low.length !== n.data.length) continue; // a letter whose lower case is longer: places would be off
+    for (const w of words) for (let at = low.indexOf(w); at >= 0; at = low.indexOf(w, at + w.length)) { const r = new Range(); r.setStart(n, at); r.setEnd(n, at + w.length); ranges.push(r); }
+  }
+  CSS.highlights.set('qx-hit', new Highlight(...ranges));
+}
+
+// The Search chats window. What you picked stays while QuorX is open.
+const CS = { q: '', scope: 'all', who: '', when: 'any', from: '', to: '', archived: false, seq: 0, offset: 0, more: false, titles: [], chats: [], busy: false, active: 0, nav: [] };
+const CS_SCOPE = [['project', 'This project'], ['all', 'All projects']];
+const CS_WHO = [['', 'Anyone'], ['user', 'From you'], ['agent', 'From the agent']];
+const CS_WHEN = [['any', 'Any time'], ['today', 'Today'], ['7', '7 days'], ['30', '30 days'], ['custom', 'Dates…']];
+const csProject = () => focused()?.projectId || (G.homeDraft && G.landingProject) || '';
+function csRange() {
+  const day = new Date(new Date().toDateString()).getTime();
+  if (CS.when === 'today') return { from: day };
+  if (CS.when === '7' || CS.when === '30') return { from: Date.now() - Number(CS.when) * 864e5 };
+  if (CS.when !== 'custom') return {};
+  const at = (v, end) => { if (!v) return 0; const [y, m, d] = v.split('-').map(Number); return new Date(y, m - 1, d + (end ? 1 : 0)).getTime() - (end ? 1 : 0); };
+  return { from: at(CS.from, false), to: at(CS.to, true) };
+}
+const csSeg = (key, opts, label, tip) => `<div class="cs-seg" role="radiogroup" aria-label="${esc(label)}" data-cs="${key}" title="${esc(tip)}">${opts.map(([v, l]) => `<button type="button" class="cs-seg-btn ${CS[key] === v ? 'active' : ''}" role="radio" aria-checked="${CS[key] === v}" tabindex="${CS[key] === v ? 0 : -1}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+function chatSearchDialog() {
+  let d = $('#chatFind');
+  if (d) return d;
+  d = document.createElement('dialog');
+  d.id = 'chatFind'; d.className = 'pal cs';
+  d.setAttribute('aria-label', 'Search chats');
+  d.innerHTML = `<div class="pal-box cs-box">
+      <label class="pal-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+        <input id="csInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search your messages and the agent’s replies…" aria-label="Search chats" role="combobox" aria-expanded="true" aria-controls="csList"></label>
+      <div class="cs-filters"></div>
+      <div class="cs-narrow"></div>
+      <div class="pal-list cs-list" id="csList" role="listbox" aria-label="Matches"></div>
+      <div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Alt</kbd>+<kbd>P</kbd> project</span><span><kbd>Alt</kbd>+<kbd>F</kbd> from</span><span><kbd>Alt</kbd>+<kbd>D</kbd> date</span><span><kbd>Esc</kbd> close</span></div>
+    </div>`;
+  document.body.appendChild(d);
+  const input = $('#csInput', d);
+  let t = 0;
+  input.oninput = () => { CS.q = input.value.trim(); clearTimeout(t); t = setTimeout(() => runChatSearch(), 200); };
+  d.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (e.altKey && !e.ctrlKey && !e.metaKey && ['p', 'f', 'd', 'a'].includes(k)) {
+      e.preventDefault();
+      if (k === 'a') { if (CS.scope === 'all') { CS.archived = !CS.archived; csChanged(); } return; }
+      const [key, opts] = { p: ['scope', CS_SCOPE], f: ['who', CS_WHO], d: ['when', CS_WHEN] }[k];
+      const vals = opts.map(([v]) => v).filter((v) => key !== 'scope' || v !== 'project' || csProject());
+      CS[key] = vals[(vals.indexOf(CS[key]) + 1) % vals.length];
+      csChanged(key === 'when' && CS.when === 'custom' ? '.cs-from' : null);
+      return;
+    }
+    if (e.target === input || e.target.closest('.cs-list')) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); csMove(e.key === 'ArrowDown' ? 1 : -1); }
+      else if (e.key === 'Home' && e.target !== input) { e.preventDefault(); csMove(-1e6); }
+      else if (e.key === 'End' && e.target !== input) { e.preventDefault(); csMove(1e6); }
+      else if (e.key === 'Enter') { e.preventDefault(); csRun(CS.active); }
+    }
+  });
+  d.addEventListener('mousedown', (e) => { if (e.target === d) d.close(); });
+  // More as you scroll to the end.
+  $('#csList', d).addEventListener('scroll', (e) => { const l = e.target; if (CS.more && !CS.busy && l.scrollHeight - l.scrollTop - l.clientHeight < 120) runChatSearch({ next: true }); }, { passive: true });
+  return d;
+}
+// The filters: where, who wrote it, when. Each is a segmented control (← → inside it, or Alt+its letter from anywhere).
+function drawChatSearchFilters(focusSel) {
+  const box = $('#chatFind .cs-filters'), here = csProject(), pname = G.projects.find((p) => p.id === here)?.name;
+  if (!here && CS.scope === 'project') CS.scope = 'all';
+  box.innerHTML = `${csSeg('scope', CS_SCOPE, 'Where', 'Where to search (Alt+P)')}
+    ${CS.scope === 'all' ? `<label class="sq-check cs-arch" title="Archived projects are left out, as in the sidebar (Alt+A)"><input type="checkbox" ${CS.archived ? 'checked' : ''}><span>Archived too</span></label>` : `<span class="cs-proj" title="The project of the chat you have open">${esc(pname || '')}</span>`}
+    ${csSeg('who', CS_WHO, 'Written by', 'Who wrote it (Alt+F)')}
+    ${csSeg('when', CS_WHEN, 'When', 'When it was written (Alt+D)')}
+    ${CS.when === 'custom' ? `<span class="cs-dates"><input type="date" class="cs-from" aria-label="From" value="${esc(CS.from)}"><span aria-hidden="true">–</span><input type="date" class="cs-to" aria-label="To" value="${esc(CS.to)}"></span>` : ''}`;
+  const projBtn = $('[data-cs="scope"] [data-v="project"]', box);
+  if (!here) { projBtn.disabled = true; projBtn.title = 'Open a chat to search its project only'; }
+  for (const g of box.querySelectorAll('.cs-seg')) {
+    const key = g.dataset.cs, btns = [...g.querySelectorAll('.cs-seg-btn')];
+    const pick = (b) => { if (b.disabled || CS[key] === b.dataset.v) return; CS[key] = b.dataset.v; csChanged(`[data-cs="${key}"] .cs-seg-btn.active`); };
+    for (const b of btns) b.onclick = () => pick(b);
+    g.onkeydown = (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const on = btns.filter((b) => !b.disabled), at = on.findIndex((b) => b.dataset.v === CS[key]);
+      pick(on[(at + (e.key === 'ArrowRight' ? 1 : -1) + on.length) % on.length]);
+    };
+  }
+  const arch = $('.cs-arch input', box);
+  if (arch) arch.onchange = () => { CS.archived = arch.checked; csChanged('.cs-arch input'); };
+  for (const [sel, key] of [['.cs-from', 'from'], ['.cs-to', 'to']]) { const el = $(sel, box); if (el) el.onchange = () => { CS[key] = el.value; runChatSearch(); }; }
+  if (focusSel) $(focusSel, box)?.focus();
+}
+function csChanged(focusSel) { drawChatSearchFilters(focusSel); runChatSearch(); }
+async function runChatSearch({ next = false } = {}) {
+  const q = CS.q, seq = next ? CS.seq : ++CS.seq;
+  // A new search keeps the last results on screen (dimmed) until its own arrive, so nothing flickers as you type.
+  if (!next) { CS.offset = 0; CS.more = false; CS.active = 0; if (ST.filters?.['chat-search']) ST.filters['chat-search'].seg = 'all'; }
+  if (q.length < 2) { CS.busy = false; CS.titles = []; CS.chats = []; return drawChatSearch(); }
+  CS.busy = true; drawChatSearch();
+  const { from, to } = csRange(), p = new URLSearchParams({ q, limit: CS_PAGE, per: 5, offset: CS.offset });
+  if (CS.scope === 'project' && csProject()) p.set('project', csProject());
+  else if (CS.archived) p.set('archived', '1');
+  if (CS.who) p.set('role', CS.who);
+  if (from) p.set('from', from);
+  if (to) p.set('to', to);
+  const r = await getJ(`/api/search/chats?${p}`);
+  if (seq !== CS.seq || !$('#chatFind')?.open) return;
+  CS.busy = false;
+  if (r.error) { CS.error = r.error; CS.titles = []; CS.chats = []; return drawChatSearch(); }
+  CS.error = '';
+  if (!next) { CS.titles = r.titles || []; CS.chats = []; }
+  CS.chats = CS.chats.concat(r.chats || []); CS.offset += (r.chats || []).length; CS.more = !!r.more;
+  drawChatSearch();
+  // The first searches after QuorX starts may stop early while older chats are still being read: carry on.
+  if (r.partial && CS.more && CS.chats.length < CS_PAGE) runChatSearch({ next: true });
+}
+// Title matches first, then the chats with matching messages, each message under its chat. The shared list filter
+// narrows them by project once there are results from more than one.
+function drawChatSearch() {
+  const list = $('#csList'), q = CS.q;
+  if (!list) return;
+  const nav = [];
+  const row = (cls, icon, html, hint, run, extra = '') => { nav.push(run); return `<div class="pal-item cs-nav ${cls}" role="option" id="cs-${nav.length - 1}" data-n="${nav.length - 1}" aria-selected="false"${extra}><span class="pal-ico" aria-hidden="true">${icon}</span><span class="pal-label">${html}</span><span class="pal-hint">${hint}</span></div>`; };
+  const group = (pid, inner) => `<div class="cs-group" data-lf-seg="${esc(pid)}" data-lf-text="">${inner}</div>`;
+  let html = '';
+  if (q.length < 2) html = `<div class="pal-empty">Type 2 or more characters to search what you wrote and what the agent answered, in every chat.</div>`;
+  else {
+    if (CS.titles.length) html += `<div class="pal-group">Chat titles</div>` + CS.titles.map((c) => group(c.projectId, row('cs-title', '💬', esc(c.title), `${esc(c.project)} · ${esc(csWhen(c.lastAt))}`, () => showChat(c.id)))).join('');
+    if (CS.chats.length) html += `<div class="pal-group">Messages</div>` + CS.chats.map((c) => group(c.projectId, `<div class="cs-chat-head"><b>${esc(c.title)}</b><span class="cs-chat-proj">${esc(c.project)}</span><span class="cs-count">${c.count} match${c.count === 1 ? '' : 'es'}</span></div>`
+      + c.hits.map((h) => row('cs-hit', csHitIcon(h), markSnippet(h), esc(csWhen(h.at)), () => openChatAt(c.id, h.i, q), ` title="${h.role === 'user' ? 'You' : 'The agent'}${h.at ? ` · ${esc(new Date(h.at).toLocaleString())}` : ''}"`)).join('')
+      + (c.count > c.hits.length ? `<div class="cs-extra">+${c.count - c.hits.length} more in this chat</div>` : ''))).join('');
+    if (CS.more) html += row('cs-loadmore', '↓', CS.busy ? 'Searching…' : 'Show more', '', () => runChatSearch({ next: true }));
+    else if (CS.busy && !CS.chats.length && !CS.titles.length) html += `<div class="pal-empty">Searching…</div>`;
+    else if (CS.error) html += `<div class="pal-empty">${esc(CS.error)}</div>`;
+    else if (!CS.chats.length && !CS.titles.length) html += `<div class="pal-empty">Nothing matches “${esc(q)}”${CS.scope === 'project' ? ' in this project. <button type="button" class="sp-link cs-widen">Search all projects</button>' : CS.who || CS.when !== 'any' ? '. Try fewer filters.' : '.'}</div>`;
+  }
+  const keepScroll = list.scrollTop;
+  list.innerHTML = html;
+  list.scrollTop = keepScroll;
+  list.classList.toggle('busy', CS.busy);
+  CS.nav = nav;
+  for (const el of list.querySelectorAll('.cs-nav')) {
+    el.onmousemove = () => { if (CS.active !== +el.dataset.n) { CS.active = +el.dataset.n; csPaint(false); } };
+    el.onclick = () => csRun(+el.dataset.n);
+  }
+  const widen = $('.cs-widen', list);
+  if (widen) widen.onclick = () => { CS.scope = 'all'; csChanged(); $('#csInput').focus(); };
+  // By project: the shared list filter, its buttons made from the projects in the results (none for just one).
+  const narrow = $('#chatFind .cs-narrow');
+  const groups = list.querySelectorAll('.cs-group');
+  narrow.hidden = !groups.length;
+  if (groups.length) {
+    const names = new Map([...CS.titles, ...CS.chats].map((c) => [c.projectId, c.project]));
+    listFilter(narrow, { key: 'chat-search', search: false, rows: () => list.querySelectorAll('.cs-group'), segLabel: (v) => names.get(v) || v, label: 'Project', onApply: () => csPaint(false) });
+  }
+  csPaint(false);
+}
+const csVisible = () => [...document.querySelectorAll('#csList .cs-nav')].filter((el) => !el.closest('[hidden]'));
+function csMove(by) {
+  const vis = csVisible();
+  if (!vis.length) return;
+  const at = vis.findIndex((el) => +el.dataset.n === CS.active);
+  const to = Math.max(0, Math.min(vis.length - 1, (at < 0 ? 0 : at) + by));
+  CS.active = +vis[to].dataset.n;
+  csPaint(true);
+  if (vis[to].classList.contains('cs-loadmore') && CS.more && !CS.busy) runChatSearch({ next: true });
+}
+function csPaint(scroll = true) {
+  const vis = csVisible();
+  if (vis.length && !vis.some((el) => +el.dataset.n === CS.active)) CS.active = +vis[0].dataset.n;
+  for (const el of document.querySelectorAll('#csList .cs-nav')) {
+    const on = +el.dataset.n === CS.active && vis.includes(el);
+    el.classList.toggle('on', on); el.setAttribute('aria-selected', String(on));
+    if (on && scroll) el.scrollIntoView({ block: 'nearest' });
+  }
+  $('#csInput')?.setAttribute('aria-activedescendant', vis.length ? `cs-${CS.active}` : '');
+}
+function csRun(n) {
+  const run = CS.nav[n];
+  if (!run) return;
+  if (document.getElementById(`cs-${n}`)?.classList.contains('cs-loadmore')) return run();
+  $('#chatFind').close();
+  run();
+}
+function openChatSearch(q = '') {
+  const d = chatSearchDialog();
+  if (q) CS.q = q.trim();
+  $('#csInput', d).value = CS.q;
+  drawChatSearchFilters();
+  if (!d.open) d.showModal();
+  $('#csInput', d).focus(); $('#csInput', d).select();
+  runChatSearch();
+}
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    const d = $('#chatFind');
+    if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); }
+  }
+});
 
 // ---------- attached images: 📷, paste or drop; downscaled in the browser ----------
 function downscale(file, max = 1568) {
@@ -3514,6 +3783,7 @@ function paneHTML(c) {
 const FIRST_MSGS = 30, DRAW_SLICE = 12;
 function drawMessages(c, msgs, root) {
   const all = c.agent.messages, start = Math.max(0, all.length - FIRST_MSGS);
+  c.drawTo = null;
   for (const m of all.slice(start)) msgs.appendChild(renderMsg(c, m));
   if (!start || !('IntersectionObserver' in window)) { for (const m of all.slice(0, start).reverse()) msgs.prepend(renderMsg(c, m)); return null; }
   let oldest = all[start];
@@ -3542,6 +3812,16 @@ function drawMessages(c, msgs, root) {
   };
   const io = new IntersectionObserver((es) => { if (!busy && es.some((e) => e.isIntersecting)) { busy = true; requestAnimationFrame(step); } }, { root: msgs, rootMargin: '1500px 0px 0px 0px' });
   io.observe(more);
+  // A search result far up the chat (openChatAt): everything from it down is drawn at once.
+  c.drawTo = (target) => {
+    const list = c.agent.messages, at = list.indexOf(oldest), to = list.indexOf(target);
+    if (c.el?.root !== root || !more.isConnected || at < 0 || to < 0 || to >= at) return;
+    const batch = [];
+    for (let i = at; i > to;) batch.unshift(renderMsg(c, list[--i]));
+    oldest = list[to];
+    more.after(...batch);
+    if (to <= 0) { more.remove(); io.disconnect(); } else label(to);
+  };
   return io;
 }
 // Everything that watches the chat's page is stopped: an observer still watching one element of it keeps the whole
@@ -3555,7 +3835,7 @@ function releasePane(c) {
     for (const el of root.querySelectorAll('[data-wired]')) el._ac?.abort();
   }
   for (const m of c.agent.messages) { if (m.el) traceSeen?.unobserve(m.el); m.el = null; }
-  c.watchers = null; c.toEnd = null; c.el = null; c.suggest = null;
+  c.watchers = null; c.toEnd = null; c.el = null; c.suggest = null; c.drawTo = null;
 }
 // Busy: on its way somewhere the page has to follow (a reply running, waiting for you or being reconnected, a code
 // review, a save not yet through) or holding what goes with the next message. A busy chat is never let go of.
@@ -9405,8 +9685,8 @@ async function drawAuditPanel() {
 // words typed; the ones that don't fit on one line move into a More ▾ menu at its end. What was picked and typed is kept per list in
 // ST.filters, so a redraw (Check again, a save) keeps it. Ctrl+F focuses the open page's filter.
 // opts: { key, rows: () => rows, segLabel: (v) => label, segOrder: [values first, in this order], placeholder, label,
-//   extra: html after the segments, onApply: () => {} }
-function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], placeholder = 'Filter…', label = 'Show', extra = '', onApply }) {
+//   extra: html after the segments, onApply: () => {}, search: false for no words box (the list is searched elsewhere) }
+function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], placeholder = 'Filter…', label = 'Show', extra = '', onApply, search = true }) {
   const F = ((ST.filters ??= {})[key] ??= { q: '', seg: 'all' });
   const all = [...rows()];
   const segs = [...new Set(all.map((r) => r.dataset.lfSeg).filter(Boolean))]
@@ -9414,7 +9694,8 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
   if (F.seg !== 'all' && !segs.includes(F.seg)) F.seg = 'all';
   const opts = [['all', 'All'], ...segs.map((v) => [v, segLabel(v)])];
   host.classList.add('lf');
-  host.innerHTML = `<input type="search" class="lf-q" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(F.q)}" spellcheck="false" autocomplete="off">
+  if (!search) F.q = '';
+  host.innerHTML = `${search ? `<input type="search" class="lf-q" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" value="${esc(F.q)}" spellcheck="false" autocomplete="off">` : ''}
     ${segs.length > 1 ? `<div class="st-segmented lf-seg" role="radiogroup" aria-label="${esc(label)}">${opts.map(([v, l]) => `<button type="button" class="st-seg-btn ${F.seg === v ? 'active' : ''}" role="radio" aria-checked="${F.seg === v}" data-lf-v="${esc(v)}">${esc(l)} <small></small></button>`).join('')}<select class="lf-more" aria-label="More: ${esc(label)}" hidden></select></div>` : ''}
     ${extra}<p class="lf-none" hidden>Nothing matches. <button type="button" class="sp-link lf-clear">Show everything</button></p>`;
   const q = $('.lf-q', host), seg = $('.lf-seg', host), more = $('.lf-more', host), none = $('.lf-none', host);
@@ -9448,16 +9729,18 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
     apply();
   };
   let t = 0;
-  q.oninput = () => { F.q = q.value; clearTimeout(t); t = setTimeout(apply, 120); };
-  // Esc clears the words first (and only then closes Settings).
-  q.onkeydown = (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); q.value = F.q = ''; apply(); } };
+  if (q) {
+    q.oninput = () => { F.q = q.value; clearTimeout(t); t = setTimeout(apply, 120); };
+    // Esc clears the words first (and only then closes Settings).
+    q.onkeydown = (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); q.value = F.q = ''; apply(); } };
+  }
   for (const b of host.querySelectorAll('[data-lf-v]')) b.onclick = () => pick(b.dataset.lfV);
   if (more) more.onchange = () => { if (more.value) pick(more.value); };
-  $('.lf-clear', host).onclick = () => { q.value = F.q = ''; pick('all'); q.focus(); };
+  $('.lf-clear', host).onclick = () => { if (q) q.value = ''; F.q = ''; pick('all'); (q || host.querySelector('[data-lf-v]'))?.focus(); };
   // Buttons while they fit on one line; from the end, the ones that don't go into More ▾ (All, then the picked one,
   // go last). Checked again when the list is resized.
   if (seg) {
-    const over = () => seg.scrollWidth > seg.clientWidth + 1 || seg.offsetTop > q.offsetTop + 4;
+    const over = () => seg.scrollWidth > seg.clientWidth + 1 || (q && seg.offsetTop > q.offsetTop + 4);
     const fit = () => {
       const btns = [...seg.querySelectorAll('[data-lf-v]')];
       for (const b of btns) b.hidden = false;
