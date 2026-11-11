@@ -11,6 +11,8 @@ import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
+import * as WS from './workspace.js';
+import { createHistory } from './nav-history.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
 // body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
@@ -177,6 +179,8 @@ const G = {
   sessionCost: 0, sizes: {}, theme: null, sideHidden: false, balanceShown: false,
 };
 // What the side pane shows is kept per area: its tab (view), the Steps it follows, its browser tab and real-tab box.
+// An area is a group of the workspace layout (see "the workspace layout" below): each of these lives on the group's tab
+// that owns it (bActive on its Browser tab, traceRun on its Steps tab…), reached through the area's st.
 for (const k of ['view', 'traceRun', 'traceShown', 'traceAt', 'traceTimer', 'bActive', 'dsk', 'paneUrl', 'watch']) Object.defineProperty(G, k, { get: () => AREA.st[k], set: (v) => { AREA.st[k] = v; }, enumerable: true });
 const focused = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
 
@@ -1896,6 +1900,7 @@ async function showChat(id, pane = G.focus) {
   if (!c) return uiAlert('Could not open that chat.');
   // One chat on screen at a time (others keep running in the background).
   G.panes = [id]; G.focus = 0; G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
+  wsSeen('chat', id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
 }
@@ -6754,6 +6759,7 @@ function openFileInPane(c, f) {
   const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
   list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
   c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
+  wsSeen('file', id);
   if (G.paneHidden) setPaneHidden(false);
   openArtifact(c, id);
 }
@@ -6877,10 +6883,110 @@ function paneVisible() {
 // terminals: Artifacts over the Browser, Steps over the Terminal, Files next to a server's output. Each area has its own
 // tab strip, address bar and body, and keeps its own tab, artifact, browser tab, terminal views and scroll. Split with
 // the ⊟ button, by dragging a tab to the top or bottom half of an area, or by right-clicking a tab. The layout is
-// remembered per chat; on a phone-sized window only the area you used last shows.
+// remembered per project; on a phone-sized window only the area you used last shows.
+// Each area is drawn from a group of the workspace layout (below): the chat is a group on the left, the areas are
+// groups stacked in a column on the right. The layout is what is saved; the areas are its picture on screen.
 const PA = { list: [AREA], focus: AREA, next: 1, chat: undefined, saved: '', deskKey: '', drag: null, tpl: null };
-const PANE_MAX_AREAS = 3;
+const PANE_MAX_AREAS = WS.MAX_GROUPS - 1; // the chat's group is the fourth
 const PANE_TAB_NAMES = { art: 'Artifact', browser: 'Browser', trace: 'Steps', term: 'Terminal', files: 'Files' };
+
+// ---------- the workspace layout (public/workspace.js): groups of tabs, saved per project ----------
+// The tree of groups is the one place that says what is on screen and how it is split; it is saved per project, so a
+// project's chats share their layout. Each tab keeps its own values (WK.tabs: { id, kind, st }) instead of the page
+// keeping one of each: what an area used to keep for itself now sits on its tabs, so later two chats can each have
+// their own Steps, Browser and Terminal. The page's old names (G.view, G.bActive, AREA.st…) read and write them.
+// WK.history records what you bring to the front (chats, tabs, files, settings pages) for back / forward.
+const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory() };
+const LAYOUT_KEY = (projectId) => `oh-layout:${projectId}`, LAYOUT_MIGRATED = 'oh-layout-migrated';
+function wsTab(id) {
+  let t = WK.tabs.get(id);
+  if (!t) { const kind = WS.kindOf(id); t = { id, kind, owner: WS.tabKind(kind)?.owner ?? null, st: {} }; WK.tabs.set(id, t); }
+  return t;
+}
+// Which tab kind keeps each per-tab value (bActive → browser, traceRun → steps, …).
+const WS_KEY_KIND = Object.fromEntries(Object.entries(WS.TAB_KINDS).flatMap(([k, d]) => d.keys.map((x) => [x, k])));
+// An area's st: the values its group's tabs keep, by the names the page has always used. What isn't a tab's value
+// (the view, the address shown) stays on the group itself.
+function groupState(gid, bag = {}) {
+  const old = { ...bag };
+  for (const [key, kind] of Object.entries(WS_KEY_KIND)) {
+    delete bag[key];
+    Object.defineProperty(bag, key, { get: () => wsTab(WS.tabId(kind, gid)).st[key], set: (v) => { wsTab(WS.tabId(kind, gid)).st[key] = v; }, enumerable: true, configurable: true });
+  }
+  for (const [k, v] of Object.entries(old)) bag[k] = v;
+  return bag;
+}
+// An area's size is its group's share of the column.
+function bindArea(a, gid) {
+  a.gid = gid;
+  a.st = groupState(gid, a.st || {});
+  Object.defineProperty(a, 'grow', { get: () => WS.findGroup(WK.lay, a.gid)?.w ?? 1, set: (v) => { WK.lay = WS.setWeights(WK.lay, { [a.gid]: v }); }, enumerable: true, configurable: true });
+  return a;
+}
+// A group closed: its tabs go (their timers stop first, in paneDropArea).
+function wsForget(gid) { for (const id of [...WK.tabs.keys()]) if (id.endsWith(`:${gid}`)) WK.tabs.delete(id); }
+// The layout as it is on screen now: which tab each area shows, the one you used, the chat on the left.
+function wsSync() {
+  let lay = WK.lay;
+  for (const a of PA.list) lay = WS.setActive(lay, a.gid, WS.tabId(WS.PANE_KINDS[inArea(a, paneTab)] || 'artifact', a.gid));
+  const cg = WS.findGroup(lay, WS.CHAT_GROUP), chats = G.panes.length ? G.panes.map((id) => WS.tabId('chat', id)) : [WS.tabId('chat', 'main')];
+  if (cg && cg.tabs.join() !== chats.join()) {
+    lay = { ...lay, root: structuredClone(lay.root) };
+    Object.assign(WS.findGroup(lay, WS.CHAT_GROUP), { tabs: chats, active: chats[G.focus] || chats[0] });
+  }
+  WK.lay = WS.setFocus(lay, PA.focus.gid);
+}
+// What each tab saves (only what should survive a reload: the plan shown, the browser tab, the terminal's views).
+function wsTabState() {
+  const out = {};
+  for (const a of PA.list) {
+    const put = (kind, st) => { const j = WS.tabKind(kind).save(st); if (Object.keys(j).length) out[WS.tabId(kind, a.gid)] = { kind, ...j }; };
+    put('artifact', { art: a.st.view?.id || null });
+    put('browser', { bActive: a.st.bActive });
+    if (a.n) put('terminal', { termLay: a.st.termLay, termTf: a.st.termTf }); // the first area's terminal is the project's own
+  }
+  return out;
+}
+let layoutMigrated = false; try { layoutMigrated = localStorage.getItem(LAYOUT_MIGRATED) === '1'; } catch { /* storage off */ }
+// A project's saved layout; until the old per-chat splits are converted (first start), this chat's own split.
+function wsLoad(c) {
+  let text = null; try { text = localStorage.getItem(LAYOUT_KEY(c.projectId || 'scratch')); } catch { /* storage off */ }
+  const r = WS.parse(text);
+  if (r || layoutMigrated) return r;
+  let old = null; try { old = JSON.parse(localStorage.getItem(paneKey(c.id)) || 'null'); } catch { /* none */ }
+  return WS.fromAreas(old);
+}
+// First start with per-project layouts: each chat's saved split moves to its project (the most recently used chat's
+// wins). The old keys stay, so going back to an older QuorX keeps them.
+async function wsMigrate() {
+  if (layoutMigrated) return;
+  const old = [], have = new Set();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('oh-pane-areas:')) old.push({ chatId: k.slice('oh-pane-areas:'.length), value: localStorage.getItem(k) });
+      else if (k?.startsWith('oh-layout:')) have.add(k.slice('oh-layout:'.length));
+    }
+  } catch { return; }
+  if (old.length) {
+    // Chats past the sidebar's newest are asked for by id.
+    const side = await fetch(`/api/chats?view=sidebar&per=1&ids=${encodeURIComponent(old.map((x) => x.chatId).join(','))}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (!Array.isArray(side?.chats)) return; // try again next start
+    try { for (const [pid, text] of Object.entries(WS.migrateAreas(old, side.chats, have))) localStorage.setItem(LAYOUT_KEY(pid), text); } catch { return; }
+  }
+  try { localStorage.setItem(LAYOUT_MIGRATED, '1'); } catch { /* next start */ }
+  layoutMigrated = true;
+}
+// How each kind of tab is drawn today. The side pane's five draw in an area (a group); W1–W5 draw them anywhere.
+const inGroup = (gid, fn) => { const a = PA.list.find((x) => x.gid === gid); return a ? inArea(a, fn) : undefined; };
+for (const [pane, kind] of Object.entries(WS.PANE_KINDS)) WS.defineTabKind(kind, { render: (tab) => inGroup(tab.id.split(':')[1], () => setPaneTab(pane)) });
+WS.defineTabKind('chat', { render: (tab) => showChat(tab.id.split(':').slice(1).join(':')) });
+WS.defineTabKind('viewer', { render: (tab) => openFileInPane(focused(), tab.st) });
+WS.defineTabKind('page', { render: (tab) => openInBrowser(focused(), tab.st.url) });
+WS.defineTabKind('running', { render: () => { const c = focused(); if (c) openTerminal(c, null, 'run'); } });
+WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) toggleServers(c); } });
+// Something came to the front: recorded for back / forward (the ‹ › buttons come later; nothing reads it yet).
+const wsSeen = (kind, id) => { if (id != null) WK.history.push({ kind, id }); };
 function inArea(a, fn) {
   const was = AREA;
   if (!a || a === was) return fn();
@@ -6921,7 +7027,8 @@ function paneAreasInit() {
   PA.tpl = el.cloneNode(true);
   for (const x of PA.tpl.querySelectorAll('#paneSrvBtn, #paneMaxBtn')) x.remove();
   PA.tpl.querySelector('#paneBody').replaceChildren();
-  Object.assign(AREA, { el, grow: 1 });
+  AREA.el = el;
+  bindArea(AREA, WS.sideGroups(WK.lay)[0].id);
   paneWireArea(AREA);
   matchMedia('(max-width: 900px)').addEventListener('change', () => { paneMarkAreas(); deskPlace(true); });
 }
@@ -6931,9 +7038,14 @@ function paneWireArea(a) {
 }
 function paneAddArea(from, where = 'below') {
   if (PA.list.length >= PANE_MAX_AREAS) return null;
-  const a = { n: PA.next++, el: PA.tpl.cloneNode(true), st: { view: { id: null, src: false, files: false } }, grow: 1 };
+  // A new group beside `from` in the layout (sharing its space), holding the pane's five tabs.
+  const next = `g${WK.lay.next}`;
+  const r = WS.addGroup(WK.lay, (from || PA.list.at(-1)).gid, from && where === 'above' ? 'top' : 'bottom', WS.paneTabs(next), { id: next });
+  if (!r.ok) return null;
+  WK.lay = r.layout;
+  const a = bindArea({ n: PA.next++, el: PA.tpl.cloneNode(true), st: {} }, r.groupId);
+  a.st.view = { id: null, src: false, files: false };
   a.el.classList.remove('on'); a.el.dataset.area = String(a.n);
-  if (from) { a.grow = (from.grow || 1) / 2; from.grow = a.grow; }
   const i = from ? PA.list.indexOf(from) + (where === 'above' ? 0 : 1) : PA.list.length;
   // Placed by its neighbour, never by moving the others: a moved frame reloads, and a terminal loses its screen.
   if (from) from.el[where === 'above' ? 'before' : 'after'](a.el); else PA.list.at(-1).el.after(a.el);
@@ -6967,8 +7079,7 @@ function paneSplitTab(from, tab, where) {
 }
 function paneCloseArea(a) {
   if (PA.list.length < 2 || !PA.list.includes(a)) return;
-  const i = PA.list.indexOf(a), n = PA.list[i ? i - 1 : 1];
-  n.grow = (n.grow || 1) + (a.grow || 1);
+  const i = PA.list.indexOf(a), n = PA.list[i ? i - 1 : 1]; // the layout gives it the closed one's space
   if (PA.focus === a) { PA.focus = n; AREA = n; }
   paneDropArea(a);
   paneMarkAreas(); paneSave();
@@ -6982,6 +7093,7 @@ function paneDropArea(a) {
   PA.list.splice(PA.list.indexOf(a), 1);
   paneChromeHome(); // before the area goes: it may hold them
   a.el.remove();
+  WK.lay = WS.removeGroup(WK.lay, a.gid); wsForget(a.gid);
   if (PA.focus === a) { PA.focus = PA.list[0]; AREA = PA.focus; }
   paneDividers();
 }
@@ -7068,17 +7180,23 @@ function paneDropZones(tab) {
   }
 }
 function paneDropHide() { for (const x of document.querySelectorAll('.pa-drop')) x.remove(); PA.drag = null; deskPlace(true); }
-// Each chat remembers its areas: their tabs, sizes and which one you used (one area is the pane as it always was).
+// Each project remembers its layout: the areas' tabs, sizes and which one you used (one area is the pane as it always
+// was, and isn't saved). Written as the old per-chat areas too, for one release, so an older QuorX keeps the split.
 const paneKey = (id) => `oh-pane-areas:${id}`;
 function paneSave() {
   const c = focused(); if (!c || PA.chat !== c.id) return;
-  const areas = PA.list.map((a) => ({ tab: inArea(a, paneTab), grow: Math.round((a.grow || 1) * 1000) / 1000, art: a.st.view?.id || null, b: a.st.bActive || null, ...(a.n && a.st.termLay ? { tf: a.st.termLay.panes.map((p) => p.filter) } : {}) }));
-  const s = areas.length > 1 ? JSON.stringify({ areas, f: PA.list.indexOf(PA.focus) }) : '';
+  wsSync();
+  const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1;
+  const s = split ? WS.serialise(WK.lay, tabs) : '';
   if (s === PA.saved) return;
   PA.saved = s;
-  try { if (s) localStorage.setItem(paneKey(c.id), s); else localStorage.removeItem(paneKey(c.id)); } catch { /* this session only */ }
+  const old = split ? WS.toAreas(WK.lay, tabs) : null;
+  try {
+    if (s) localStorage.setItem(LAYOUT_KEY(c.projectId || 'scratch'), s); else localStorage.removeItem(LAYOUT_KEY(c.projectId || 'scratch'));
+    if (old) localStorage.setItem(paneKey(c.id), JSON.stringify(old)); else localStorage.removeItem(paneKey(c.id));
+  } catch { /* this session only */ }
 }
-// Another chat in the pane: the areas of the one you left close, and this chat's own come back.
+// Another chat in the pane: the areas close, and its project's layout comes back (the same for every chat in it).
 function paneChat(c) {
   const id = c?.id || null;
   if (PA.chat === id || !PA.tpl) return false;
@@ -7088,20 +7206,22 @@ function paneChat(c) {
   if (was !== a0) { a0.st.view = was.st.view; a0.st.traceRun = was.st.traceRun; }
   for (const a of PA.list.slice(1)) paneDropArea(a);
   a0.grow = 1; PA.focus = a0; AREA = a0;
-  let s = null; try { s = JSON.parse(localStorage.getItem(paneKey(id)) || 'null'); } catch { /* none */ }
+  const r = c ? wsLoad(c) : null, saved = r ? WS.sideGroups(r.layout).slice(0, PANE_MAX_AREAS) : [];
   PA.saved = '';
-  if (c && Array.isArray(s?.areas) && s.areas.length > 1) {
-    const saved = s.areas.slice(0, PANE_MAX_AREAS);
+  if (saved.length > 1) {
+    // Drawn again area by area (each placed by its neighbour), from the saved groups and their tabs' values.
     for (let i = 1; i < saved.length; i++) paneAddArea(PA.list[i - 1], 'below');
-    saved.forEach((x, i) => {
-      const a = PA.list[i];
-      a.grow = Number(x.grow) || 1;
-      if (x.b) a.st.bActive = x.b;
-      if (Array.isArray(x.tf)) a.st.termTf = x.tf.map(String);
-      inArea(a, () => { G.view = paneView(c, PANE_TAB_NAMES[x.tab] ? x.tab : 'art', x.art || null); });
+    saved.forEach((g, i) => {
+      const a = PA.list[i], tab = (k) => r.tabs[WS.tabId(k, g.id)] || {};
+      a.grow = g.w || 1;
+      const b = WS.tabKind('browser').load(tab('browser')), t = WS.tabKind('terminal').load(tab('terminal'));
+      if (b.bActive) a.st.bActive = b.bActive;
+      if (t.termTf) a.st.termTf = t.termTf;
+      inArea(a, () => { G.view = paneView(c, WS.groupPane(g), WS.tabKind('artifact').load(tab('artifact')).art || null); });
     });
-    PA.focus = PA.list[Math.min(Math.max(0, Number(s.f) || 0), PA.list.length - 1)]; AREA = PA.focus;
-    PA.saved = JSON.stringify(s);
+    PA.focus = PA.list[Math.max(0, saved.findIndex((g) => g.id === r.layout.focus))] || a0; AREA = PA.focus;
+    wsSync();
+    PA.saved = WS.serialise(WK.lay, wsTabState());
   }
   paneDividers(); paneMarkAreas();
   return PA.list.length > 1;
@@ -8215,6 +8335,7 @@ function settingsPanels(S) {
 }
 
 function openSettings(cat) {
+  wsSeen('settings', cat || 'general');
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
@@ -10211,6 +10332,8 @@ async function boot() {
   // No warning on close: running replies keep going on the server and this page reattaches on reload.
 
   await refreshSidebar();
+  // Layouts are kept per project: once, each chat's saved split moves to its project.
+  await wsMigrate();
   // Reopen the chats that were on screen (?chat=<id> opens a specific one).
   const linked = new URLSearchParams(location.search).get('chat');
   // The app opens on the landing screen; a ?chat= link opens that chat instead.
@@ -11200,6 +11323,7 @@ function setPaneTab(tab) {
   const c = focused(); if (!c) return;
   if (tab === 'run') return openTerminal(c, null, 'run');
   if (tab === 'browser') { const a = AREA; refreshAgentTab(c).then((ch) => inArea(a, () => { if (ch && G.view.browser) renderPane(); })); }
+  wsSeen('tab', WS.tabId(WS.PANE_KINDS[tab] || 'artifact', AREA.gid));
   G.view = paneView(c, tab);
   c.paneHidden = false;
   syncLayout(); renderPane(); refreshTraceButtons(); toPreview();
