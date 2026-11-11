@@ -37,6 +37,7 @@ All calls return a promise.
 | `tabs` | The Running list: every tab with its page and sound, or close one | nothing to list · `'close'`, `sid` | `[{ sid, agent, chatId, url, title, audible, muted, shown, asleep? }]` |
 | `loginItem` | Start QuorX with Windows: read it, or set it | nothing · `true \| false` | `true \| false` |
 | `closeAction` | What closing the window does: keep running in the tray, quit, or ask | nothing · `'tray' \| 'quit' \| 'ask'` | the choice |
+| `keepAwake` | Keep the PC awake while a reply or a command runs: read it, or set it | nothing · `true \| false` | `{ on, held }` (held: keeping it awake now) |
 | `quit` | Quits the app | | `true` |
 | `update` | The app's own updates | `'state'` · `'check'` · `'download'` · `'install'` · `'setUrl'`, url · `'store'` | the update state |
 | `info` | Version, packaged or not, dev build, store, data folder, address, whether it runs the server | | `{ version, packaged, dev, store, home, origin, ownsServer }` |
@@ -82,7 +83,7 @@ A replacement shell needs, roughly in order of effort:
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
-3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `quit`, `openExternal`,
+3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `quit`, `openExternal`,
    `showFile`, `openHome`).
 4. **App updates and storage** (`update`, `storage`, `info`, `restartHarness`).
 5. **Readout** (`perf`): optional; the page shows its own numbers without it.
