@@ -285,6 +285,44 @@ test('running: a background job is listed with its chat; stopping it there ends 
   assert.ok(bodies[2].messages.some((m) => m.role === 'user' && /The user stopped bg\d+ \(node forever\.js\) from the Running tab/.test(m.content)), 'the agent was told');
 });
 
+test('running: CPU share from two readings, usage added only to rows QuorX tracks, and Kill on a row', async () => {
+  const { cpuShare, addUsage, killRunning } = await import('../server/running.js');
+  // 0.5 s of processor time in 1 s on a 4-core computer: an eighth of it (12.5 %)
+  assert.equal(cpuShare({ cpu: 0, at: 1000 }, { cpu: 5e6 }, 2000, 4), 12.5);
+  assert.deepEqual([cpuShare(null, { cpu: 5 }, 2000, 4), cpuShare({ cpu: 9, at: 1000 }, { cpu: 5 }, 2000, 4), cpuShare({ cpu: 0, at: 2000 }, { cpu: 5 }, 2000, 4)], [null, null, null], 'no reading before, a restarted counter, no time passed');
+  assert.equal(cpuShare({ cpu: 0, at: 0 }, { cpu: 1e9 }, 1000, 2), 100, 'never above the whole computer');
+  // rows no Windows job is known for get nothing (and the job host is never asked about them)
+  let asked = null;
+  const items = [{ id: 'job:nope' }, { id: 'pty:u1' }, { id: 'srv:p/none' }];
+  await addUsage(items, { usage: async (jobs) => { asked = jobs; return {}; } });
+  assert.ok(items.every((x) => !('use' in x)));
+  assert.deepEqual(asked, [undefined, undefined, undefined]);
+  assert.deepEqual(await killRunning('p', 'job:nope', { kill: async () => { throw new Error('must not kill'); } }), { already: true }, 'a row that already ended');
+});
+
+test('running: a busy command shows its CPU and memory, and Kill ends it at once', { skip: !WIN }, async () => {
+  const { addUsage, killRunning } = await import('../server/running.js');
+  const d = tmp('use');
+  fs.writeFileSync(path.join(d, 'busy.js'), 'const big = Buffer.alloc(64 * 1024 * 1024, 1); const end = Date.now() + 60000; while (Date.now() < end) { big[0]++; }');
+  let job = null;
+  const ran = runLine(d, 'node busy.js', { timeout: 60000, term: { projectId: 'use-test', source: 'agent', chatId: null }, onJob: (j) => { job = j; } });
+  for (let i = 0; i < 100 && !job; i++) await new Promise((r) => setTimeout(r, 50));
+  assert.ok(job, 'the command is listed as a job');
+  await new Promise((r) => setTimeout(r, 1500));
+  const first = [{ id: `job:${job}` }];
+  await addUsage(first);
+  assert.ok(first[0].use, 'its usage is read');
+  assert.ok(first[0].use.mem > 50 * 1024 * 1024, `memory includes the 64 MB it holds (${first[0].use.mem})`);
+  await new Promise((r) => setTimeout(r, 1000));
+  const second = [{ id: `job:${job}` }];
+  await addUsage(second);
+  assert.ok(second[0].use.cpu > 0, `a busy loop uses the processor (${second[0].use.cpu})`);
+  const k = await killRunning('use-test', `job:${job}`);
+  assert.equal(k.left, 0, JSON.stringify(k));
+  const r = await ran;
+  assert.ok(r.ms < 30000, 'it ended long before its own minute');
+});
+
 test('running: any command that outlives the time limit moves to the background, not only builds', { skip: !WIN }, async () => {
   const { bodies } = await agentRun((b, i) => [reply('', [['shell', { command: 'ping -n 8 127.0.0.1' }]]), reply('Done.')][i], {
     settings: { safety: { timeout: 5 } },

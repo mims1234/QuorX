@@ -9,6 +9,8 @@
 #   {"id":3,"op":"kill","job":"j1"}                         -> {"id":3,"ok":true}
 #   {"id":4,"op":"close","job":"j1"}                        -> {"id":4,"ok":true}
 #   {"id":5,"op":"release","job":"j1","keep":[..]}          -> ends the rest, lets the kept ones live on without QuorX
+#   {"id":6,"op":"usage","jobs":["j1","j2"]}               -> {"id":6,"ok":true,"usage":{"j1":{"cpu":..,"mem":..,"n":..}}}
+#                                                              (processor time in 100 ns, working sets in bytes)
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
 using System;
@@ -58,6 +60,16 @@ public static class QxJob {
     ACCT a = new ACCT();
     if (!QueryInformationJobObject(job, 1, ref a, (uint)Marshal.SizeOf(typeof(ACCT)), IntPtr.Zero)) return 0;
     return a.ActiveProcesses;
+  }
+  // What the job uses now: processor time so far (user + kernel, in 100 ns units, ended processes included), the
+  // memory its live processes hold (working sets, bytes) and how many are alive. The caller turns two readings of
+  // the time into a CPU share.
+  public static long[] Usage(IntPtr job) {
+    ACCT a = new ACCT();
+    if (!QueryInformationJobObject(job, 1, ref a, (uint)Marshal.SizeOf(typeof(ACCT)), IntPtr.Zero)) return new long[] { 0, 0, 0 };
+    long mem = 0;
+    foreach (long pid in Pids(job)) { try { using (System.Diagnostics.Process p = System.Diagnostics.Process.GetProcessById((int)pid)) mem += p.WorkingSet64; } catch { } }
+    return new long[] { a.TotalUserTime + a.TotalKernelTime, mem, a.ActiveProcesses };
   }
   public static long[] Pids(IntPtr job) {
     int n = 256, size = 8 + IntPtr.Size * n;
@@ -212,6 +224,11 @@ while ($true) {
         })
         # .NET calls ([IO.File]::Delete(...), $x.Kill()) and script blocks built from text can't be checked.
         $out.members = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | ForEach-Object { $_.Extent.Text })
+      }
+      'usage' {
+        $u = @{}
+        foreach ($j in @($m.jobs)) { if ($j -and $jobs.ContainsKey($j)) { $r = [QxJob]::Usage($jobs[$j]); $u[$j] = @{ cpu = $r[0]; mem = $r[1]; n = $r[2] } } }
+        $out.usage = $u
       }
       'kill' { if ($jobs.ContainsKey($m.job)) { [QxJob]::Kill($jobs[$m.job]) } }
       'keep' { if ($jobs.ContainsKey($m.job)) { [QxJob]::KeepOnClose($jobs[$m.job]) } }

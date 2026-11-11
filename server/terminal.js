@@ -62,5 +62,7 @@ export const endJob = (job) => JOBS.delete(job);
 export const markJob = (job, patch) => { const j = JOBS.get(job); if (j) Object.assign(j, patch); };
 /** Stops a running job. Resolves to how it went ({ left, names, mode } for agent commands), or null if it isn't running. */
 export const stopJob = async (job) => { const j = JOBS.get(job); if (!j) return null; return (await j.abort?.()) || {}; };
+/** A running command's process (its Windows job and pid, set by runLine), for the Running list's CPU, memory and Kill. */
+export const jobProc = (job) => { const j = JOBS.get(job); return j && (j.qxJob || j.pid) ? { qxJob: j.qxJob || null, pid: j.pid || 0 } : null; };
 export const runningJobs = (projectId) => [...JOBS.entries()].filter(([, j]) => !projectId || j.projectId === projectId)
   .map(([job, j]) => ({ job, projectId: j.projectId, label: j.label, source: j.source, at: j.at, chatId: j.chatId, tab: j.tab, bg: j.bg, tail: [...j.tail] }));

@@ -10,6 +10,7 @@ import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -182,7 +183,14 @@ const G = {
 // An area is a group of the workspace layout (see "the workspace layout" below): each of these lives on the group's tab
 // that owns it (bActive on its Browser tab, traceRun on its Steps tab…), reached through the area's st.
 for (const k of ['view', 'traceRun', 'traceShown', 'traceAt', 'traceTimer', 'bActive', 'dsk', 'paneUrl', 'watch']) Object.defineProperty(G, k, { get: () => AREA.st[k], set: (v) => { AREA.st[k] = v; }, enumerable: true });
-const focused = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
+// Up to two chats show at once (G.panes); G.focus is the one you are typing in or clicked last. While a pane group
+// draws or is clicked, CTX.chat is the chat that owns that group (pinned to it, else the one you use), so everything the
+// group does means that chat. focused() is that chat when set, else the one you use.
+const CTX = { chat: null };
+const typingChat = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
+const focused = () => CTX.chat || typingChat();
+const curId = () => G.panes[G.focus] ?? G.panes[0] ?? null;
+const primaryChat = () => G.open.get(G.panes[0]) || null;
 
 // ---------- preferences (this browser) and chats (the server) ----------
 function savePrefs() {
@@ -1176,7 +1184,7 @@ function renderSidebar() {
     el.onclick = (e) => { if (!e.target.closest('button')) { showChat(id, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); } };
     // Rename, duplicate and delete: from ⋯, or by right-clicking the chat.
     const pinned = !!all.find((x) => x.id === id)?.pinned;
-    const menu = (e) => popMenu(e, [[pinned ? '📌 Unpin' : '📌 Pin to the top', () => pinChat(id, !pinned)], ['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
+    const menu = (e) => popMenu(e, [[pinned ? '📌 Unpin' : '📌 Pin to the top', () => pinChat(id, !pinned)], ...besideItems(id), ['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
     el.oncontextmenu = menu;
     $('.sb-chat-menu', el).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); menu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: r.left, clientY: r.bottom + 4 }); };
   }
@@ -1338,7 +1346,8 @@ async function deleteChat(id) {
   G.open.delete(id);
   const i = G.panes.indexOf(id), next = i >= 0 ? WS.afterClose(WT.tabs, id) : null;
   wtForgetChat(id);
-  if (i >= 0) { G.panes.splice(i, 1); if (next) showChat(next); else if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
+  if (i >= 0 && G.panes.length > 1) closeSide(i);
+  else if (i >= 0) { G.panes.splice(i, 1); if (next) showChat(next); else if (!G.panes.length) showLanding(); else { G.focus = 0; renderPanes(); } }
   refreshSidebar();
   if (own) await removeWorktreeAsk(own, { after: 'chat' });
 }
@@ -1369,6 +1378,17 @@ function drawBranchTag(c) {
   b.classList.toggle('pending', !c.wt);
   b.title = c.wt ? `This chat works in its own git worktree, on the branch ${c.wt.branch} (made from ${c.wt.base}).\nOther chats don't see its changes until the branch is merged.\nClick to open its folder.` : 'This chat gets its own git worktree when you send the first message.';
 }
+// The ⑂ Remix dialog's "In its own worktree" (remixWorktree): the remix gets its own branch and folder, made from the
+// original chat's branch when it has one. The box shows only in git projects: can(c) reads what gitOf found (the
+// remix button asks gitOf first, through ready). git takes a moment, so the original's box says so meanwhile.
+window.qxChatWorktree = async (c, n) => {
+  const ta = c.el && $('.input', c.el.root), ph = ta?.placeholder;
+  if (ta) { ta.disabled = true; ta.placeholder = 'Making the remix\'s own git worktree…'; }
+  try { return await makeWorktree(n, `remix ${c.title}`, c.wt?.space || ''); } finally { if (ta) { ta.disabled = false; ta.placeholder = ph; } }
+};
+const gitKnown = new Map(); // project id → is a git repo, as gitOf last found
+window.qxChatWorktree.ready = async (c) => { gitKnown.set(c.projectId, !!(await gitOf(c.projectId)).git); };
+window.qxChatWorktree.can = (c) => gitKnown.get(c.projectId) === true;
 // Remove a worktree: what it holds, and a "Discard changes" tick that a tree with changes needs. → true when removed.
 async function removeWorktreeAsk(w, { after = '' } = {}) {
   const st = w.changes ? w : await getJ(`/api/worktrees?chat=${encodeURIComponent(w.chatId)}`).catch(() => ({}));
@@ -2276,13 +2296,24 @@ function toggleProjectFold(id) {
 async function showChat(id, pane = G.focus) {
   const c = await getChat(id);
   if (!c) return uiAlert('Could not open that chat.');
-  // One chat on screen at a time (others keep running in the background); open chats are tabs along the top.
+  G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
+  // On screen already (one of two): it just becomes the one you use.
+  const at = G.panes.indexOf(id);
+  if (at >= 0) { setChatFocus(at); wsSeen('chat', id); wtSave(); wsChrome(); return; }
+  // Into the chat group you use (up to two chats show at once; the rest keep running in the background); open chats
+  // are tabs along the top.
   wtOpen(c);
-  G.panes = [id]; G.focus = 0; G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
+  placeChatOnScreen(id);
   wsSeen('chat', id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   await withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); });
   wtSave(); wsChrome();
+  wsBesideFromSave(c);
+}
+// A chat into the group you use: the first one, or in place of the chat you use (the other stays).
+function placeChatOnScreen(id) {
+  if (!G.panes.length || isPhone()) { G.panes = [id]; G.focus = 0; return; }
+  G.panes[Math.min(G.focus, G.panes.length - 1)] = id;
 }
 // The home page's draft chat: one at a time, kept while you stay on Home (its options, chips and attachments too),
 // moved to the project you pick. It is not saved and not in the sidebar until its first message.
@@ -2305,7 +2336,7 @@ async function newChat(projectId = focused()?.projectId || 'scratch', pane = G.f
   const c = blankChat(projectId);
   G.open.set(c.id, c);
   wtOpen(c);
-  G.panes = [c.id]; G.focus = 0;
+  placeChatOnScreen(c.id);
   wsSeen('chat', c.id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   await withTransition(() => { renderPanes(); savePrefs(); renderSidebar(); $('.input', c.el.root)?.focus(); });
@@ -3871,7 +3902,7 @@ function paneHTML(c) {
         </div>
         <div class="dir-a-mainrow">
           <div class="dir-a-identity">
-            <input class="ch-name ch-title dir-a-title-input" value="${esc(c.title)}" aria-label="Chat title" title="Click to rename">
+            <i class="ch-own own-sq" aria-hidden="true" title="This chat's colour: pane tabs that belong to it show the same square"></i><input class="ch-name ch-title dir-a-title-input" value="${esc(c.title)}" aria-label="Chat title" title="Click to rename">
             <span class="title-confirm" hidden><button type="button" class="tc-ok" title="Save the new title (Enter)" aria-label="Save title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></button><button type="button" class="tc-no" title="Keep the old title (Esc)" aria-label="Cancel rename"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></span>
             <span class="dir-a-state-badge idle"></span>
           </div>
@@ -3880,6 +3911,7 @@ function paneHTML(c) {
             <button type="button" class="ch-btn ch-panel hdr-icon-btn" aria-pressed="true" title="Side panel: artifacts, browser, steps, terminal, files (lit while it's open)" aria-label="Show or hide the side panel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/></svg></button>
             <button type="button" class="ch-btn ch-move hdr-icon-btn desk-only" draggable="true" title="Move the chat: drag onto any group's edge, or click for a side of the window" aria-label="Move the chat" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg></button>
             <button type="button" class="ch-btn ch-rename hdr-icon-btn" title="Rename this chat" aria-label="Rename chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/></svg></button>
+            <button type="button" class="ch-btn ch-unsplit hdr-icon-btn" hidden title="Take this chat off the screen (it keeps running; the other chat takes the space)" aria-label="Close this side"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M12 4v16M15.5 10l3 3m0-3-3 3"/></svg></button>
             <span class="dir-a-actions-sep"></span>
             <button type="button" class="ch-btn ch-delete hdr-icon-btn danger" title="Delete this chat (it moves to data/trash; the project's files stay)" aria-label="Delete chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg></button>
             <button type="button" class="ch-btn ch-space hdr-icon-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="The agent's folder is getting big" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3l-8.5 8.5M9.5 9.5l5 5-1.5 1.5c-2 2-5 4-8.5 5L3 19.5c1-3.5 3-6.5 5-8.5z M6.5 17l2-2M9 19l2-2"/></svg></button>
@@ -4028,11 +4060,15 @@ function renderPanes() {
   for (const c of G.open.values()) if (c.el) releasePane(c);
   box.innerHTML = '';
   if (!G.panes.length) { renderLanding(box); syncLayout(); renderPane(); releaseColdChats(); return; }
+  if (G.focus >= G.panes.length) G.focus = 0;
   box.classList.toggle('split', G.panes.length > 1);
+  document.body.classList.toggle('two-chats', G.panes.length > 1);
+  WP.key = ''; // the new boxes are placed again
   G.panes.forEach((id, i) => {
     const c = G.open.get(id);
     const root = document.createElement('section');
     root.className = `chatpane ${i === G.focus ? 'focus' : ''}`;
+    root.dataset.chat = id;
     root.dataset.pane = i;
     root.innerHTML = paneHTML(c);
     box.appendChild(root);
@@ -4046,14 +4082,18 @@ function renderPanes() {
     if (older) (c.watchers ||= []).push(older);
     c.shownAt = Date.now();
   });
-  renderToolbars(); syncLayout(); renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
+  renderToolbars(); syncLayout(); if (PA.tpl) { eachArea(renderPane); paneMarkAreas(); } else renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
   for (const id of G.panes) checkSpace(G.open.get(id));
   for (const pid of new Set(G.panes.map((id) => spaceOf(G.open.get(id))))) refreshUndoable(pid);
   pollDev();
   releaseColdChats();
 }
 function wirePane(c, root, i) {
-  root.addEventListener('pointerdown', () => { if (G.focus !== i) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', p === root); G.view = { id: null, src: false, files: false }; G.traceRun = null; renderPane(); syncLayout(); renderSidebar(); } }, true);
+  root.addEventListener('pointerdown', () => setChatFocus(i), true);
+  root.addEventListener('focusin', () => setChatFocus(i));
+  // The owner square (with two chats on screen) and ✕ to take this chat off the screen (it keeps running).
+  const own = $('.ch-own', root); if (own) own.className = `ch-own own-sq own-${i}`;
+  const un = $('.ch-unsplit', root); if (un) { un.hidden = G.panes.length < 2; un.onclick = (e) => { e.stopPropagation(); closeSide(i); }; }
   // Renaming: ✓ (or Enter) saves the new title, ✕ (or Esc) puts the old one back. Nothing saves by itself.
   const nameIn = $('.ch-name', root), tconf = $('.title-confirm', root);
   const saveTitle = () => { c.title = nameIn.value.trim() || 'New chat'; nameIn.value = c.title; tconf.hidden = true; saveChat(c); renderSidebar(); nameIn.blur(); };
@@ -5693,7 +5733,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
     if (G.traceRun === m.runId && G.view.trace === m.runId && !isPhone()) return closeTrace(); openTrace(c, m); toPreview();
   };
   // 🧭 on (this chat): the pane shows the running reply's steps as it works.
-  if (c.followSteps && m.live && focused() === c) asAgent(() => { if (G.view.trace !== m.runId) openTrace(c, m); });
+  if (c.followSteps && m.live && onScreen(c)) asAgent(c, () => { if (G.view.trace !== m.runId) openTrace(c, m); });
   eachArea(() => { if (G.view.trace === m.runId && focused() === c) renderTracePane(c, m); });
   const s = m.stats, when = m.doneAt || m.at;
   const checkTag = s?.verify ? (s.verify.ok ? '<span class="check-ok" title="Before this reply ended, the harness re-checked the changed files and opened what was built: no errors.">✓ Checked</span>'
@@ -6000,6 +6040,8 @@ function addFileToChat(projectId, rel, from) {
 const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + '…' : String(t));
 const TRACE_KINDS = [['think', '🧠 Model'], ['tool', '🔧 Tool'], ['res', '↳ Result'], ['file', '📝 File'], ['cmd', '⌨️ Command'], ['browser', '📸 Browser'], ['decide', '⚖️ Deciders'], ['ask', '✋ Approval'], ['ok', '✅ Approved'], ['err', '⛔ Error'], ['warn', '⚠ Warning'], ['note', 'ℹ Note']];
 function openTrace(c, m) {
+  // In a group that shows this chat (with two chats on screen, one pinned to the other chat won't do).
+  if (areaChat(AREA) !== c) { const a = PA.list.find((x) => areaChat(x) === c); if (a && a !== AREA) return inArea(a, () => openTrace(c, m)); }
   const i = G.panes.indexOf(c.id);
   if (i >= 0 && G.focus !== i) { G.focus = i; for (const p of document.querySelectorAll('.chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i); }
   // One trace at a time: it becomes an entry in the artifact dropdown (a new one takes its place).
@@ -6682,7 +6724,7 @@ function openFreshChat(c, brief, model) {
   n.remixOf = { chatId: c.id, title: c.title, at: Date.now() };
   // 🎬 A film carries on as a film: Video Mode stays on (no new brief), and the storyboard approved there still counts.
   if (c.agent.videoMode) { n.agent.videoMode = c.agent.videoMode; n.agent.videoFrom = c.id; }
-  G.open.set(n.id, n); G.panes = [n.id]; G.focus = 0;
+  G.open.set(n.id, n); placeChatOnScreen(n.id);
   G.view = { id: null, src: false, files: false }; G.traceRun = null;
   renderPanes(); saveChat(n, true); savePrefs(); renderSidebar();
   const ta = $('.input', n.el.root);
@@ -7305,7 +7347,7 @@ function serverUp(c, e) {
   pollDev();
   // A page (preview_site) opens from the pages address as this window reaches it; a project server at its own address.
   const u = e.page && e.path ? pageUrl(e.path) : e.url;
-  if (focused() === c && followsAgent(c) && u) asAgent(() => openInBrowser(c, u));
+  if (onScreen(c) && followsAgent(c) && u) asAgent(c, () => openInBrowser(c, u));
 }
 // Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) open as tabs of their own (see
 // "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it, to open
@@ -7463,7 +7505,7 @@ const PANE_TAB_NAMES = { art: 'Artifact', browser: 'Browser', trace: 'Steps', te
 // keeping one of each: what an area used to keep for itself now sits on its tabs, so later two chats can each have
 // their own Steps, Browser and Terminal. The page's old names (G.view, G.bActive, AREA.st…) read and write them.
 // WK.history records what you bring to the front (chats, tabs, files, settings pages) for back / forward.
-const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory() };
+const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory(), pins: {}, max: null, follow: null };
 const LAYOUT_KEY = (projectId) => `oh-layout:${projectId}`, LAYOUT_MIGRATED = 'oh-layout-migrated';
 function wsTab(id) {
   let t = WK.tabs.get(id);
@@ -7501,10 +7543,13 @@ function wsSync() {
   }
   // The chat group's tabs are the chats open along the top (this project's), the one on screen active.
   const cg = WS.findGroup(lay, WS.CHAT_GROUP), own = WT.pid && WT.pid === projOf(focused());
-  const ids = own ? WT.tabs : G.panes, chats = ids.length ? ids.map((id) => WS.tabId('chat', id)) : [WS.tabId('chat', 'main')];
-  const active = G.panes[G.focus] ? WS.tabId('chat', G.panes[G.focus]) : chats[0];
-  if (cg && (cg.tabs.join() !== chats.join() || cg.active !== active)) lay = WS.withChatTabs(lay, ids, G.panes[G.focus]);
-  WK.lay = WS.setFocus(lay, WP.chatFocus ? WS.CHAT_GROUP : PA.focus.gid);
+  // The first chat group holds the open chats' tabs (all but the one beside); the second, the chat beside.
+  const beside = G.panes[1] || null;
+  const ids = (own ? WT.tabs : G.panes).filter((id) => id !== beside), chats = ids.length ? ids.map((id) => WS.tabId('chat', id)) : [WS.tabId('chat', 'main')];
+  const active = G.panes[0] ? WS.tabId('chat', G.panes[0]) : chats[0];
+  if (cg && (cg.tabs.join() !== chats.join() || cg.active !== active)) lay = WS.withChatTabs(lay, ids, G.panes[0]);
+  if (beside && WS.chat2Id(lay) !== beside) { const r = WS.placeChat2(lay, beside); if (r.ok) lay = r.layout; }
+  WK.lay = WS.setFocus(lay, WP.chatFocus ? (G.focus === 1 && beside ? WS.CHAT2_GROUP : WS.CHAT_GROUP) : PA.focus.gid);
 }
 // What each tab saves (only what should survive a reload: the plan shown, the browser tab, the terminal's views).
 function wsTabState() {
@@ -7561,11 +7606,25 @@ WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) to
 // tab or a file also names the chat it was in, so stepping back to it brings that chat back first.
 const wsSeen = (kind, id, extra) => { if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
 function inArea(a, fn) {
-  const was = AREA;
-  if (!a || a === was) return fn();
-  if (!PA.list.includes(a)) return undefined;
-  AREA = a;
-  try { return fn(); } finally { AREA = PA.list.includes(was) ? was : PA.focus; }
+  const was = AREA, wc = CTX.chat;
+  if (!a) return fn();
+  if (a !== was && !PA.list.includes(a)) return undefined;
+  AREA = a; CTX.chat = areaChat(a);
+  try { return fn(); } finally { AREA = PA.list.includes(was) ? was : PA.focus; CTX.chat = wc; }
+}
+// ---------- which chat a pane group belongs to ----------
+// A group follows the chat you use, unless it is pinned to one (its tab menu: "Pin to …"). With two chats on screen
+// each group's tabs show a small square in its owner's colour. Pins are kept per project with the layout.
+const pinOf = (a) => (a && WK.pins?.[a.gid] && G.open.has(WK.pins[a.gid]) ? WK.pins[a.gid] : null);
+const areaChat = (a) => (pinOf(a) && G.open.get(pinOf(a))) || typingChat();
+// Owner colour: the first chat on screen, the second, or none (a chat that isn't on screen).
+const ownIdx = (id) => G.panes.indexOf(id);
+const ownSq = (id, title = '') => { const i = ownIdx(id); return `<i class="own-sq own-${i < 0 ? 'x' : i}" aria-hidden="true"${title ? ` title="${esc(title)}"` : ''}></i>`; };
+function wsPin(a, chatId) {
+  WK.pins = { ...(WK.pins || {}) };
+  if (chatId) WK.pins[a.gid] = chatId; else delete WK.pins[a.gid];
+  inArea(a, () => { const c = focused(); if (c && G.view.trace) G.view = paneView(c, 'trace'); renderPane(); });
+  paneMarkAreas(); paneSave();
 }
 // Runs in each area in turn: what changes live (Steps, the Browser, the Terminal) changes in every area showing it.
 function eachArea(fn) { for (const a of [...PA.list]) inArea(a, () => fn(a)); }
@@ -7611,7 +7670,10 @@ function paneAreasInit() {
   if ('ResizeObserver' in window) { let raf = 0; new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; wsPlace(); }); }).observe($('.layout')); }
   addEventListener('resize', () => wsPlace());
 }
+let ctxClear = 0;
 function paneWireArea(a) {
+  // Whatever a click or key in this group does, it does for the group's chat (until the event is over).
+  for (const ev of ['pointerdown', 'mousedown', 'click', 'dblclick', 'auxclick', 'contextmenu', 'keydown', 'input', 'change', 'submit', 'dragstart', 'drop']) a.el.addEventListener(ev, () => { CTX.chat = areaChat(a); clearTimeout(ctxClear); ctxClear = setTimeout(() => { CTX.chat = null; }); }, true);
   a.el.addEventListener('pointerdown', () => { if (WP.chatFocus) { WP.chatFocus = false; if (PA.focus === a) paneMarkAreas(); } paneFocus(a); }, true);
   a.el.addEventListener('focusin', () => { WP.chatFocus = false; paneFocus(a); });
   // Reading position: what you scrolled to in this area is kept for the tab it shows (see "reading position").
@@ -7706,10 +7768,83 @@ function paneMarkAreas() {
     a.el.style.flexGrow = 1;
     const mx = $('[data-pa="max"]', a.el), on = WK.max === a.gid;
     if (mx) { mx.hidden = phone; mx.textContent = on ? '⤡' : '⤢'; mx.setAttribute('aria-pressed', String(on)); mx.title = on ? 'Restore: show the other groups again (or double-click the empty part of the strip)' : 'Maximise this group (or double-click the empty part of its strip)'; }
+    // The owner square: the chat this group shows (pinned, or the chat you use), when two are on screen.
+    const own = $('.pa-own', a.el), pin = pinOf(a), oid = pin || curId(), oi = ownIdx(oid);
+    if (own) {
+      own.hidden = phone || (G.panes.length < 2 && !pin);
+      own.className = `pa-own own-sq own-${oi < 0 ? 'x' : oi}${pin ? ' pinned' : ''}`;
+      own.title = pin ? `Pinned to “${chatTitle(pin)}”: its steps, pages, terminal and files show here. Right-click a tab to change it.` : `Follows the chat you use (now “${chatTitle(oid)}”). Right-click a tab to pin this group to one chat.`;
+    }
     const f = $('.pa-follow', a.el);
     if (f) { f.hidden = phone || !split || a.gid !== fol; f.classList.toggle('off', G.followAgent === false); f.title = G.followAgent === false ? 'This group follows the agent when 👁 Follow the agent is on (it is off now)' : 'This group follows the agent: it shows the page, terminal or steps the agent is using. The others stay where you put them. ⋯ to mark another group.'; }
   }
   wsPlace();
+}
+
+// ---------- two chats on screen ----------
+// A second chat opens in a group of its own: drag a chat tab onto a group's edge, or "Open beside" in a chat tab's or
+// sidebar row's menu, or Remix with "Open side by side". At most two chats show, within the group cap. Each keeps its
+// own composer, scroll, replies, approvals, Quorium and model; both run on their own. The chat you click or type in
+// is the one shortcuts, Ctrl+F, the status bar and the pane groups that follow "the chat you use" mean. Which chats
+// were side by side is part of the project's layout, so it comes back after a reload. A phone shows one at a time.
+function setChatFocus(i) {
+  if (i < 0 || i >= G.panes.length) return;
+  const changed = G.focus !== i;
+  G.focus = i;
+  if (!WP.chatFocus || changed) { WP.chatFocus = true; }
+  for (const p of document.querySelectorAll('#chats > .chatpane')) p.classList.toggle('focus', Number(p.dataset.pane) === i);
+  if (changed) {
+    const c = typingChat();
+    // The groups that follow the chat you use show this one now: its steps, its plans.
+    for (const a of PA.list) if (!pinOf(a)) inArea(a, () => { if (G.view.trace) G.view = paneView(c, 'trace'); else if (!G.view.ftab && !G.view.files && !G.view.browser && !G.view.term) G.view = { ...G.view, id: null }; renderPane(); });
+    syncLayout(); renderSidebar(); wtSave(); wsChrome();
+    if (FIND.bar && FIND.scope?.kind === 'dom' && FIND.scope.host?.classList.contains('chatpane')) findClose();
+  }
+  paneMarkAreas();
+}
+async function openBeside(id, { target = WS.CHAT_GROUP, zone = 'right', focus = true } = {}) {
+  if (isPhone() || !G.panes.length) return showChat(id);
+  const c = await getChat(id); if (!c) return uiAlert('Could not open that chat.');
+  const at = G.panes.indexOf(id);
+  if (at >= 0) {
+    // On screen already: moved beside the target when that was asked for (dragged), and focused.
+    const gid = at ? WS.CHAT2_GROUP : WS.CHAT_GROUP;
+    if (target && target !== gid && zone !== 'center') { const r = WS.moveGroup(WK.lay, gid, target, zone); if (r.ok) { WK.lay = r.layout; wsPlaced(); } }
+    return setChatFocus(at);
+  }
+  const has2 = !!WS.findGroup(WK.lay, WS.CHAT2_GROUP);
+  let r = WS.placeChat2(WK.lay, id, WS.findGroup(WK.lay, target) && target !== WS.CHAT2_GROUP ? target : WS.CHAT_GROUP, zone === 'center' ? 'right' : zone);
+  if (!r.ok) return capTip(groupEl(target) || groupEl(WS.CHAT_GROUP));
+  WK.lay = r.layout;
+  if (has2 && target && target !== WS.CHAT2_GROUP && zone !== 'center') { r = WS.moveGroup(WK.lay, WS.CHAT2_GROUP, target, zone); if (r.ok) WK.lay = r.layout; }
+  G.unseen?.delete(id);
+  wtOpen(c);
+  G.panes = [G.panes[0], id]; G.focus = focus ? 1 : Math.min(G.focus, 1);
+  wsSeen('chat', id);
+  renderPanes(); savePrefs(); renderSidebar(); wtSave(); wsChrome();
+}
+// A chat off the screen (it keeps running); the other takes the space, in the first chat group.
+function closeSide(i) {
+  if (G.panes.length < 2 || !G.panes[i]) return;
+  G.panes.splice(i, 1); G.focus = 0;
+  WK.lay = WS.removeGroup(WK.lay, WS.CHAT2_GROUP);
+  for (const [g, id] of Object.entries(WK.pins || {})) if (!G.panes.includes(id)) delete WK.pins[g];
+  renderPanes(); savePrefs(); renderSidebar(); wtSave(); wsChrome(); paneSave();
+}
+// A chat's menu (its tab, its sidebar row): open it beside the chat you use, or take it off the screen.
+function besideItems(id) {
+  if (isPhone() || !G.panes.length) return [];
+  const at = G.panes.indexOf(id), cap = !WS.findGroup(WK.lay, WS.CHAT2_GROUP) && WS.groups(WK.lay).length >= WS.MAX_GROUPS;
+  if (at >= 0) return G.panes.length > 1 ? [['Close this side (it keeps running)', () => closeSide(at)], null] : [];
+  return [[G.panes.length > 1 ? '◫ Open beside (in place of the other chat)' : '◫ Open beside', () => openBeside(id), { disabled: cap, title: cap ? CAP_TIP : 'Show it next to the chat you use: two chats on screen, each running on its own' }], null];
+}
+// After a reload (or coming back to the project): the chat that was beside this one opens beside it again.
+async function wsBesideFromSave(c) {
+  if (G.panes.length !== 1 || isPhone() || G.panes[0] !== c.id) return;
+  const id = WS.chat2Id(WK.lay);
+  if (!id) return;
+  if (id === c.id || !chatInfo(id) && !(await getChat(id))) { WK.lay = WS.removeGroup(WK.lay, WS.CHAT2_GROUP); wsPlaced(); return; }
+  if (G.panes.length === 1 && G.panes[0] === c.id) openBeside(id, { focus: false });
 }
 
 // ---------- the groups on screen: each placed by its rectangle in the layout ----------
@@ -7720,11 +7855,13 @@ function paneMarkAreas() {
 // group at a time, with a switcher.
 const WP = { chatFocus: false, rects: {}, key: '', agent: false };
 const WS_GAP = 6;
-const groupEl = (gid) => (gid === WS.CHAT_GROUP ? $('.layout > .work') : areaOf(gid)?.el || null);
+const chatBox = (i) => document.querySelector(`#chats > .chatpane[data-pane="${i}"]`);
+const groupEl = (gid) => (gid === WS.CHAT_GROUP ? chatBox(0) || $('.layout > .work') : gid === WS.CHAT2_GROUP ? chatBox(1) : areaOf(gid)?.el || null);
 // What shows: only the chat when the pane is hidden (◧), on Home or News; only the maximised group when there is one.
 function wsShownGroups() {
-  const all = WS.groups(WK.lay).map((g) => g.id).filter((id) => id === WS.CHAT_GROUP || areaOf(id));
-  if (!paneVisible() || $('.layout')?.classList.contains('news-on')) return [WS.CHAT_GROUP];
+  const chats = G.panes.length > 1 ? [WS.CHAT_GROUP, WS.CHAT2_GROUP] : [WS.CHAT_GROUP];
+  const all = WS.groups(WK.lay).map((g) => g.id).filter((id) => chats.includes(id) || areaOf(id));
+  if (!paneVisible() || $('.layout')?.classList.contains('news-on')) return chats.filter((id) => all.includes(id)).length ? chats.filter((id) => all.includes(id)) : [WS.CHAT_GROUP];
   if (WK.max && all.includes(WK.max)) return [WK.max];
   return all;
 }
@@ -7743,8 +7880,10 @@ function wsPlace() {
   $('#wsPhoneSw')?.remove();
   const W = lay.clientWidth, H = lay.clientHeight;
   if (!W || !H) return;
-  const shown = wsShownGroups();
-  const rs = shown.length === 1 ? { groups: { [shown[0]]: { x: 0, y: 0, w: W, h: H } }, bars: [] } : WS.rects(WK.lay, { x: 0, y: 0, w: W, h: H }, WS_GAP);
+  const shown = wsShownGroups(), whole = shown.length === WS.groups(WK.lay).length;
+  // Some groups hidden (◧, a maximised group, a chat group with no chat now): the rest share the space, without bars.
+  const rs = shown.length === 1 ? { groups: { [shown[0]]: { x: 0, y: 0, w: W, h: H } }, bars: [] } : WS.rects(whole ? WK.lay : WS.keepGroups(WK.lay, shown), { x: 0, y: 0, w: W, h: H }, WS_GAP);
+  if (!whole) rs.bars = [];
   const key = JSON.stringify([rs.groups, rs.bars.map((b) => [b.x, b.y, b.w, b.h])]);
   WP.rects = rs.groups;
   if (key === WP.key) return;
@@ -7754,7 +7893,8 @@ function wsPlace() {
     el.style.removeProperty('display');
     el.style.setProperty('--gx', `${r.x}px`); el.style.setProperty('--gy', `${r.y}px`); el.style.setProperty('--gw', `${r.w}px`); el.style.setProperty('--gh', `${r.h}px`);
   };
-  put(work, rs.groups[WS.CHAT_GROUP]);
+  work.style.removeProperty('display');
+  G.panes.forEach((_, i) => { const el = chatBox(i); if (el) put(el, rs.groups[i ? WS.CHAT2_GROUP : WS.CHAT_GROUP]); });
   const side = PA.list.some((a) => rs.groups[a.gid]);
   pane.style.display = side ? '' : 'none';
   for (const a of PA.list) { a.el.hidden = !rs.groups[a.gid]; put(a.el, rs.groups[a.gid]); a.el.classList.toggle('maxed', WK.max === a.gid && shown.length === 1); }
@@ -7841,16 +7981,24 @@ function wsMaxToggle(gid) {
 // 👁 Follow the agent shows what the agent does (its page, its commands, 🧭 its steps) in one group, marked in that
 // group's strip; the others stay where you put them. One group at a time; the first one until you pick another.
 const wsFollowGid = () => (areaOf(WK.follow) ? WK.follow : PA.list[0]?.gid);
-const agentArea = () => areaOf(wsFollowGid()) || PA.focus;
+// The group that follows the agent shows what its owner chat's agent does; a chat's agent also shows in a group pinned
+// to that chat. A chat that owns no group isn't followed (the groups stay where you put them).
+function agentArea(c = typingChat()) {
+  const fa = areaOf(wsFollowGid());
+  if (fa && c && areaChat(fa) === c) return fa;
+  return (c && PA.list.find((a) => pinOf(a) === c.id)) || null;
+}
+const onScreen = (c) => !!c && G.panes.includes(c.id);
 function wsSetFollow(gid) {
   WK.follow = gid;
   if (G.followAgent === false) { G.followAgent = true; savePrefs(); const c = focused(); if (c?.el) renderComposerBar(c); }
   paneMarkAreas(); paneSave();
 }
 // Runs what the agent caused in the group that follows it, without moving your focus.
-function asAgent(fn) {
+function asAgent(c, fn) {
+  const a = agentArea(c); if (!a) return undefined;
   const was = WP.agent; WP.agent = true;
-  try { return inArea(agentArea(), fn); } finally { WP.agent = was; }
+  try { return inArea(a, fn); } finally { WP.agent = was; }
 }
 
 // ---------- moving tabs: drag onto a group's edge or middle, or from a menu ----------
@@ -7885,14 +8033,17 @@ function wsDropShow() {
 function wsDropHide() { for (const x of document.querySelectorAll('.ws-drop')) x.remove(); WD.src = null; PA.drag = null; deskPlace(true); }
 const ZONE_WORD = { left: 'Split left', right: 'Split right', top: 'Split up', bottom: 'Split down', center: 'Show here' };
 // Would this drop add a group? A split does, unless what moves is the chat (it takes its own group along).
-const wsAdds = (src, zone) => zone !== 'center' && src.type !== 'chat';
+const wsAdds = (src, zone) => zone !== 'center' && (src.type !== 'chat' || (!G.panes.includes(src.id) && G.panes.length < 2 && !WS.findGroup(WK.lay, WS.CHAT2_GROUP)));
 function wsDropHint(box, e) {
   const gid = box.dataset.gid, r = box.getBoundingClientRect(), src = WD.src;
   let zone = WS.zoneAt({ x: r.left, y: r.top, w: r.width, h: r.height }, e.clientX, e.clientY);
   if (gid !== WS.CHAT_GROUP && e.clientY - r.top < 36 && zone !== 'left' && zone !== 'right') zone = 'center'; // over the tab strip
   let ok = true, cap = false, say = ZONE_WORD[zone];
-  if (src.type === 'chat') { if (gid === WS.CHAT_GROUP) { ok = false; say = ''; } else if (zone === 'center') { ok = false; say = 'Drop on an edge to put the chat there'; } else say = `Chat ${{ left: 'on the left of', right: 'on the right of', top: 'above', bottom: 'below' }[zone]} this group`; }
-  else if (gid === WS.CHAT_GROUP && zone === 'center') { ok = false; say = 'Drop on an edge: the chat keeps a group of its own'; }
+  const side = { left: 'on the left of', right: 'on the right of', top: 'above', bottom: 'below' }[zone];
+  const ownG = src.type === 'chat' ? (G.panes.indexOf(src.id) === 1 ? WS.CHAT2_GROUP : G.panes.includes(src.id) ? WS.CHAT_GROUP : null) : null;
+  if (src.type === 'chat' && wsAdds(src, zone) && WS.groups(WK.lay).length >= WS.MAX_GROUPS) { ok = false; cap = true; say = `At most ${WS.MAX_GROUPS} groups in a window`; }
+  else if (src.type === 'chat') { if (gid === ownG) { ok = false; say = ''; } else if (zone === 'center') { ok = false; say = 'Drop on an edge to put the chat there'; } else say = ownG ? `Chat ${side} this group` : `Open beside: ${side} this group`; }
+  else if (WS.isChatGroup(gid) && zone === 'center') { ok = false; say = 'Drop on an edge: a chat keeps a group of its own'; }
   else if (wsAdds(src, zone) && WS.groups(WK.lay).length >= WS.MAX_GROUPS) { ok = false; cap = true; say = `At most ${WS.MAX_GROUPS} groups in a window`; }
   else if (src.type === 'pane' && zone === 'center' && src.from && areaOf(gid) === src.from && inArea(src.from, () => paneTab() === src.tab && !G.view.ftab)) { ok = false; say = 'Already here'; }
   box.dataset.zone = ok ? zone : 'no'; box.dataset.cap = cap ? '1' : '';
@@ -7906,12 +8057,11 @@ function wsDropHint(box, e) {
 function wsDropAt(src, gid, zone) {
   const c = focused(); if (!c) return;
   if (src.type === 'chat') {
-    if (gid === WS.CHAT_GROUP || zone === 'center') return;
-    const r = WS.moveGroup(WK.lay, WS.CHAT_GROUP, gid, zone);
-    if (!r.ok) return;
-    WK.lay = r.layout; wsPlaced();
-    if (src.id && src.id !== G.panes[0]) showChat(src.id);
-    return;
+    if (zone === 'center') return;
+    const at = G.panes.indexOf(src.id), own = at === 1 ? WS.CHAT2_GROUP : WS.CHAT_GROUP;
+    // A chat on screen moves with its group; another chat opens beside, as the second one.
+    if (at >= 0 || !src.id) { if (gid === own) return; const r = WS.moveGroup(WK.lay, own, gid, zone); if (r.ok) { WK.lay = r.layout; wsPlaced(); } return; }
+    return openBeside(src.id, { target: gid, zone });
   }
   if (src.type === 'file') return wsMoveFileTab(src.tid, gid, zone);
   if (src.type === 'pane') {
@@ -7944,6 +8094,14 @@ function wsChatMenu(e) {
 }
 // The name of what an area shows, for "Move to the group with …".
 const wsWith = (a) => `the group with ${wsAreaName(a)}`;
+// With two chats on screen: pin a group to one of them, or let it follow the chat you use.
+function pinItems(a) {
+  const pin = pinOf(a);
+  if (G.panes.length < 2 && !pin) return [];
+  const items = G.panes.filter((id) => id !== pin).map((id) => [`📌 Pin to “${clip(chatTitle(id), 28)}”`, () => wsPin(a, id), { title: 'This group shows that chat\'s steps, pages, terminal and files, whichever chat you use' }]);
+  if (pin) items.push(['Follow the chat you use', () => wsPin(a, null)]);
+  return [...items, null];
+}
 // ⋯ on a group's strip: split it, move its tab, maximise, follow the agent, close.
 function wsGroupMenu(e, a) {
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), tab = inArea(a, () => (G.view.ftab ? { type: 'file', tid: G.view.ftab } : { type: 'pane', tab: paneTab(), from: a }));
@@ -7953,6 +8111,7 @@ function wsGroupMenu(e, a) {
     ['⊟ Split down', () => paneSplitTab(a.gid, null, 'bottom'), capped],
     ...others.map((o) => [`→ Move ${wsAreaName(a)} to ${wsWith(o)}`, () => wsDropAt(tab, o.gid, 'center')]),
     null,
+    ...pinItems(a),
     [WK.max === a.gid ? '⤡ Restore the other groups' : '⤢ Maximise this group', () => wsMaxToggle(a.gid)],
     [wsFollowGid() === a.gid && PA.list.length > 1 ? '👁 Follows the agent ✓' : '👁 This group follows the agent', () => wsSetFollow(a.gid), { disabled: wsFollowGid() === a.gid && G.followAgent !== false }],
     null,
@@ -7969,6 +8128,7 @@ function wsTabMenu(e, a, src) {
     [`⊟ Split down with ${name}`, () => wsDropAt(src, a.gid, 'bottom'), capped],
     ...others.map((o) => [`→ Move to ${wsWith(o)}`, () => wsDropAt(src, o.gid, 'center')]),
     null,
+    ...(src.type === 'pane' ? pinItems(a) : []),
     ...(st ? [...(st.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ['Close', () => wsCloseFileTab(src.tid)]] : [['Close this group', () => paneCloseArea(a), { disabled: PA.list.length < 2, danger: true }]]),
   ]);
 }
@@ -8055,12 +8215,12 @@ function wsMoveFileTab(tid, gid, zone) {
 function drawFileTabs(box) {
   const holder = box && $('.pa-files', box); if (!holder) return;
   const ids = fileTabs(AREA.gid), cur = G.view?.ftab;
-  const sig = JSON.stringify(ids.map((id) => { const st = WK.tabs.get(id)?.st || {}; return [id, st.preview, st.f?.name, st.f?.label, id === cur]; }));
+  const sig = JSON.stringify([G.panes, ids.map((id) => { const st = WK.tabs.get(id)?.st || {}; return [id, st.preview, st.f?.name, st.f?.label, id === cur]; })]);
   if (holder.dataset.sig === sig) return;
   holder.dataset.sig = sig;
   holder.innerHTML = ids.map((id) => {
     const st = WK.tabs.get(id)?.st || {}, f = st.f || {}, label = f.kind in PANE_CARDS ? (f.label || f.name || 'From the chat') : baseName(f.label || f.name || 'File');
-    return `<button type="button" role="tab" class="pa-ftab ${id === cur ? 'on' : ''} ${st.preview ? 'preview' : ''}" data-ftab="${esc(id)}" draggable="true" aria-selected="${id === cur}" title="${esc(f.label || f.name || label)}${st.preview ? '\nPreview: the next file you open takes its place. Double-click to keep it open.' : ''}\nRight-click to split or move it · middle-click to close"><span class="ft-ico" aria-hidden="true">${PV_ICON[f.kind] || '📄'}</span><span class="ft-name">${esc(label)}</span><span class="ft-x" role="button" aria-label="Close ${esc(label)}">×</span></button>`;
+    return `<button type="button" role="tab" class="pa-ftab ${id === cur ? 'on' : ''} ${st.preview ? 'preview' : ''}" data-ftab="${esc(id)}" draggable="true" aria-selected="${id === cur}" title="${esc(f.label || f.name || label)}${st.preview ? '\nPreview: the next file you open takes its place. Double-click to keep it open.' : ''}${st.chat && G.panes.length > 1 ? `\nFrom “${esc(chatTitle(st.chat))}”` : ''}\nRight-click to split or move it · middle-click to close">${st.chat && G.panes.length > 1 ? ownSq(st.chat) : ''}<span class="ft-ico" aria-hidden="true">${PV_ICON[f.kind] || '📄'}</span><span class="ft-name">${esc(label)}</span><span class="ft-x" role="button" aria-label="Close ${esc(label)}">×</span></button>`;
   }).join('');
 }
 // Each project remembers its layout: its groups and where they sit, each group's tabs (file tabs too), sizes, the
@@ -8068,10 +8228,10 @@ function drawFileTabs(box) {
 // release, so an older QuorX keeps the split.
 const paneKey = (id) => `oh-pane-areas:${id}`;
 function paneSave() {
-  const c = focused(); if (!c || PA.chat !== c.id) return;
+  const c = primaryChat(); if (!c || PA.chat !== c.id) return;
   wsSync();
   const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1, own = WT.pid === projOf(c);
-  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max });
+  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins });
   if (s === PA.saved) return;
   PA.saved = s;
   const old = split ? WS.toAreas(WK.lay, tabs) : null;
@@ -8091,7 +8251,7 @@ function paneChat(c) {
   const pid = projOf(c), same = PA.chat !== undefined && PA.pid === pid;
   PA.chat = id; PA.pid = pid;
   if (same) {
-    for (const a of PA.list) if (a !== AREA) inArea(a, () => { if (G.view.trace) G.view = paneView(c, 'trace'); });
+    for (const a of PA.list) if (a !== AREA) inArea(a, () => { const ac = focused(); if (G.view.trace && ac && !ac.agent.messages.some((m) => m.runId === G.view.trace)) G.view = paneView(ac, 'trace'); });
     PA.saved = '';
     paneMarkAreas();
     return PA.list.length > 1;
@@ -8105,7 +8265,7 @@ function paneChat(c) {
   const r = c ? wsLoad(c) : null;
   const ok = r?.layout && WS.findGroup(r.layout, WS.CHAT_GROUP) && WS.sideGroups(r.layout).length;
   const lay = ok ? r.layout : wsDefaultLayout();
-  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null;
+  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {};
   PA.saved = '';
   const side = WS.sideGroups(lay).slice(0, PANE_MAX_AREAS);
   if (a0.gid !== side[0].id) { const old = a0.gid; a0.st.dsk = null; bindArea(a0, side[0].id); wsForget(old); }
@@ -8119,11 +8279,11 @@ function paneChat(c) {
       if (t.termTf) a.st.termTf = t.termTf;
       for (const tid of g.tabs.filter(isFileTab)) { const st = WS.tabKind('viewer').load(r.tabs[tid]); if (st.f) wsTab(tid).st = st; else WK.lay = WS.removeTab(WK.lay, tid); }
       const ft = isFileTab(g.active) && WK.tabs.get(g.active)?.st.f;
-      inArea(a, () => { G.view = ft ? { id: ft.id, src: false, files: false, ftab: g.active } : paneView(c, WS.groupPane(g), WS.tabKind('artifact').load(tab('artifact')).art || null); });
+      inArea(a, () => { G.view = ft ? { id: ft.id, src: false, files: false, ftab: g.active } : paneView(focused() || c, WS.groupPane(g), WS.tabKind('artifact').load(tab('artifact')).art || null); });
     }
     PA.focus = areaOf(r.layout.focus) || a0; AREA = PA.focus; WP.chatFocus = r.layout.focus === WS.CHAT_GROUP;
     wsSync();
-    PA.saved = WS.serialise(WK.lay, wsTabState(), WT.pid === pid ? WT.closed : [], { follow: WK.follow, max: WK.max });
+    PA.saved = WS.serialise(WK.lay, wsTabState(), WT.pid === pid ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins });
   }
   paneMarkAreas();
   return PA.list.length > 1;
@@ -8200,11 +8360,11 @@ function posBack(a) {
 // Page artifacts are hosted by the server (/art/<chat>/<id>), so the preview is always the newest version;
 // sites and apps reload by themselves when files in the project folder change.
 // What the area drew, then back to where you were reading in it.
-function renderPane() { const r = renderPaneNow(); posBack(AREA); return r; }
+function renderPane() { return inArea(AREA, () => { const r = renderPaneNow(); posBack(AREA); return r; }); }
 function renderPaneNow() {
   const c = focused();
-  // Another chat brings back its own areas: the others are drawn too.
-  if (paneChat(c)) for (const a of PA.list) if (a !== AREA) inArea(a, renderPane);
+  // Another chat brings back its own areas: the others are drawn too. The layout is the first chat's project's.
+  if (paneChat(primaryChat())) for (const a of PA.list) if (a !== AREA) inArea(a, renderPane);
   const sel = $('#artSelect'), body = $('#paneBody'), bar = $('#appBar');
   bar.hidden = true;
   stopWatch(); clearInterval(AREA.st.cardTimer);
@@ -8341,7 +8501,8 @@ const FIND_STYLE = '::highlight(qx-find){background:rgba(250,204,21,.38);color:i
 function findScope() {
   const c = focused();
   const inChat = WP.chatFocus || !paneVisible() || isPhone() && G.mview !== 'preview';
-  if (inChat) { const msgs = c?.el?.root && $('.msgs', c.el.root); return msgs ? { kind: 'dom', host: $('.layout > .work'), root: msgs, name: 'this chat' } : null; }
+  CTX.chat = null; // Ctrl+F means the chat you use, or the group you used last (its own chat below)
+  if (inChat) { const msgs = c?.el?.root && $('.msgs', c.el.root); return msgs ? { kind: 'dom', host: c.el.root, root: msgs, name: G.panes.length > 1 ? `“${clip(c.title, 30)}”` : 'this chat' } : null; }
   const a = PA.focus, v = a?.st.view || {};
   if (!a) return null;
   const name = wsAreaName(a);
@@ -8531,25 +8692,27 @@ function wtSave() {
   if (!WT.pid) return;
   const c = focused();
   if (c && projOf(c) === WT.pid && PA.chat === c.id) return paneSave();
-  const r = readLayout(WT.pid), lay = WS.withChatTabs(r?.layout || WS.defaultLayout(), WT.tabs, G.panes[0]);
+  const r = readLayout(WT.pid), lay = WS.withChatTabs(r?.layout || WS.defaultLayout(), WT.tabs.filter((x) => x !== WS.chat2Id(r?.layout || WS.defaultLayout())), G.panes[0]);
   const keep = r || WT.tabs.length || WT.closed.length;
-  try { if (keep) localStorage.setItem(LAYOUT_KEY(WT.pid), WS.serialise(lay, r?.tabs || {}, WT.closed, { follow: r?.follow, max: r?.max })); else localStorage.removeItem(LAYOUT_KEY(WT.pid)); } catch { /* kept until the page reloads */ }
+  try { if (keep) localStorage.setItem(LAYOUT_KEY(WT.pid), WS.serialise(lay, r?.tabs || {}, WT.closed, { follow: r?.follow, max: r?.max, pins: r?.pins })); else localStorage.removeItem(LAYOUT_KEY(WT.pid)); } catch { /* kept until the page reloads */ }
 }
 // A chat comes to the front: its project's tabs are the strip, and it is one of them (after the one on screen).
 function wtOpen(c) {
   const pid = projOf(c);
   if (WT.pid !== pid) wtLoad(pid);
-  const cur = G.panes[0] && projOf(G.open.get(G.panes[0])) === pid ? G.panes[0] : null;
+  const cur = curId() && projOf(G.open.get(curId())) === pid ? curId() : null;
   WT.tabs = WS.insertTab(WT.tabs, c.id, cur);
 }
 // Closing a tab: off the strip, onto the closed stack; the chat keeps running. The one on screen hands over to its
 // right-hand neighbour (else its left), or Home when it was the last.
 function wtClose(id, { quiet = false } = {}) {
   if (!WT.tabs.includes(id)) return;
-  const shown = G.panes[0] === id, next = shown ? WS.afterClose(WT.tabs, id) : null, at = WT.tabs.indexOf(id);
+  const side = G.panes.indexOf(id), shown = side >= 0, next = shown ? WS.afterClose(WT.tabs.filter((x) => x === id || !G.panes.includes(x)), id) : null, at = WT.tabs.indexOf(id);
   WT.tabs = WT.tabs.filter((x) => x !== id);
   WT.closed = WS.pushClosed(WT.closed, { kind: 'chat', id, at });
-  if (shown) { if (next) showChat(next); else showLanding(); }
+  // With two on screen, closing one leaves the other; else the next tab comes to the front.
+  if (shown && G.panes.length > 1) closeSide(side);
+  else if (shown) { if (next) showChat(next); else showLanding(); }
   wtSave();
   if (!quiet) wsChrome();
 }
@@ -8581,7 +8744,7 @@ async function reopenOne(e) {
   }
   // The rest opens in a chat's pane: the one on screen, else the first tab of this project.
   let c = focused();
-  if (e.kind === 'file') { if (!await getChat(e.chat)) return false; if (G.panes[0] !== e.chat) await showChat(e.chat); c = focused(); if (!c || !e.f) return false; openFileInPane(c, e.f); return true; }
+  if (e.kind === 'file') { if (!await getChat(e.chat)) return false; if (!G.panes.includes(e.chat)) await showChat(e.chat); else setChatFocus(G.panes.indexOf(e.chat)); c = focused(); if (!c || !e.f) return false; openFileInPane(c, e.f); return true; }
   if (!c && WT.tabs[0]) { await showChat(WT.tabs[0]); c = focused(); }
   if (!c) return false;
   if (e.kind === 'page') { if (!/^https?:\/\//i.test(String(e.url || ''))) return false; newBTab(c.projectId, e.url); setPaneTab('browser'); return true; }
@@ -8610,8 +8773,8 @@ function wsLive(e) {
 function wsShowing(e) {
   if (e.kind === 'settings') return settingsOpen() && ST.cat === e.id;
   if (settingsOpen()) return false;
-  if (e.kind === 'chat') return G.panes[0] === e.id;
-  if (e.chat && G.panes[0] !== e.chat) return false;
+  if (e.kind === 'chat') return curId() === e.id;
+  if (e.chat && !G.panes.includes(e.chat)) return false;
   if (e.kind === 'tab') { const a = PA.list.find((x) => x.gid === e.id.split(':')[1]); return !!a && paneVisible() && !a.st.view?.ftab && inArea(a, paneTab) === WS.KIND_PANE[WS.kindOf(e.id)]; }
   if (e.kind === 'file') return paneVisible() && PA.list.some((a) => a.st.view?.id === e.id);
   return false;
@@ -8630,7 +8793,7 @@ async function wsShowEntry(e) {
   if (e.kind === 'settings') { if (settingsOpen()) { ST.cat = e.id; $('#stSearch').value = ''; drawSettings(); } else openSettings(e.id); return; }
   if (settingsOpen()) { if (ST.dirty && !await uiConfirm('Discard your unsaved settings changes?')) return; cancelSettings(); }
   const chat = e.kind === 'chat' ? e.id : e.chat;
-  if (chat && (G.panes[0] !== chat || e.kind === 'chat')) await showChat(chat);
+  if (chat && (curId() !== chat || e.kind === 'chat')) await showChat(chat);
   const c = focused(); if (!c || e.kind === 'chat') return;
   if (e.kind === 'tab') {
     const a = PA.list.find((x) => x.gid === e.id.split(':')[1]) || PA.focus;
@@ -8646,8 +8809,8 @@ document.addEventListener('keydown', (e) => {
   const other = [...document.querySelectorAll('dialog[open]')].some((d) => d.id !== 'settings');
   if (e.altKey && !ctrl && !e.shiftKey && (k === 'ArrowLeft' || k === 'ArrowRight')) { if (other) return; e.preventDefault(); return wsStep(k === 'ArrowLeft' ? -1 : 1); }
   if (!ctrl || e.altKey || other || settingsOpen()) return;
-  if (k === 'Tab') { e.preventDefault(); const id = WS.cycleTab(WT.tabs, G.panes[0], e.shiftKey ? -1 : 1); if (id && id !== G.panes[0]) showChat(id); return; }
-  if (k === 'w' && !e.shiftKey && G.panes[0] && WT.tabs.includes(G.panes[0])) { e.preventDefault(); return wtClose(G.panes[0]); }
+  if (k === 'Tab') { e.preventDefault(); const id = WS.cycleTab(WT.tabs, curId(), e.shiftKey ? -1 : 1); if (id && id !== curId()) showChat(id); return; }
+  if (k === 'w' && !e.shiftKey && curId() && WT.tabs.includes(curId())) { e.preventDefault(); return wtClose(curId()); }
   if (k === 't' && e.shiftKey) { e.preventDefault(); return wsReopen(); }
 });
 // The mouse's side buttons. In the desktop app they come from the window (app-command), which sends them to a real
@@ -8675,13 +8838,14 @@ function chatState(id) {
 const chatTitle = (id) => chatInfo(id)?.title || WT.titles.get(id) || 'Chat';
 function wtDraw() {
   const box = $('#wtStrip'); if (!box) return;
-  const cur = G.panes[0], p = G.projects?.find((x) => x.id === WT.pid);
-  const sig = JSON.stringify([WT.pid, cur, WT.tabs.map((id) => [id, chatTitle(id), chatState(id)[0]]), p?.name]);
+  const cur = curId(), p = G.projects?.find((x) => x.id === WT.pid);
+  const sig = JSON.stringify([WT.pid, cur, G.panes, WT.tabs.map((id) => [id, chatTitle(id), chatState(id)[0]]), p?.name]);
   if (box.dataset.sig !== sig) {
     box.dataset.sig = sig;
     box.innerHTML = WT.tabs.map((id) => {
       const [st, say] = chatState(id), t = chatTitle(id), on = id === cur;
-      return `<div class="wt-tab ${on ? 'on' : ''} ${st ? `st-${st}` : ''}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" draggable="true" data-c="${esc(id)}" title="${esc(t)}${say ? `\n${say}` : ''}\nMiddle-click or × to close (it keeps running) · drag to move"><i class="wt-dot" aria-hidden="true"></i><span class="wt-name">${esc(t)}</span>${say ? `<span class="sr-only">${esc(say)}</span>` : ''}<button type="button" class="wt-x" tabindex="-1" aria-label="Close ${esc(t)}">×</button></div>`;
+      const beside = !on && G.panes.includes(id);
+      return `<div class="wt-tab ${on ? 'on' : ''} ${beside ? 'beside' : ''} ${st ? `st-${st}` : ''}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" draggable="true" data-c="${esc(id)}" title="${esc(t)}${say ? `\n${say}` : ''}${beside ? '\nOn screen beside the chat you use' : ''}\nMiddle-click or × to close (it keeps running) · drag onto a group's edge to open it beside"><i class="wt-dot" aria-hidden="true"></i>${G.panes.length > 1 && G.panes.includes(id) ? ownSq(id) : ''}<span class="wt-name">${esc(t)}</span>${say ? `<span class="sr-only">${esc(say)}</span>` : ''}<button type="button" class="wt-x" tabindex="-1" aria-label="Close ${esc(t)}">×</button></div>`;
     }).join('') || '<span class="wt-none">No chats open. Pick one in the sidebar, or start one on Home.</span>';
     const pr = $('#wtProj');
     if (pr) { pr.hidden = !p; if (p) { pr.textContent = p.name; pr.setAttribute('style', projStyle(p)); pr.title = `${p.name}: these are its open chats (each project keeps its own)`; } }
@@ -8695,7 +8859,7 @@ function wtWire() {
   box.addEventListener('click', (e) => {
     const t = e.target.closest('.wt-tab'); if (!t) return;
     if (e.target.closest('.wt-x')) return wtClose(t.dataset.c);
-    if (t.dataset.c !== G.panes[0]) { showChat(t.dataset.c); if (isPhone()) setMView('chat'); }
+    if (t.dataset.c !== curId()) { showChat(t.dataset.c); if (isPhone()) setMView('chat'); }
   });
   box.addEventListener('auxclick', (e) => { const t = e.target.closest('.wt-tab'); if (t && e.button === 1) { e.preventDefault(); wtClose(t.dataset.c); } });
   box.addEventListener('mousedown', (e) => { if (e.button === 1 && e.target.closest('.wt-tab')) e.preventDefault(); }); // no autoscroll
@@ -8740,8 +8904,9 @@ const closedLabel = (e) => (e.kind === 'chat' ? `Chat · ${chatTitle(e.id)}` : e
 function wtMenu(e, id) {
   const last = WT.closed.at(-1);
   popMenu(e, [
+    ...besideItems(id),
     ['Close', () => wtClose(id)],
-    ['Close other tabs', () => { for (const x of WT.tabs.filter((y) => y !== id)) wtClose(x, { quiet: true }); if (G.panes[0] !== id) showChat(id); wsChrome(); }, { disabled: WT.tabs.length < 2 }],
+    ['Close other tabs', () => { for (const x of WT.tabs.filter((y) => y !== id)) wtClose(x, { quiet: true }); if (curId() !== id) showChat(id); wsChrome(); }, { disabled: WT.tabs.length < 2 }],
     ['Close tabs to the right', () => { for (const x of WT.tabs.slice(WT.tabs.indexOf(id) + 1)) wtClose(x, { quiet: true }); wsChrome(); }, { disabled: WT.tabs.indexOf(id) === WT.tabs.length - 1 }],
     null,
     [last ? `Reopen closed tab (${closedLabel(last)})` : 'Reopen closed tab', () => wsReopen(), { disabled: !last, title: 'Ctrl+Shift+T' }],
@@ -8765,7 +8930,7 @@ function wtList(anchor) {
   m.onclick = async (ev) => {
     const b = ev.target.closest('.wt-lrow'); if (!b) return;
     close();
-    if (b.dataset.c) { if (b.dataset.c !== G.panes[0]) await showChat(b.dataset.c); if (isPhone()) setMView('chat'); return; }
+    if (b.dataset.c) { if (b.dataset.c !== curId()) await showChat(b.dataset.c); if (isPhone()) setMView('chat'); return; }
     // A closed one picked from the list: it comes off the stack wherever it sits.
     const k = Number(b.dataset.k), entry = WT.closed[k]; if (!entry) return;
     WT.closed = WT.closed.filter((_, j) => j !== k); wtSave();
@@ -10298,7 +10463,7 @@ function wireSettings() {
     setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
   };
   // The mic key: press the keys you want while the box has the focus.
-  for (const k of main.querySelectorAll('.st-keycap')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
+  for (const k of main.querySelectorAll('.st-keycap[data-bind]')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
     setPath(S, seg.dataset.bind, b.dataset.v); ST.changed.add(seg.dataset.bind); seg.closest('.st-row')?.classList.add('changed'); mark();
@@ -11842,7 +12007,7 @@ async function boot() {
   $('#stClose').onclick = cancelSettings;
   $('#settings').addEventListener('cancel', (e) => { e.preventDefault(); cancelSettings(); });
   // Closing Settings brings the chat back to the front: a step of its own, so ‹ returns to the settings page.
-  $('#settings').addEventListener('close', () => { if (G.panes[0]) wsSeen('chat', G.panes[0]); wsChrome(); });
+  $('#settings').addEventListener('close', () => { if (curId()) wsSeen('chat', curId()); wsChrome(); });
   $('#stResetCat').onclick = () => resetCategory();
   $('#stSearch').oninput = () => searchSettings($('#stSearch').value);
   $('#newBtn').onclick = () => newChat();
@@ -12367,7 +12532,9 @@ async function pollDev() {
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
     const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r); pagesNotice(pid, r);
-    const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}`);
+    // CPU and memory only while that folder's Running tab is on screen (the counts don't need them).
+    const shown = spaceOf(focused()) === pid && G.view.term && G.term?.sec === 'run';
+    const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}${shown ? '&usage=1' : ''}`);
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
       const fc = focused();
@@ -13173,23 +13340,24 @@ function wireAreaChrome() {
 // Every page the agent's browser showed in a reply: browser steps and look's vision checks.
 const isShot = (e) => !!e && !!e.image && (e.t === 'screenshot' || (e.t === 'decide_start' && e.look));
 function onAgentBrowse(c, m) {
-  if (focused() !== c) return;
-  renderPaneTabs(c);
+  if (!onScreen(c)) return;
+  eachArea(() => { if (focused() === c) renderPaneTabs(c); });
   // The agent's page appears as a browser tab; with "Follow the agent" the pane switches to it.
   refreshAgentTab(c).then(() => {
     // Shown already in a group you can see (one you put it in, say): that one is enough.
     const sid = `agent-${c.id}`, seen = PA.list.some((a) => a.st.view?.browser && a.st.bActive === sid && !a.el.hidden && a.el.style.display !== 'none');
-    if (followsAgent(c) && !seen) asAgent(() => { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = sid; c.paneHidden = false; syncLayout(); renderPane(); });
+    if (followsAgent(c) && !seen) asAgent(c, () => { G.view = { id: G.view.id, src: false, files: false, browser: true }; G.bActive = sid; c.paneHidden = false; syncLayout(); renderPane(); });
     else eachArea(() => { if (G.view.browser) renderPane(); });
   });
 }
 // With "Follow the agent", a command the agent runs brings up the Terminal tab on its output (the 🤖 Agent view, or
 // ≡ Activity before the agent's first command has shown up there), unless you are typing in the pane.
 function onAgentCommand(c) {
-  if (focused() !== c || !followsAgent(c) || inArea(agentArea(), () => G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
+  const fa = agentArea(c);
+  if (!onScreen(c) || !fa || !followsAgent(c) || inArea(fa, () => G.view.term && ['agent', 'all'].includes(G.term?.filter))) return;
   if ($('#pane')?.contains(document.activeElement) && document.activeElement.matches('input, textarea, .xterm-helper-textarea, [contenteditable]')) return;
   const t = termState(spaceOf(c));
-  asAgent(() => openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all'));
+  asAgent(c, () => openTerminal(c, [...t.jobs.values()].some((j) => j.source === 'agent' && !j.server) ? 'agent' : 'all'));
 }
 // The Browser tab is a small browser of its own: the agent's page for this chat (live, and watch-only
 // while its reply works), and your own tabs. Pages run in the harness's headless browser and show as a
@@ -13227,10 +13395,12 @@ function renderBrowser(c) {
   bar.innerHTML = !t ? ''
     : `${t.agent ? `<span class="bv-who agent" title="${live ? "The agent's page: it is using it now, so you can only watch" : "The agent's page: it is done with it, so it is yours to use"}">🤖</span>${live ? '<span class="bv-lock" title="The agent is using this page: watch only">watching</span>' : ''}` : '<span class="bv-who you" title="Your tab">👤</span>'}
        ${!live && t.mode !== 'frame' && t.url ? `<button type="button" class="bv-nav" data-op="back" title="Back" aria-label="Back"${REAL && t.canBack === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><button type="button" class="bv-nav" data-op="forward" title="Forward" aria-label="Forward"${REAL && t.canForward === false ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` : ''}
+       ${!t.agent && t.url ? `<button type="button" class="bv-size ${t.device ? 'on' : ''}" aria-haspopup="menu" title="Show this page at a device's size: phone, tablet, laptop or your own">${t.device ? '📱' : '⛶'} <span class="bv-size-t">${esc(deviceLabel(t.device))}</span></button>` : ''}
        ${REAL && t.url ? `<span class="bv-real ${t.loading ? 'loading' : ''}" title="A real Chromium tab in the desktop app">● real tab${t.loading ? ' · loading…' : ''}</span>` : ''}
        <span class="spacer"></span>${!t.agent && t.url ? (() => { const to = lentChatOf(t.sid), ch = to && (G.open.get(to) || G.chats.find((x) => x.id === to)); return to ? `<span class="bv-lent" title="The agent can work in this tab in that chat">🤖 Lent to ${to === c.id ? 'this chat' : `“${esc(clip(ch?.title || 'another chat', 24))}”`}</span><button type="button" class="bv-takeback" title="Take this tab back: the agent can no longer use it">Take back</button>` : `<button type="button" class="bv-give" title="Let the agent in this chat work in this tab (signed in as you). Sending, deleting, buying and account changes always ask you first. You can also drag the tab onto a chat.">🤖 Give to agent</button>`; })() : ''}${t.url ? `<button type="button" class="bv-cmt ${t.commenting ? 'on' : ''}" aria-pressed="${!!t.commenting}" title="Comment on part of this page: click an element, say what to change, and it goes with your next message">💬 ${t.commenting ? 'Done commenting' : 'Comment'}</button><button type="button" class="bv-exp" aria-haspopup="menu" title="Export this page as a PDF or one long picture, or the project's files as a ZIP">⤓ Export</button>` : ''}${REAL && t.url ? sndBtnHTML(t) : ''}${REAL && t.url && !live ? '<button type="button" class="bv-dev" title="Open DevTools for this tab" aria-label="DevTools"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg></button>' : ''}${!DESK && !t.agent && t.url ? `<button type="button" class="bv-mode ${t.mode === 'frame' ? 'on' : ''}" title="${t.mode === 'frame' ? 'Shown in a frame. Click to open it in the harness browser instead (for sites that refuse frames)' : 'Shown in the harness browser. Click to show it in a frame (works for your own served pages)'}" aria-label="Frame or harness browser"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></button>` : ''}${downloadsHTML()}`;
   for (const b of bar.querySelectorAll('.bv-nav')) b.onclick = () => (REAL ? window.ohDesktop.nav(t.sid, b.dataset.op) : ubCall(b.dataset.op));
   const dv = $('.bv-dev', bar); if (dv) dv.onclick = () => window.ohDesktop.nav(t.sid, 'devtools');
+  const szb = $('.bv-size', bar); if (szb) szb.onclick = () => deviceMenu(szb, t);
   wireSnd(bar, t);
   const cmb = $('.bv-cmt', bar); if (cmb) cmb.onclick = () => { t.commenting = !t.commenting; renderPane(); };
   const exb = $('.bv-exp', bar); if (exb) exb.onclick = () => exportMenu(exb, c, t);
@@ -13254,15 +13424,60 @@ function renderBrowser(c) {
   if (!t || !t.url) return newTabPage(c, stage);
   if (t.commenting) return commentStage(c, t, stage);
   if (DESK && t.agent && t.desktop) { t.opened = t.url; return deskStage(t, stage); } // the agent's real tab: shown as it is, never reloaded
-  if (DESK && !t.agent) return deskStage(t, stage);
+  if (DESK && !t.agent) { window.ohDesktop.device?.(t.sid, deviceMetrics(t.device)).catch(() => {}); showDeviceScale(t, stage); return deskStage(t, stage); }
   if (!t.agent && (t.mode || (t.mode = sameSite(t.url) ? 'frame' : 'remote')) === 'frame') {
-    const f = document.createElement('iframe'); f.title = t.url; f.src = offAppHost(t.url); stage.appendChild(f);
+    const f = document.createElement('iframe'); f.title = t.url; f.src = offAppHost(t.url);
+    if (t.device) { const box = document.createElement('div'); box.className = 'bdev'; box.appendChild(f); stage.appendChild(box); stage.classList.add('dev'); fitDeviceFrame(t, stage); }
+    else stage.appendChild(f);
     return;
   }
-  stage.innerHTML = `<div class="ubview ${live ? 'locked' : ''}" tabindex="0"><img class="ub-shot" alt="The page"><textarea class="ub-keys" aria-label="Type into the page" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>${live ? '<div class="ub-lock">🤖 The agent is using this page. You can watch; it is yours when the reply ends.</div>' : ''}<div class="ub-status">${t.shot ? '' : 'Opening…'}</div></div>`;
+  if (t.device && !t.agent) { stage.classList.add('dev'); showDeviceScale(t, stage); }
+  stage.innerHTML = `<div class="ubview ${live ? 'locked' : ''} ${t.device && !t.agent ? 'dev' : ''}" tabindex="0"><img class="ub-shot" alt="The page"><textarea class="ub-keys" aria-label="Type into the page" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>${live ? '<div class="ub-lock">🤖 The agent is using this page. You can watch; it is yours when the reply ends.</div>' : ''}<div class="ub-status">${t.shot ? '' : 'Opening…'}</div></div>`;
   const img = $('.ub-shot', stage); if (t.shot) img.src = t.shot;
   wireUbView(t);
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; ubCall('open', { url: t.url }); } else ubCall('look');
+}
+// ---------- device sizes (the Browser tab's 📱 menu, public/devices.js) ----------
+// One of your tabs can show its page at a phone's, tablet's or laptop's size, or one of your own, turned sideways or
+// not: laid out at exactly that size and shown whole, scaled down when the pane is smaller. The desktop app sizes the
+// real tab; otherwise the headless browser's picture (or the frame) is. "Fit the pane" goes back to the pane's size.
+function deviceMenu(btn, t) {
+  const r = btn.getBoundingClientRect(), d = t.device;
+  const set = (v) => { t.device = v || null; renderPane(); };
+  popMenu({ preventDefault() {}, stopPropagation() {}, clientX: r.left, clientY: r.bottom + 4 }, [
+    [`${d ? '' : '✓ '}⛶ Fit the pane`, () => set(null)],
+    null,
+    ...DEVICES.map((x) => [`${d?.id === x.id ? '✓ ' : ''}${x.icon} ${x.name} · ${x.w}×${x.h}`, () => set(preset(x.id))]),
+    [`${d?.id === 'custom' ? '✓ ' : ''}✎ Custom size…`, async () => {
+      const v = await uiPrompt('Width × height in pixels, e.g. 1024×768', d ? `${d.w}×${d.h}` : '1024×768');
+      if (v == null) return;
+      const sz = parseSize(v);
+      if (!sz) return uiAlert('Type a width and a height between 200 and 3840 pixels, e.g. 1024×768.');
+      set(custom(sz.w, sz.h));
+    }],
+    null,
+    ['⟲ Turn sideways', () => set(rotate(d)), d ? undefined : { disabled: true, title: 'Pick a size first' }],
+  ]);
+}
+// The button says how much smaller the page shows than its real size (e.g. "Phone 390×844 · 62%").
+function showDeviceScale(t, stage) {
+  if (!t.device) return;
+  requestAnimationFrame(() => {
+    const b = stage.getBoundingClientRect(), f = fitBox(t.device, b), el = $('#appBar .bv-size-t');
+    if (el) el.textContent = deviceLabel(t.device, f.scale);
+  });
+}
+// A page in a frame (your own served pages outside the desktop app): the frame is the device's size, scaled to fit.
+function fitDeviceFrame(t, stage) {
+  const box = $('.bdev', stage), f = $('iframe', box);
+  const fit = () => {
+    if (!box.isConnected || !t.device) return ro.disconnect();
+    const b = stage.getBoundingClientRect(), k = fitBox(t.device, b);
+    Object.assign(box.style, { width: `${k.width}px`, height: `${k.height}px` });
+    Object.assign(f.style, { width: `${t.device.w}px`, height: `${t.device.h}px`, transform: `scale(${k.scale})` });
+    const el = $('#appBar .bv-size-t'); if (el) el.textContent = deviceLabel(t.device, k.scale);
+  };
+  const ro = new ResizeObserver(fit); ro.observe(stage); fit();
 }
 // A new tab: quick links to what this chat built and the project's running servers.
 async function newTabPage(c, stage) {
@@ -13488,8 +13703,34 @@ const RUN_GROUPS = [
 ];
 const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': 'Agent terminal', server: 'Server', 'your-term': 'Your terminal' };
 const dur = (ms) => (ms < 59500 ? `${Math.max(0, Math.round(ms / 1000))}s` : secs(ms));
+// CPU and memory of a row (servers, commands, agent terminals: what the Windows job of each holds; browser tabs: their
+// page's process in the desktop app). CPU is a share of the whole computer, like Task Manager; the first reading has
+// no CPU yet. Plain numbers, not tags or buttons; heavy use turns amber.
+const useMem = (b) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`);
+function useHTML(use) {
+  if (!use) return '';
+  const hot = (use.cpu ?? 0) >= 50 || use.mem >= 1.5 * 1024 ** 3;
+  const tip = `What it uses now${use.n > 1 ? `, across its ${use.n} processes` : ''}: processor ${use.cpu == null ? '(measuring…)' : `${use.cpu}% of this computer`}, memory ${useMem(use.mem)}`;
+  return `<span class="run-use${hot ? ' hot' : ''}" title="${esc(tip)}"><span class="use-cpu">CPU ${use.cpu == null ? '…' : `${use.cpu < 10 ? use.cpu.toFixed(1) : Math.round(use.cpu)}%`}</span><span class="use-mem">${useMem(use.mem)}</span></span>`;
+}
+// Kill: shown on a row whose Stop left processes behind, or whose Stop is still going after a few seconds.
+const runLeft = () => (G.runLeft ||= new Set());
+async function killRow(projectId, id, again) {
+  const res = await postJ('/api/running/kill', { projectId, id });
+  if (res.error) uiAlert(res.error);
+  else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} could not be killed: ${(res.names || []).join(', ')}. Windows may need them ended from Task Manager.`);
+  else runLeft().delete(id);
+  again?.();
+}
+// After a Stop: processes left → offer Kill straight away (and keep the Kill button on the row).
+async function afterStop(res, projectId, id, again) {
+  if (res.error) return uiAlert(res.error);
+  if (!res.left) { runLeft().delete(id); return; }
+  runLeft().add(id);
+  if (await uiConfirm(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}.\nKill ${res.left > 1 ? 'them' : 'it'} now? Killing ends ${res.left > 1 ? 'them' : 'it'} at once, without a chance to save.`, { ok: 'Kill', danger: true })) await killRow(projectId, id, again);
+}
 async function refreshRunning(c) {
-  const r = await getJ(`/api/running?project=${encodeURIComponent(spaceOf(c))}`);
+  const r = await getJ(`/api/running?project=${encodeURIComponent(spaceOf(c))}&usage=1`);
   if (r && !r.error) (G.runCount ||= {})[spaceOf(c)] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
   renderPaneTabs(c);
   drawRunningPane(c, r);
@@ -13505,9 +13746,10 @@ function runRowHTML(c, x) {
     x.kind === 'server' && x.url ? `<button type="button" class="run-open" title="Open it in the pane's browser">Open</button>` : '',
     x.kind !== 'agent-term' ? `<button type="button" class="run-out" title="Show its output in the Terminal tab">Output</button>` : '',
     `<button type="button" class="run-stop danger" title="${x.kind === 'your-term' ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${x.kind === 'your-term' ? '✕ Close' : '■ Stop'}</button>`,
+    x.kind !== 'your-term' && runLeft().has(x.id) ? '<button type="button" class="run-kill danger" title="End every process it left, by force, at once (nothing gets a chance to save)">⨯ Kill</button>' : '',
   ].join('');
   return `<div class="run-row" data-id="${esc(x.id)}" data-kind="${esc(x.kind)}">
-    <div class="run-top"><i class="tr-dot ${x.status === 'starting' ? 'busy' : 'ok'}"></i>${tag}<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code></div>
+    <div class="run-top"><i class="tr-dot ${x.status === 'starting' ? 'busy' : 'ok'}"></i>${tag}<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code><span class="run-use-slot">${useHTML(x.use)}</span></div>
     <div class="run-meta">${[who, from, x.started ? `<span class="run-time" title="Started ${esc(new Date(x.started).toLocaleString())}">${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}</span>` : '', port].filter(Boolean).join('<span class="run-sep">·</span>')}</div>
     ${x.tail?.length ? `<pre class="run-tail">${esc(x.tail.join('\n'))}</pre>` : ''}
     <div class="run-acts">${acts}</div>
@@ -13524,11 +13766,12 @@ function drawRunningPane(c, r) {
   const html = (groups || `<div class="run-empty"><b>Nothing is running in this project.</b><br>Long commands the agent starts keep running here in the background while it carries on; servers, the agent’s terminals and your terminal tabs show here too, each with a Stop.</div>`) + elsewhere;
   // Rows are rebuilt only when what runs changes. Output and times update in place, so a Stop click never lands on a
   // button that a redraw has just replaced (output changes every second or two).
-  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length])) + elsewhere;
+  const sig = JSON.stringify(items.map((x) => [x.id, x.status, x.chatId, !!x.tail?.length, runLeft().has(x.id)])) + elsewhere;
   if (box.dataset.sig === sig) {
     for (const x of items) {
       const row = box.querySelector(`.run-row[data-id="${CSS.escape(x.id)}"]`); if (!row) continue;
       const t = $('.run-time', row); if (t && x.started) t.textContent = `${x.kind === 'your-term' ? 'open' : 'running'} ${dur(Date.now() - x.started)}`;
+      const u = $('.run-use-slot', row), uh = useHTML(x.use); if (u && u.innerHTML !== uh) u.innerHTML = uh;
       const pre = $('.run-tail', row), text = (x.tail || []).join('\n'); if (pre && pre.textContent !== text) pre.textContent = text;
     }
     return;
@@ -13542,12 +13785,15 @@ function drawRunningPane(c, r) {
     stopBtn.onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'Stopping…';
       G.runStopping.add(x.id);
-      const res = await postJ('/api/running/stop', { projectId: spaceOf(c), id: x.id }).finally(() => G.runStopping.delete(x.id));
-      if (res.error) uiAlert(res.error);
-      else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+      // A Stop still going after a few seconds: Kill shows next to it.
+      const slow = x.kind === 'your-term' ? 0 : setTimeout(() => { if (G.runStopping.has(x.id)) { runLeft().add(x.id); refreshRunning(c); } }, 4000);
+      const res = await postJ('/api/running/stop', { projectId: spaceOf(c), id: x.id }).finally(() => { clearTimeout(slow); G.runStopping.delete(x.id); });
       if (x.kind === 'your-term' && G.term?.projectId === spaceOf(c)) { dropXterm?.(spaceOf(c), x.tab, true); G.term.terms = G.term.terms.filter((u) => u.id !== x.tab); }
       refreshRunning(c); pollDev();
+      await afterStop(res, spaceOf(c), x.id, () => { refreshRunning(c); pollDev(); });
     };
+    const killBtn = $('.run-kill', row);
+    if (killBtn) killBtn.onclick = async () => { killBtn.disabled = true; killBtn.textContent = 'Killing…'; await killRow(spaceOf(c), x.id, () => { refreshRunning(c); pollDev(); }); };
     const out = $('.run-out', row);
     if (out) out.onclick = () => openTerminal(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
     const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
@@ -13564,9 +13810,18 @@ const RL_SEG = { need: 'Needs you', server: 'Servers', command: 'Commands', term
 const RL_KIND = { ...RUN_KIND, 'agent-tab': 'Agent tab', 'your-tab': 'Your tab', chrome: 'Chrome', lent: 'Lent Chrome tab', desktop: 'Computer use' };
 const rlSeg = (kind) => (kind === 'server' ? 'server' : kind === 'background' || kind === 'command' ? 'command' : 'terminal');
 async function loadRunningAll() {
-  const [d, tabs] = await Promise.all([getJ('/api/running/all'), DESK && window.ohDesktop.tabs ? window.ohDesktop.tabs('list').catch(() => null) : Promise.resolve(null)]);
+  // CPU and memory only while the list is open (the sidebar count alone doesn't need them): the servers' and commands'
+  // from the server, each browser tab's from the desktop app's own process readout.
+  const open = !!$('#runningAll')?.open;
+  const [d, tabs, perf] = await Promise.all([getJ(`/api/running/all${open ? '?usage=1' : ''}`), DESK && window.ohDesktop.tabs ? window.ohDesktop.tabs('list').catch(() => null) : Promise.resolve(null),
+    open && DESK && window.ohDesktop.perf ? window.ohDesktop.perf().catch(() => null) : Promise.resolve(null)]);
   RUNV.data = d && !d.error ? d : { items: [], control: [], error: d?.error || 'no answer' };
   RUNV.tabs = Array.isArray(tabs) ? tabs : null; // null: not the desktop app (or an older one), so no tabs section
+  if (RUNV.tabs && perf?.tabs) {
+    // A tab's page runs in its own process; percentCPUUsage is "100 = one core", so it is shared out over the cores.
+    const cores = navigator.hardwareConcurrency || 1, byPid = new Map((perf.procs || []).map((p) => [p.pid, p]));
+    for (const t of RUNV.tabs) { const p = perf.tabs.find((x) => x.sid === t.sid); if (p?.pid) t.use = { cpu: Math.round(((byPid.get(p.pid)?.cpu || 0) / cores) * 10) / 10, mem: (p.mb || 0) * 1024 ** 2, n: 1 }; }
+  }
   drawRunCount();
   return RUNV.data;
 }
@@ -13639,16 +13894,16 @@ function rlRows() {
     const port = x.url ? `<a class="run-url" href="${esc(x.url)}" rel="noopener" data-cl="1">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
     const label = x.kind === 'your-term' ? `Terminal · ${x.label}` : x.label, term = x.kind === 'your-term';
     rows.proc.push(rlRow(`p:${x.projectId}:${x.id}`, rlSeg(x.kind), `${label} ${x.detail || ''} ${RL_KIND[x.kind] || ''} ${pname(x.projectId)} ${cname(x.chatId)} ${x.source || ''}`,
-      rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code>`),
-      rlMeta([rlProj(x.projectId), rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
-      `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>`));
+      rlTop(x.status === 'starting' ? 'busy' : 'ok', x.kind, `<code class="run-cmd" title="${esc(x.detail || x.label)}">${esc(label)}</code><span class="run-use-slot">${useHTML(x.use)}</span>`),
+      rlMeta([rlProj(x.project || x.projectId), x.branch ? `<span class="wt-branch-tag">⎇ ${esc(x.branch)}</span>` : '', rlChat(x.chatId), who, x.started ? rlTime(x.started, term ? 'open' : 'running') : '', port]),
+      `<button type="button" class="run-stop danger" data-stop="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="${term ? 'Close this terminal tab' : 'Stop it, and everything it started'}">${term ? '✕ Close' : '■ Stop'}</button>${!term && runLeft().has(x.id) ? `<button type="button" class="run-kill danger" data-kill="${esc(x.id)}" data-pid="${esc(x.projectId)}" title="End every process it left, by force, at once (nothing gets a chance to save)">⨯ Kill</button>` : ''}`));
   }
   for (const t of RUNV.tabs || []) {
     const lent = !t.agent && lentChatOf(t.sid), chatId = t.agent ? t.chatId : lent || null, ch = chatId && G.chats.find((x) => x.id === chatId);
     const sound = t.audible && !t.muted ? '<span class="rl-sound on" title="Playing sound now">🔊 playing</span>' : t.muted ? `<span class="rl-sound" title="Muted">🔇 muted${t.audible ? ' (playing)' : ''}</span>` : '';
     const blank = !t.url || t.url === 'about:blank', tchat = esc(t.agent ? t.chatId || '' : '');
     rows.tab.push(rlRow(`t:${t.sid}`, 'tab', `${t.title} ${t.url} ${t.agent ? 'agent tab' : 'your tab'} ${t.audible && !t.muted ? 'sound playing' : ''} ${t.muted ? 'muted' : ''} ${cname(chatId)}`,
-      rlTop('ok', t.agent ? 'agent-tab' : 'your-tab', `<span class="rl-title" title="${esc(t.title || t.url)}">${esc(t.title || (blank ? 'Empty tab' : t.url))}</span>${sound}`),
+      rlTop('ok', t.agent ? 'agent-tab' : 'your-tab', `<span class="rl-title" title="${esc(t.title || t.url)}">${esc(t.title || (blank ? 'Empty tab' : t.url))}</span>${sound}<span class="run-use-slot">${useHTML(t.use)}</span>`),
       rlMeta([blank ? '' : `<code class="rl-url" title="${esc(t.url)}">${esc(clip(t.url.replace(/^https?:\/\//, ''), 60))}</code>`, ch ? rlProj(ch.projectId) : '', chatId ? `${lent ? '<span>lent to</span> ' : ''}${rlChat(chatId)}` : '<span>yours, in no chat</span>']),
       `<button type="button" class="rl-go" data-tab="${esc(t.sid)}" data-tchat="${tchat}" title="Show this tab in the pane's Browser tab">Go to tab</button><button type="button" class="danger rl-close" data-close="${esc(t.sid)}" data-tchat="${tchat}" title="Close this tab${t.agent ? ' (the agent opens a new one if it needs a page again)' : ''}">✕ Close</button>`));
   }
@@ -13681,9 +13936,13 @@ function drawRunningAll() {
   // In the dialog, or in the rail's Running panel (the same list in the sidebar's place).
   const panel = WR.run && !isPhone() && !$('#runningAll').open, body = panel ? $('#wpBody') : $('#rlBody'), d = RUNV.data; if (!body || !d || (!panel && !$('#runningAll').open)) return;
   // Rebuilt only when what runs changes; times tick in place, so a click never lands on a button just replaced.
-  const sig = JSON.stringify([panel && replying().filter((c) => !c.waiting).map((c) => [c.id, c.title]), needsYou().map((x) => [x.c.id, x.kind, x.id, x.title, x.raiseTo]), d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
+  const sig = JSON.stringify([panel && replying().filter((c) => !c.waiting).map((c) => [c.id, c.title]), needsYou().map((x) => [x.c.id, x.kind, x.id, x.title, x.raiseTo]), d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId, runLeft().has(x.id)]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
   if (body.dataset.sig === sig) {
     for (const t of body.querySelectorAll('.run-time[data-started]')) t.textContent = `${t.dataset.word} ${dur(Date.now() - Number(t.dataset.started))}`;
+    // CPU and memory change every reading: written in place, like the times.
+    const put = (key, use) => { const s = body.querySelector(`.rl-row[data-key="${CSS.escape(key)}"] .run-use-slot`), h = useHTML(use); if (s && s.innerHTML !== h) s.innerHTML = h; };
+    for (const x of d.items) put(`p:${x.projectId}:${x.id}`, x.use);
+    for (const t of RUNV.tabs || []) put(`t:${t.sid}`, t.use);
     return;
   }
   body.dataset.sig = sig;
@@ -13733,10 +13992,15 @@ function wireRunningAll(body) {
   };
   for (const b of body.querySelectorAll('[data-stop]')) b.onclick = async () => {
     b.disabled = true; b.textContent = 'Stopping…';
-    const res = await postJ('/api/running/stop', { projectId: b.dataset.pid, id: b.dataset.stop });
-    if (res.error) uiAlert(res.error); else if (res.left) uiAlert(`${res.left} process${res.left > 1 ? 'es' : ''} did not stop: ${(res.names || []).join(', ')}`);
+    const id = b.dataset.stop, pid = b.dataset.pid, term = id.startsWith('pty:');
+    // A Stop still going after a few seconds: Kill shows next to it.
+    let done = false;
+    const slow = term ? 0 : setTimeout(() => { if (!done) { runLeft().add(id); again(); } }, 4000);
+    const res = await postJ('/api/running/stop', { projectId: pid, id }).finally(() => { done = true; clearTimeout(slow); });
     again();
+    await afterStop(res, pid, id, again);
   };
+  for (const b of body.querySelectorAll('[data-kill]')) b.onclick = async () => { b.disabled = true; b.textContent = 'Killing…'; await killRow(b.dataset.pid, b.dataset.kill, again); };
   const all = $('.rl-stopall', body);
   if (all) all.onclick = async () => {
     const pids = [...new Set(RUNV.data.items.filter((x) => x.kind !== 'your-term').map((x) => x.projectId))];
@@ -13880,17 +14144,14 @@ function rewindDialog(count, files, gone) {
 }
 // Remix: a new chat in the same project that starts with this conversation up to (and with) this reply.
 // Files are not touched, and the copied replies have no Undo, so the new chat can't change the old work by accident.
+// Its dialog picks the model the remix runs on (the usual picker, with prices) and whether it opens side by side with
+// the original, as the second chat on screen (ticked by default; a phone shows one chat at a time).
 async function remixFrom(c, m) {
   const i = c.agent.messages.indexOf(m);
   if (i < 0) return;
-  // In a git project the remix can work in a worktree of its own (from this chat's branch, if it has one), so both
-  // chats can build at once.
-  let own = false;
-  if ((await gitOf(c.projectId)).git) {
-    const ans = await uiConfirm(`Remix into a new chat\nWhere should the new chat work?\n• Project folder: the same files as every other chat in the project.\n• Own worktree: a copy on a new branch (qx/…) made from ${c.wt ? c.wt.branch : 'the project\'s current branch'}, so both chats can build at once.`, { ok: 'Own worktree', alt: 'Project folder' });
-    if (!ans) return;
-    own = ans === true;
-  }
+  await window.qxChatWorktree?.ready?.(c);
+  const pick = await remixDialog(c);
+  if (!pick) return;
   const copy = JSON.parse(JSON.stringify(c.agent.messages.slice(0, i + 1).filter((x) => x.role === 'user' || x.role === 'assistant'), (k, v) => (k === 'el' || (typeof Node !== 'undefined' && v instanceof Node) ? undefined : v)));
   for (const x of copy) { if (x.stats) delete x.stats.changed; x.live = false; x.runActive = false; x.resumable = false; }
   const n = blankChat(c.projectId);
@@ -13902,17 +14163,52 @@ async function remixFrom(c, m) {
   n.agent.artifacts = JSON.parse(JSON.stringify(c.agent.artifacts || {}));
   if (c.agent.summary && (!c.agent.summaryAt || c.agent.summaryAt <= (m.doneAt || m.at || Date.now()))) { n.agent.summary = c.agent.summary; n.agent.summaryAt = c.agent.summaryAt; }
   n.remixOf = { chatId: c.id, title: c.title, at: m.doneAt || m.at };
-  if (own) {
-    // git takes a moment: this chat's box says what is happening meanwhile.
-    const ta = c.el && $('.input', c.el.root), ph = ta?.placeholder;
-    if (ta) { ta.disabled = true; ta.placeholder = 'Making the remix\'s own git worktree…'; }
-    const ok = await makeWorktree(n, `remix ${c.title}`, c.wt?.space || '').finally(() => { if (ta) { ta.disabled = false; ta.placeholder = ph; } });
-    if (!ok) return;
+  if (pick.model && pick.model !== n.agent.setup.model) { n.agent.setup.model = pick.model; n.title = `Remix (${short(pick.model)}): ${c.title}`.slice(0, 60); }
+  G.open.set(n.id, n);
+  await remixWorktree(c, n, pick);
+  saveChat(n, true);
+  if (pick.side && !isPhone() && G.panes.includes(c.id)) {
+    // The original on the left, the remix beside it.
+    if (G.panes.indexOf(c.id) === 1) { G.panes = [c.id]; G.focus = 0; WK.lay = WS.removeGroup(WK.lay, WS.CHAT2_GROUP); }
+    await openBeside(n.id, { focus: true });
+  } else {
+    wtOpen(n); placeChatOnScreen(n.id);
+    G.view = { id: null, src: false, files: false }; G.traceRun = null;
+    renderPanes(); savePrefs(); renderSidebar(); wtSave(); wsChrome();
   }
-  G.open.set(n.id, n); G.panes = [n.id]; G.focus = 0;
-  G.view = { id: null, src: false, files: false }; G.traceRun = null;
-  renderPanes(); saveChat(n, true); savePrefs(); renderSidebar();
-  $('.input', n.el.root)?.focus();
+  $('.input', n.el?.root)?.focus();
+}
+// The hook for "in its own worktree" (chat worktrees): when that feature is in, it gives the remix its own branch and
+// folder here (pick.worktree is the dialog's choice). Without it, the remix shares the project folder.
+async function remixWorktree(c, n, pick) {
+  if (!pick.worktree || typeof window.qxChatWorktree !== 'function') return;
+  await window.qxChatWorktree(c, n);
+}
+function remixDialog(c) {
+  return new Promise((resolve) => {
+    let model = c.agent.setup.model;
+    const dlg = document.createElement('dialog');
+    dlg.className = 'pf-dialog rmx-dialog';
+    const wt = typeof window.qxChatWorktree === 'function' && window.qxChatWorktree.can?.(c) !== false;
+    const modelRow = () => { const mm = (G.models || []).find((x) => x.id === model); return `<span class="rmx-model" title="${esc(model)}">${esc(mm?.name || short(model))}</span><span class="rmx-price">${mm ? esc(priceText(mm)) : ''}</span>`; };
+    dlg.innerHTML = `<form class="pf" method="dialog">
+      <h3>⑂ Remix this reply</h3>
+      <p class="pf-hint">A new chat starts with this conversation up to here, so you can try it another way. Your files are not touched.</p>
+      <div class="rmx-row"><span class="rmx-k">Runs on</span><span class="rmx-cur">${modelRow()}</span><button type="button" class="pv-btn rmx-pick" title="Pick the model the remix runs on (prices shown)">Change…</button></div>
+      <label class="sq-check rmx-side" title="The remix opens beside the original, as the second chat on screen; both run on their own"><input type="checkbox" class="rmx-side-in" ${isPhone() ? '' : 'checked'} ${isPhone() ? 'disabled' : ''}><span>Open side by side</span></label>
+      ${wt ? '<label class="sq-check rmx-wt" title="The remix gets its own branch and folder, so both can change files at the same time"><input type="checkbox" class="rmx-wt-in"><span>In its own worktree</span></label>' : ''}
+      <div class="pf-acts"><button type="button" data-v="">Cancel</button><button type="button" data-v="go" class="pf-save">⑂ Remix</button></div>
+    </form>`;
+    document.body.appendChild(dlg);
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); done(null); });
+    dlg.querySelector('.rmx-pick').onclick = async () => {
+      const id = await pickModel('chat', model, { context: 'The model this remix runs on' });
+      if (id) { model = id; dlg.querySelector('.rmx-cur').innerHTML = modelRow(); }
+    };
+    for (const b of dlg.querySelectorAll('[data-v]')) b.onclick = () => done(b.dataset.v ? { model, side: !!dlg.querySelector('.rmx-side-in')?.checked, worktree: !!dlg.querySelector('.rmx-wt-in')?.checked } : null);
+    dlg.showModal();
+  });
 }
 
 // ---------- pages in the harness's browser (see server/userbrowser.js) ----------
@@ -13990,7 +14286,8 @@ async function ubCall(op, a = {}) {
   const r = $('#paneBody .bstage').getBoundingClientRect(); // the page is sized to the pane
   t.busy = (t.busy || 0) + 1;
   if (op !== 'look') ubStatus(op === 'open' ? 'Opening…' : '…');
-  const res = await postJ('/api/ubrowser', { sid: t.sid, op, w: Math.round(r.width), h: Math.round(r.height), ...a });
+  const dev = !t.agent && t.device;
+  const res = await postJ('/api/ubrowser', { sid: t.sid, op, w: dev ? dev.w : Math.round(r.width), h: dev ? dev.h : Math.round(r.height), ...(dev?.mobile ? { mobile: true } : {}), ...a });
   t.busy--;
   if (activeBTab(c) !== t || !$('#paneBody .ubview')) return;
   if (res.none) { if (t.agent) { delete G.agentTab[c.id]; renderPane(); } return; }
@@ -14125,7 +14422,7 @@ async function deskPlaceNow(force) {
 }
 // One area's real tab: placed over its box and to be shown (true), or not to be seen now (a snapshot stands in).
 async function deskPlaceArea(a, d, force, taken) {
-  const c0 = focused(), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
+  const c0 = areaChat(a), t = c0 ? browserTabs(c0).find((x) => x.sid === d.sid) : null;
   const visible = d.ph.isConnected && a.st.view?.browser && t && paneVisible() && d.ph.getClientRects().length && document.visibilityState === 'visible';
   if (!visible) { if (!d.ph.isConnected && a.st.dsk === d) a.st.dsk = null; return false; }
   const err = $('.derr', d.ph);
@@ -14199,6 +14496,7 @@ if (DESK) {
   if (window.ohDesktop.sound) setSound('get');
   window.ohDesktop.on((ev) => {
     const c = focused();
+    if (ev.type === 'summon') { onSummon(); return; }
     if (ev.type === 'audio') { const s = (G.sound ||= { volume: 100, tabs: {} }); (s.tabs ||= {})[ev.sid] = { ...s.tabs[ev.sid], audible: ev.audible }; sndRefresh(); return; }
     if (ev.type === 'popup') { const sid = String(ev.sid || ''); newBTab(sid.startsWith('agent-') ? chatProject(sid.slice(6)) : bTabProject(sid) ?? c?.projectId, ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
@@ -14325,7 +14623,7 @@ function deskAgentEvent(ev) {
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.
 async function drawDesktopSettings() {
   const box = $('#stDesktop'); if (!box || !DESK) return;
-  const [info, login, onClose] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask')]);
+  const [info, login, onClose, summon] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask'), window.ohDesktop.summon?.().catch(() => null)]);
   if (!box.isConnected) return;
   const canQuit = typeof window.ohDesktop.quit === 'function';
   const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
@@ -14334,11 +14632,13 @@ async function drawDesktopSettings() {
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
     // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
     + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
+    + (summon ? stRow('Bring QuorX forward from anywhere', 'A key that works in every app: QuorX comes to the front with the cursor in the message box. Off at first, since another app may already use the key. Click the key box, then press the keys you want.', summonControl(summon), { id: 'stRowSummon' }) : '')
     + stRow('Updates', '', `<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
     + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
   if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
+  if (summon) wireSummon(box);
   for (const b of box.querySelectorAll('#stDeskClose .st-seg-btn')) b.onclick = async () => {
     const v = await window.ohDesktop.closeAction(b.dataset.v).catch(() => null);
     if (v) for (const x of box.querySelectorAll('#stDeskClose .st-seg-btn')) { x.classList.toggle('active', x.dataset.v === v); x.setAttribute('aria-checked', String(x.dataset.v === v)); }
@@ -14352,6 +14652,38 @@ async function drawDesktopSettings() {
   $('#stDeskCheck').onclick = () => (info.store ? storeUpdate() : window.ohDesktop.update('check'));
   drawUpdate(st);
 }
+// ---------- the summon key (desktop app) ----------
+// One system-wide key (Ctrl+Shift+Space unless you pick another) brings QuorX forward from any app with the cursor
+// in the message box (desktop/summon.js registers it). A ✓ box turns it on; the key box records a new key. When
+// Windows refuses the key (another app has it), it stays off and the row says why.
+function summonControl(s) {
+  return `<span class="sm-ctl"><label class="sq-check"><input type="checkbox" id="stSummonOn"${s.on ? ' checked' : ''}><span>On</span></label><input type="text" class="st-input st-keycap sm-key" id="stSummonKey" value="${esc(s.key || 'Ctrl+Shift+Space')}" readonly aria-label="Summon key: click, then press the keys"></span><span class="sm-err" role="status"${s.error ? '' : ' hidden'}>${esc(s.error || '')}</span>`;
+}
+function wireSummon(box) {
+  const on = $('#stSummonOn', box), key = $('#stSummonKey', box), err = $('.sm-err', box);
+  const apply = async (want) => {
+    const r = await window.ohDesktop.summon(want).catch((e) => ({ on: false, ok: false, error: e.message }));
+    on.checked = !!r.on; key.value = r.key || key.value;
+    err.textContent = r.error || ''; err.hidden = !r.error;
+  };
+  on.onchange = () => apply({ on: on.checked, key: key.value });
+  // Its own recorder (the page's other key boxes save with Settings; this one applies at once, like Start at login).
+  key.onkeydown = (e) => {
+    if (e.key === 'Tab') return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape') { key.blur(); return; }
+    const v = keyCombo(e); if (!v) return;
+    key.value = v;
+    if (on.checked) apply({ on: true, key: v }); else window.ohDesktop.summon({ on: false, key: v }).catch(() => {});
+  };
+}
+// The key was pressed: the window is already in front; the cursor goes to the message box of the chat on screen.
+function onSummon() {
+  const c = micTarget(), ta = c ? $('.input', c.el.root) : null;
+  if (!ta) return;
+  ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch { /* not a text box */ }
+}
+
 // ---------- updates (desktop app): "⬆ Update" in the top bar, progress, "Restart to update" ----------
 // The Store copy: open its Store page. The Store can't replace a QuorX that is still running, and ✕ may only hide it in
 // the tray (the update then fails with 0x80073D02), so when a newer version is out, offer to quit QuorX now.
