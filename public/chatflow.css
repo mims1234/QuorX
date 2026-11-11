@@ -218,3 +218,11 @@ html:root body .msg .tl-at.tl-same > .tl-t { display: none; }
 /* Messages off screen are not laid out or painted until they come near: a long chat costs the browser only the part
    in view (the size each one had is remembered, so the scrollbar stays steady once a message has been seen). */
 .msgs > .msg { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+
+/* ❝ Quote: floats over text selected in a reply (app.js checkQuote); it puts the text in the message box as a quote */
+.quote-pop { position: fixed; z-index: 400; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 11px;
+  border: 1px solid var(--accent-border); border-radius: var(--radius-sm); background: var(--accent); color: var(--accent-ink);
+  font: 650 12.5px var(--font-ui); box-shadow: var(--shadow-pop); cursor: pointer; white-space: nowrap; animation: popFade .12s ease-out; }
+.quote-pop:hover { background: var(--accent-hover); }
+.quote-pop:focus-visible { outline: 2px solid var(--text-bright); outline-offset: 2px; }
+.quote-pop[hidden] { display: none; }

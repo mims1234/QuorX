@@ -212,3 +212,38 @@ test('Browser tabs belong to a project: a chat never shows another project’s t
   G.bLastBy = { A: ui.browserTabs(a2)[0].sid }; G.bActive = tb.sid;
   assert.equal(ui.activeBTab(a2).url, 'http://localhost:3001/again');
 });
+
+test('send to chat: a quote goes into the message box as Markdown, and the terminal still sends a chip', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cut = (from, to) => { const i = page.indexOf(from), j = page.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return page.slice(i, j); };
+  const src = cut('function sendToChat(', '// ---------- ❝ Quote') + cut('function termToChat(', 'function termHead(');
+  const tips = [], alerts = [];
+  let drawn = 0;
+  const mk = () => {
+    const ta = { value: '', events: [], dispatchEvent(e) { this.events.push(e.type); }, focus() { this.focused = true; }, setSelectionRange(a) { this.caret = a; } };
+    return { ta, c: { el: { root: {} }, ctx: [] } };
+  };
+  let cur = null;
+  const ui = new Function('$', 'uiAlert', 'flashTip', 'renderAttachments', 'focused', 'document', 'Event', `${src}; return { sendToChat, termToChat };`)(
+    () => cur.ta, (t) => alerts.push(t), (_, t) => tips.push(t), () => drawn++, () => cur?.c, { body: {} }, class { constructor(t) { this.type = t; } });
+  // A quote: each line marked, blank lines kept as ">", after what was typed, with room to answer under it.
+  cur = mk(); cur.ta.value = 'About this:  ';
+  assert.equal(ui.sendToChat(cur.c, '  The hero uses a dark gradient.\n\nAll buttons scroll down.  ', { quote: true }), true);
+  assert.equal(cur.ta.value, 'About this:\n\n> The hero uses a dark gradient.\n>\n> All buttons scroll down.\n\n');
+  assert.deepEqual([cur.ta.events, cur.ta.focused, cur.ta.caret], [['input'], true, cur.ta.value.length]);
+  assert.equal(cur.c.ctx.length, 0);
+  cur = mk(); ui.sendToChat(cur.c, 'one line', { quote: true });
+  assert.equal(cur.ta.value, '> one line\n\n');
+  // The terminal's ↪: a chip with its title, the text cut to its last 20000 characters, as before.
+  cur = mk();
+  ui.termToChat({ title: '$ npm test', text: `${'x'.repeat(25000)}END` }, null);
+  assert.equal(cur.c.ctx.length, 1);
+  assert.equal(cur.c.ctx[0].type, 'term'); assert.equal(cur.c.ctx[0].title, '$ npm test');
+  assert.equal(cur.c.ctx[0].text.length, 20000); assert.ok(cur.c.ctx[0].text.endsWith('END'));
+  assert.equal(drawn, 1); assert.equal(tips.at(-1), 'Added to your next message');
+  ui.termToChat({ title: 'x', text: '  ' }, null);
+  assert.equal(tips.at(-1), 'Nothing to send yet');
+  cur = null; ui.termToChat({ title: 'x', text: 'y' }, null);
+  assert.equal(alerts.at(-1), 'Open a chat first: the output goes with your next message there.');
+});
