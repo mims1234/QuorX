@@ -288,3 +288,30 @@ test('The page: what "Clear safe caches" offers and what the summary says', asyn
   const s = summary([{ id: 'a', bytes: 3e6, wentTo: 'recycle', skipped: [{}] }, { id: 'b', bytes: 2e6, wentTo: 'deleted', skipped: [] }, { id: 'c', changed: true, bytes: 9e9 }]);
   assert.match(s, /^Freed 5\.0 MB \(3\.0 MB of it moved to the Recycle Bin\)\. 1 item was in use/);
 });
+
+// ---------- quitting while something works (desktop/quit-prompt.js) ----------
+test('Desktop: quitting names what still works, and asks nothing when nothing does', () => {
+  const { busyCount, busyLine, quitDialog } = require('../desktop/quit-prompt.js');
+  const idle = { replies: [], servers: [], commands: [] };
+  assert.equal(quitDialog(idle), null);
+  assert.equal(quitDialog(null), null, 'the harness could not be asked: quit as before');
+  assert.equal(busyCount(idle), 0);
+  const b = { replies: [{ title: 'Snake game' }, { title: 'Portfolio site' }], servers: [{ name: 'dev' }], commands: [] };
+  assert.equal(busyLine(b), '2 replies running: Snake game, Portfolio site · 1 server: dev');
+  const d = quitDialog(b, { tray: true });
+  assert.equal(d.message, '2 replies running: Snake game, Portfolio site · 1 server: dev');
+  assert.deepEqual(d.buttons, ['Quit anyway', 'Keep running in the tray', 'Cancel']);
+  assert.deepEqual(d.actions, ['quit', 'tray', 'cancel']);
+  assert.equal(d.actions[d.defaultId], 'tray', 'Enter keeps the work going');
+  assert.equal(d.actions[d.cancelId], 'cancel');
+  assert.match(d.detail, /stops all of them/);
+  // No tray: no Keep running; Enter cancels.
+  const n = quitDialog({ ...idle, commands: [{ label: 'npm run build' }] }, { tray: false });
+  assert.deepEqual(n.buttons, ['Quit anyway', 'Cancel']);
+  assert.equal(n.actions[n.defaultId], 'cancel');
+  assert.equal(n.message, '1 command: npm run build');
+  assert.match(n.detail, /stops it\.$/);
+  // Long lists are counted, names without a title are left out.
+  assert.equal(busyLine({ replies: [{ title: 'a' }, { title: 'b' }, { title: 'c' }, { title: 'd' }, { title: 'e' }] }), '5 replies running: a, b, c and 2 more');
+  assert.equal(busyLine({ replies: [{}] }), '1 reply running');
+});

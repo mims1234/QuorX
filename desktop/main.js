@@ -15,6 +15,7 @@ const crypto = require('node:crypto');
 const { pngIcon } = require('./icon.js');
 const { createStorage, cleanAtStart } = require('./storage.js');
 const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
+const { quitDialog } = require('./quit-prompt.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -179,7 +180,7 @@ function createWindow() {
     e.preventDefault();
     const act = closeAction();
     if (act !== 'quit' && STORE && update.state === 'store-available' && update.version !== skippedUpdate) return askUpdateOnClose(act);
-    if (act === 'quit') quitApp(); else if (act === 'tray') win.hide(); else askOnClose();
+    if (act === 'quit') confirmQuit(); else if (act === 'tray') win.hide(); else askOnClose();
   });
   win.on('closed', () => { win = null; tabs.clear(); });
 }
@@ -188,7 +189,27 @@ const closeAction = () => (['tray', 'quit'].includes(readConfig().onClose) ? rea
 function setCloseAction(v) { writeConfig({ ...readConfig(), onClose: ['tray', 'quit'].includes(v) ? v : 'ask' }); return closeAction(); }
 function quitApp() { quitting = true; app.quit(); }
 let asking = false;
+// Quitting while a reply, server or command works: QuorX's own dialog names it first (desktop/quit-prompt.js), with
+// Quit anyway / Keep running in the tray / Cancel. Nothing working (or the harness can't be asked): it just quits.
+// Attached to a harness someone else runs, quitting stops nothing, so it never asks.
+async function confirmQuit() {
+  if (asking) return;
+  if (!server) return quitApp();
+  asking = true;
+  try {
+    const d = quitDialog(await fetchBusy(), { tray: !!tray });
+    if (!d) return quitApp();
+    const opts = { type: 'warning', title: 'QuorX', message: d.message, detail: d.detail, buttons: d.buttons, defaultId: d.defaultId, cancelId: d.cancelId, noLink: true };
+    // From the tray the window may be hidden: a dialog tied to a hidden window would not show.
+    const { response } = await (win?.isVisible() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts));
+    const act = d.actions[response];
+    if (act === 'quit') quitApp(); else if (act === 'tray') win?.hide();
+  } finally { asking = false; }
+}
 async function askOnClose() {
+  if (asking || !win) return;
+  // Something working: the named dialog instead of the notice (its Keep running is the same as the notice's).
+  if (quitDialog(await fetchBusy())) return confirmQuit();
   if (asking || !win) return;
   asking = true;
   const { response, checkboxChecked } = await dialog.showMessageBox(win, {
@@ -231,7 +252,7 @@ const trayTip = () => `QuorX${DEV ? ' DEV (from your folder)' : ''} is running �
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open QuorX', click: showWindow },
-    { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: quitApp },
+    { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: confirmQuit },
     { type: 'separator' },
     { label: `Address: ${appOrigin()}`, enabled: false },
     ...(HOME ? [{ label: 'Open the data folder', click: () => shell.openPath(HOME) }] : []),
@@ -593,7 +614,7 @@ handle('storage', async (op, arg) => {
 });
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
-handle('quit', () => { setImmediate(quitApp); return true; });
+handle('quit', () => { setImmediate(confirmQuit); return true; });
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // The performance readout (⚙ Settings → Appearance → Under the hood) and the perf UI test: every process QuorX runs
@@ -931,6 +952,17 @@ async function linkLoop() {
     for (const [k, t] of [...tabs]) if (t.agent) closeTab(k);
     await new Promise((res) => setTimeout(res, 3000));
   }
+}
+
+// ---------- what the harness is working on (keep-awake, the quit prompt) ----------
+// { replies, servers, commands } from the harness (server/running.js busyNow), or null when it can't be asked
+// (restarting, or an older harness): then nothing is held awake and quitting asks nothing extra.
+async function fetchBusy() {
+  if (!origin) return null;
+  try {
+    const r = await fetch(`${origin}/api/busy`, { headers: keyed(), signal: AbortSignal.timeout(1500) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
 }
 
 // The (hidden) menu, without Electron's zoom shortcuts: Ctrl + / − / 0 are QuorX's own (the app, each browser tab,

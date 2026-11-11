@@ -28,6 +28,7 @@
       "buildResources": "build"
     },
     "files": [
+      "quit-prompt.js",
       "main.js",
       "preload.js",
       "sound.js",

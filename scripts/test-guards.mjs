@@ -1036,3 +1036,23 @@ test('running: the list for every project names each row’s project', { skip: !
     assert.ok(!rows.some((x) => x.projectId === 'rlquiet'));
   } finally { await termStop(s.id).catch(() => {}); forgetProject('rlall'); }
 });
+
+// What the desktop app asks before keeping the PC awake or quitting: the replies it is given, plus every running
+// command and agent terminal in any project.
+test('running: busyNow names the replies, servers and commands working now', { skip: !WIN }, async () => {
+  const { busyNow } = await import('../server/running.js');
+  const { termStart } = await import('../server/agentterm.js');
+  const quiet = busyNow([]);
+  assert.deepEqual(quiet.replies, []);
+  assert.ok(Array.isArray(quiet.servers) && Array.isArray(quiet.commands));
+  const root = tmp('rlbusy');
+  fs.writeFileSync(path.join(root, 'wait.js'), 'setTimeout(() => {}, 60000);\n');
+  saveProject({ id: 'rlbusy', name: 'busy', path: root });
+  const s = await termStart({ projectId: 'rlbusy', chatId: 'c1', cwd: root, line: 'node wait.js', shell: 'cmd' });
+  try {
+    const b = busyNow([{ chatId: 'c1', title: 'Snake game' }, { chatId: 'c2', scheduled: true }]);
+    assert.deepEqual(b.replies, [{ chatId: 'c1', title: 'Snake game', scheduled: false }, { chatId: 'c2', title: 'A reply', scheduled: true }]);
+    assert.ok(b.commands.some((x) => x.projectId === 'rlbusy'), JSON.stringify(b.commands));
+  } finally { await termStop(s.id).catch(() => {}); forgetProject('rlbusy'); }
+  assert.ok(!busyNow([]).commands.some((x) => x.projectId === 'rlbusy'), 'a stopped terminal is no longer busy');
+});

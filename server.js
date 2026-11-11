@@ -40,7 +40,7 @@ import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureR
 import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
-import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
+import { runningIn, runningAll, stopRunning, stopAllIn, busyNow } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
@@ -1217,6 +1217,11 @@ const server = http.createServer(async (req, res) => {
       if (!rm[2] && req.method === 'GET') return json(res, 200, runStatus(rm[1]));
     }
     if (url.pathname === '/api/runs' && req.method === 'GET') return json(res, 200, activeRuns());
+    // What works right now (replies, servers, commands), for the desktop app's keep-awake and quit prompt.
+    if (url.pathname === '/api/busy' && req.method === 'GET') {
+      const chatOf = (id) => { try { return id ? getChat(id) : null; } catch { return null; } };
+      return json(res, 200, busyNow(activeRuns().map((r) => { const c = chatOf(r.chatId); return { chatId: r.chatId, title: c?.title, scheduled: !!(c?.scheduled || c?.scheduledBy) }; })));
+    }
     // News (docs/news-format.md): What's new, articles and reports from news/, and the user's own numbers.
     if (url.pathname === '/api/news' || url.pathname.startsWith('/api/news/')) {
       const r = await newsRoute({ method: req.method, pathname: url.pathname, query: url.searchParams, body: req.method === 'POST' ? await readBody(req, 1e4) : '' });
