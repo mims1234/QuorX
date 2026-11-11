@@ -18,6 +18,7 @@ const tabJumps = Array.from({ length: 9 }, (_, i) => ({
 export const SHORTCUTS = [
   { id: 'palette', group: 'find', keys: 'Ctrl+K', label: 'Search chats, commands, settings and files' },
   { id: 'chatsearch', group: 'find', keys: 'Ctrl+Shift+F', label: 'Search inside chats', help: 'Your messages and the agent’s replies, with filters. Also from the search box.' },
+  { id: 'chatsearch.filters', group: 'find', keys: 'Alt+P · Alt+F · Alt+D', label: 'In Search inside chats: which projects, who wrote it, when', fixed: true },
   { id: 'find', group: 'find', keys: 'Ctrl+F', label: 'Find in the tab you are using', help: 'The chat you are typing in, or the group you used last. Inside a page of the Browser tab, Ctrl+F always finds in that page.' },
   { id: 'find.step', group: 'find', keys: 'Enter', label: 'Next match (Shift+Enter: the one before)', fixed: true, help: 'In the find bar. Esc closes it.' },
   { id: 'tab.next', group: 'tabs', keys: 'Ctrl+Tab', label: 'Next chat tab' },
