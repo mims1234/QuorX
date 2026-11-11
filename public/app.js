@@ -7150,7 +7150,9 @@ function openInBrowser(c, url) {
 // The agent started (or restarted) a server: show it, and update the 🖥 count.
 function serverUp(c, e) {
   pollDev();
-  if (focused() === c && followsAgent(c) && e.url) openInBrowser(c, e.url);
+  // A page (preview_site) opens from the pages address as this window reaches it; a project server at its own address.
+  const u = e.page && e.path ? pageUrl(e.path) : e.url;
+  if (focused() === c && followsAgent(c) && u) openInBrowser(c, u);
 }
 // Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) show in the Artifact tab, next
 // to the plans: listed in its dropdown under "Files from the chat" until closed. Kept per chat on this computer.
@@ -10956,9 +10958,14 @@ async function renderServers(c) {
   const pop = c.srvPop?.el;
   if (!pop || !pop.isConnected) { if (c.srvPop?.inline) closeServers(c); return; }
   if (c.srvPop.editing || c.srvPop.busy) return;
+  // Not while you type in the Pages filter: a redraw would take the box away under your keys.
+  if (pop.contains(document.activeElement) && document.activeElement.matches('.lf-q')) return;
+  // Only the newest draw lands: a 2 s refresh still on its way must not put back the list from before a click.
+  const seq = (c.srvPop.seq = (c.srvPop.seq || 0) + 1);
   const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(spaceOf(c))}`);
-  if (!c.srvPop || c.srvPop.editing || c.srvPop.busy) return;
-  devBadges(spaceOf(c), r);
+  if (!c.srvPop || c.srvPop.editing || c.srvPop.busy || c.srvPop.seq !== seq) return;
+  if (pop.contains(document.activeElement) && document.activeElement.matches('.lf-q')) return;
+  devBadges(spaceOf(c), r); pagesNotice(spaceOf(c), r);
   const p = projectOf(c);
   const head = `<div class="srv-head"><span class="srv-h-ico">${SVG_SERVER}</span><b>Servers</b><span class="srv-sub">${esc(p?.name || c.projectId)}</span><span class="srv-spacer"></span>
     <button type="button" class="srv-btn srv-add" title="Add a server command to this project">＋ Add</button><button type="button" class="srv-btn srv-term" title="Watch every command and server in this project">${SVG_TERM} Terminal</button></div>`;
@@ -10968,8 +10975,9 @@ async function renderServers(c) {
     $('.srv-add', pop).onclick = () => {}; $('.srv-term', pop).onclick = () => { closeServers(c); openTerminal(c); };
     return;
   }
-  const rows = r.servers || [], jobs = (r.jobs || []);
+  const rows = r.servers || [], jobs = (r.jobs || []), pages = r.pages || [];
   pop.innerHTML = `${head}
+    <div class="srv-sec srv-kind"><span class="kind-tag project">PROJECT</span><span>Project servers</span><small>what runs the project · <code>.quorx/launch.json</code></small></div>
     <div class="srv-list">${rows.map((s, i) => {
       const [cls, label] = srvState(s), live = s.status === 'running' || s.status === 'starting' || s.status === 'not listening';
       const host = s.url ? s.url.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
@@ -10990,9 +10998,11 @@ async function renderServers(c) {
           ${s.url && live ? `<button type="button" class="srv-link" data-act="open" title="Open ${esc(s.url)} in the Browser tab">${esc(host)}</button>` : s.port ? `<span class="srv-port">port ${s.port}</span>` : ''}
         </div>
       </div>`;
-    }).join('') || '<div class="srv-empty">No servers yet. Each server the agent starts is saved here, so you can run and stop it later; or add one yourself.</div>'}</div>
+    }).join('') || '<div class="srv-empty">No project servers yet. The dev server, API or game the agent starts is saved here, so you can run and stop it later; or add one yourself.</div>'}</div>
     ${jobs.length ? `<div class="srv-sec">Running now</div><div class="srv-list">${jobs.map((j) => `<div class="srv-row job"><span class="srv-dot busy"></span><div class="srv-main"><div class="srv-name"><b>${j.source === 'agent' ? '🤖 agent' : '👤 you'}</b><span class="srv-state busy">${esc(ago(j.at).replace('just now', 'started just now'))}</span></div><code class="srv-cmd">${esc(j.label)}</code></div><div class="srv-acts"><button type="button" class="srv-btn stop" data-job="${esc(j.job)}">■ Stop</button></div></div>`).join('')}</div>` : ''}
-    <div class="srv-foot" title="Each server gets a free port as PORT / {PORT} unless it has a fixed one${rows.some((x) => x.from === '.claude/launch.json') ? '. .claude/launch.json is read too' : ''}.">Saved in <code>.quorx/launch.json</code> · free port as <code>{PORT}</code></div>${c.wt ? `<div class="srv-foot srv-wt" title="This chat has its own git worktree: its servers run in that copy of the project, each on a free port of its own (a fixed port in the launch file is left to the project folder's copy)."><span class="wt-branch-tag">⎇ ${esc(c.wt.branch)}</span> These run in this chat's worktree, on ports of their own</div>` : ''}`;
+    ${pagesPart(pages)}
+    <div class="srv-foot" title="Each server gets a free port as PORT / {PORT} unless it has a fixed one${rows.some((x) => x.from === '.claude/launch.json') ? '. .claude/launch.json is read too' : ''}.">Project servers: <code>.quorx/launch.json</code> · free port as <code>{PORT}</code> · Pages: always on, inside QuorX</div>${c.wt ? `<div class="srv-foot srv-wt" title="This chat has its own git worktree: its servers and pages run from that copy of the project, each server on a free port of its own (a fixed port in the launch file is left to the project folder's copy)."><span class="wt-branch-tag">⎇ ${esc(c.wt.branch)}</span> These run in this chat's worktree, on ports of their own</div>` : ''}`;
+  wirePages(c, pop, pages);
   $('.srv-add', pop).onclick = () => editServer(c, {});
   $('.srv-term', pop).onclick = () => { closeServers(c); openTerminal(c); };
   for (const b of pop.querySelectorAll('[data-job]')) b.onclick = async () => { b.disabled = true; await postJ('/api/term/stop', { job: b.dataset.job }); renderServers(c); };
@@ -11080,7 +11090,7 @@ async function pollDev() {
   const ids = new Set(G.panes.map((id) => spaceOf(G.open.get(id))).filter(Boolean));
   for (const pid of ids) {
     if (G.projects.find((p) => p.id === pid)?.missing) continue;
-    const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r);
+    const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`); devBadges(pid, r); devAfter(pid, r); pagesNotice(pid, r);
     const run = await getJ(`/api/running?project=${encodeURIComponent(pid)}`);
     if (run && !run.error) {
       (G.runCount ||= {})[pid] = { n: run.items.filter((x) => x.kind !== 'your-term').length };
@@ -11090,6 +11100,102 @@ async function pollDev() {
   }
 }
 setInterval(pollDev, 3000);
+
+// ---------- 📄 pages: previews and mockups, apart from the project's servers (server/pages.js) ----------
+// Two kinds of server, each with its own colour everywhere: green PROJECT servers (the launch file: what runs the
+// project itself) and violet PAGES (what the agent shows you along the way, served by QuorX's own pages address,
+// always on). A page has Open, and Keep as project server for when the static site is the project itself.
+const PAGE_SEG = { preview: 'Previews', moved: 'Moved from servers' };
+function pagesPart(pages) {
+  return `<div class="srv-sec srv-kind"><span class="kind-tag page">PAGE</span><span>Pages</span><small>previews and mockups · always on, nothing to start</small></div>
+    ${pages.length > 5 ? '<div class="srv-pfilter"></div>' : ''}
+    <div class="srv-list srv-pages">${pages.map((pg, i) => `<div class="srv-row page-row" data-p="${i}" data-lf-text="${esc(`${pg.title} ${pg.entry}`.toLowerCase())}" data-lf-seg="${esc(pg.from || 'preview')}">
+      <div class="srv-top">
+        <span class="srv-dot page" title="Served by QuorX"></span><b class="srv-nm" title="${esc(pg.title)}">${esc(pg.title)}</b>
+        ${pg.missing ? '<span class="srv-state warn" title="The file was moved or deleted">file missing</span>' : ''}
+        <span class="srv-acts">
+          ${pg.missing ? '' : `<button type="button" class="srv-ib" data-pact="open" title="Open it in the Browser tab" aria-label="Open in the Browser tab">${SRV_ICO.open}</button>`}
+          <button type="button" class="srv-ib danger" data-pact="remove" title="Take it off this list (the file stays in the project)" aria-label="Remove from Pages">${SRV_ICO.trash}</button>
+        </span>
+      </div>
+      <div class="srv-meta">
+        <code class="srv-cmd" title="${esc(pg.entry)}&#10;A file in the project folder">${esc(pg.entry)}</code>
+        ${pg.missing ? '' : '<button type="button" class="srv-keep" data-pact="keep" title="This static site is the project itself: save it in .quorx/launch.json as a project server you run and stop">Keep as project server</button>'}
+      </div>
+    </div>`).join('') || '<div class="srv-empty">No pages yet. Previews and mockups the agent shows you appear here; they never fill the launch file.</div>'}</div>`;
+}
+function wirePages(c, pop, pages) {
+  const host = $('.srv-pfilter', pop);
+  if (host) listFilter(host, { key: 'srv-pages', rows: () => pop.querySelectorAll('.page-row'), segLabel: (v) => PAGE_SEG[v] || v, segOrder: ['preview', 'moved'], placeholder: 'Filter pages…', label: 'Show pages' });
+  for (const row of pop.querySelectorAll('.page-row')) {
+    const pg = pages[Number(row.dataset.p)];
+    for (const b of row.querySelectorAll('[data-pact]')) b.onclick = async () => {
+      const act = b.dataset.pact;
+      if (act === 'open') { closeServers(c); openInBrowser(c, pageUrl(pg.url)); return toPreview(); }
+      c.srvPop.busy = true; b.disabled = true;
+      const res = act === 'keep' ? await postJ('/api/pages', { projectId: spaceOf(c), action: 'keep', entry: pg.entry })
+        : await postJ(`/api/pages?project=${encodeURIComponent(spaceOf(c))}&entry=${encodeURIComponent(pg.entry)}`, null, 'DELETE');
+      if (c.srvPop) c.srvPop.busy = false;
+      if (res?.error) { b.disabled = false; return uiAlert(`${pg.title}: ${res.error}`); }
+      await renderServers(c);
+      if (act === 'keep' && res.config) { const nm = [...(c.srvPop?.el.querySelectorAll('.srv-row[data-i] .srv-nm') || [])].find((x) => x.textContent === res.config.name); if (nm) flashTip(nm, 'Saved as a project server'); }
+      pollDev();
+    };
+  }
+}
+// "N previews moved to Pages": once per project, after older versions' previews left the launch file. Undo puts them
+// back; ✕ keeps the move. It shows at the top of each open chat of that project until one of the two.
+function pagesNotice(projectId, r) {
+  if (!r || r.error) return;
+  const n = r.pagesNotice;
+  for (const c of G.open.values()) {
+    if (!c.el || spaceOf(c) !== projectId) continue;
+    const old = $('.pages-notice', c.el.root);
+    if (!n) { old?.remove(); continue; }
+    if (old && old.dataset.at === String(n.at)) continue;
+    old?.remove();
+    $('.chat-head', c.el.root).insertAdjacentHTML('afterend', `<div class="budget-notice pages-notice" role="status" data-at="${esc(String(n.at))}">
+      <span class="bn-ico"><span class="kind-tag page">PAGE</span></span>
+      <div class="bn-text"><b>${n.count} preview${n.count > 1 ? 's' : ''} moved to Pages</b><small>${esc(n.names.filter(Boolean).slice(0, 4).join(', '))}${n.names.length > 4 ? ` and ${n.names.length - 4} more` : ''}: QuorX shows ${n.count > 1 ? 'them' : 'it'} now, always on, so the launch file keeps only what runs the project. Your project servers are unchanged.</small></div>
+      <button type="button" class="bn-raise pn-see">See Pages</button>
+      <button type="button" class="srv-btn pn-undo" title="Put ${n.count > 1 ? 'them' : 'it'} back in .quorx/launch.json as before">Undo</button>
+      <button type="button" class="bn-x" aria-label="Keep the move and close this notice" title="Keep the move and close this notice">✕</button></div>`);
+    const box = $('.pages-notice', c.el.root);
+    $('.pn-see', box).onclick = () => { if (focused() === c) openTerminal(c, null, 'srv'); };
+    const done = async (action, b) => {
+      b.disabled = true;
+      const res = await postJ('/api/pages', { projectId, action });
+      if (res?.error) { b.disabled = false; return uiAlert(res.error); }
+      for (const ch of G.open.values()) if (ch.el && spaceOf(ch) === projectId) $('.pages-notice', ch.el.root)?.remove();
+      for (const ch of G.open.values()) if (ch.srvPop && spaceOf(ch) === projectId) renderServers(ch);
+      pollDev();
+    };
+    $('.pn-undo', box).onclick = (e) => done('undo', e.currentTarget);
+    $('.bn-x', box).onclick = (e) => done('dismiss', e.currentTarget);
+  }
+}
+// A pages address (QuorX's pages server): PAGE in the address bar, and the page reloads when the project's files
+// change, as an artifact or a site in the Artifact tab does.
+function pagesAddr(u) {
+  const p = G.cfg?.pagePort;
+  if (!p || !u) return null;
+  try { const x = new URL(u, location.href); if (String(x.port) !== String(p)) return null; const m = x.pathname.match(/^\/ws\/([a-z0-9-]+)\//i); return { project: m?.[1] || null }; } catch { return null; }
+}
+const pageStamps = new Map();
+setInterval(() => {
+  if (document.hidden) return;
+  eachArea((a) => {
+    if (!G.view.browser) return;
+    const u = $('#paneUrl')?.value, pa = pagesAddr(u);
+    if (!pa?.project || document.activeElement === $('#paneUrl')) return;
+    fetch(`/api/files/stamp?project=${encodeURIComponent(pa.project)}`).then((x) => x.json()).then((r) => {
+      if (!r || r.stamp == null) return;
+      const k = `${a.n}|${u}`, was = pageStamps.get(k);
+      pageStamps.set(k, r.stamp);
+      if (was != null && was !== r.stamp) inArea(a, () => { if (G.view.browser && $('#paneUrl')?.value === u) $('#reloadBtn').click(); });
+    }).catch(() => {});
+  });
+}, 2500);
 
 // ---------- ⌨ terminal: live output of every command and server in the project ----------
 // One Terminal tab with three sections: your terminals (panes stacked top to bottom, each with its own tabs, added
@@ -11648,6 +11754,8 @@ function setUrlBar(url, { art = false } = {}) {
   f.value = full;
   f.placeholder = url && url.startsWith('data:') ? 'Embedded in the chat (no address)' : 'Type an address or words to search, and press Enter';
   f.title = full || f.placeholder;
+  // PAGE: an address on QuorX's pages server (previews, mockups, plans), not one of the project's servers.
+  const kind = $('.url-kind', wrap); if (kind) kind.hidden = !pagesAddr(full);
   $('#copyUrlBtn').disabled = !full; $('#popBtn').disabled = !full && !(url || '').startsWith('data:');
   G.paneUrl = full;
 }

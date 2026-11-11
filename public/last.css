@@ -1764,6 +1764,29 @@ html body .sidebar .sb-project.current .sb-pname { font-weight: 750 !important; 
 .srv-pop .srv-row[data-i] > .srv-top, .srv-pop .srv-row[data-i] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
 .srv-pop .srv-link { display: inline-flex !important; align-items: center; height: 22px !important; }
 
+/* ---------- two kinds of server: green PROJECT (the launch file) and violet PAGE (QuorX's pages server) ---------- */
+.kind-tag { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 6px; border-radius: 4px; font: 800 9px var(--font-ui); letter-spacing: .08em; line-height: 1; }
+.kind-tag.project { color: var(--ok); background: var(--ok-dim); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
+.kind-tag.page { color: var(--violet, #a78bfa); background: var(--violet-dim, color-mix(in srgb, #a78bfa 14%, transparent)); border: 1px solid var(--violet-line, color-mix(in srgb, #a78bfa 45%, transparent)); }
+.srv-pop .srv-kind { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 4px; text-transform: none; letter-spacing: 0; font: 700 12px var(--font-ui); color: var(--text); }
+.srv-pop .srv-kind > span:not(.kind-tag) { flex: none; white-space: nowrap; }
+.srv-pop .srv-kind small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11px var(--font-ui); color: var(--dim); }
+.srv-pop .srv-kind small code { font: 10.5px var(--mono); }
+.srv-pop .srv-dot.page { background: var(--violet, #a78bfa); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet, #a78bfa) 18%, transparent); }
+.srv-pop .page-row { border-color: color-mix(in srgb, var(--violet, #a78bfa) 28%, var(--line)) !important; }
+.srv-pop .srv-row[data-p] { grid-template-columns: minmax(0, 1fr) !important; grid-auto-flow: row !important; }
+.srv-pop .srv-row[data-p] > .srv-top, .srv-pop .srv-row[data-p] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
+.srv-pop .srv-keep { flex: none; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); background: transparent; color: var(--ok); font: 650 11px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.srv-pop .srv-keep:hover:not(:disabled) { background: var(--ok-dim); border-color: var(--ok); }
+.srv-pop .srv-state.warn { color: var(--amber, #f59e0b); }
+.srv-pop .srv-pfilter { margin: 0 0 2px; }
+.urlbar .url-kind { margin-left: 2px; }
+.urlbar .url-kind[hidden] { display: none; }
+.pages-notice { --bn: var(--violet, #a78bfa); grid-template-columns: auto minmax(0, 1fr) auto auto auto; }
+.pages-notice .bn-raise { color: #fff; }
+.pages-notice .pn-undo { height: 28px; }
+@container (max-width: 520px) { .pages-notice > .pn-undo { grid-row: 2; grid-column: 3; } }
+
 /* ---------- what you sent: clickable pictures and files, and the large viewer ---------- */
 .msg .u-imgs img { cursor: zoom-in; }
 .msg .u-imgs img:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
