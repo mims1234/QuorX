@@ -80,7 +80,7 @@ const BUCKET = {
   unclear: ['deciders unsure', 'The deciders could not settle it (low confidence).'],
   unmatched: ['guess unclear', 'The agent\'s guess did not match any option, so it can\'t be compared.'],
 };
-const TOOL_NAME = { computer_use: '🖥 Computer use', quorx_settings: '⚙ QuorX settings', folder: '📁 A folder outside the project', remember: '📌 Remember this', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
+const TOOL_NAME = { run_later: '⚙ A file that runs commands later', computer_use: '🖥 Computer use', quorx_settings: '⚙ QuorX settings', folder: '📁 A folder outside the project', remember: '📌 Remember this', media_plan: '🎞 Production plan', enable_media: '🧰 Switch on paid tools', imagine: '🖼 Make a picture', make_video: '🎬 Make a video', compose_music: '🎵 Compose music', speak: '🗣 Speak aloud',
   write_artifact: '📄 Write a page', edit_artifact: '✏️ Edit a page', read_artifact: '👀 Read a page', decide: '⚖️ Ask the deciders',
   list_files: '🗂 List files', read_file: '👀 Read a file', write_file: '📝 Write a file', append_file: '📝 Append to a file', edit_file: '✏️ Edit a file',
   search_docs: '🔎 Search the attached documents', read_doc: '📄 Read an attached document', list_docs: '📎 List attached documents',
@@ -5873,7 +5873,7 @@ function waitHTML(card) {
   const w = card.wait;
   if (!w) return '';
   if (w.held) return '<div class="aw held"><span class="aw-text">⏸ Waiting for you: nothing happens until you answer.</span></div>';
-  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', 'switch on': 'they are switched on (every paid call is still priced and approved)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', 'skip-off': 'it is skipped (the deciders are off in this chat)', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
+  const then = { deciders: 'the deciders answer for you', recommended: 'the agent\'s recommendations stand', 'go ahead': 'the storyboard stands and the agent goes ahead', run: 'it runs (the deciders saw little risk)', 'switch on': 'they are switched on (every paid call is still priced and approved)', skip: 'it is skipped (the deciders weren\'t sure it is harmless)', 'skip-off': 'it is skipped (the deciders are off in this chat)', 'keep file': 'the file is left as it is', stop: 'the agent stops waiting and carries on without it' }[w.then] || 'the reply carries on';
   const left = Math.max(0, Math.ceil((w.until - Date.now()) / 1000));
   return `<div class="aw" data-until="${w.until}" data-secs="${w.secs}" data-run="${esc(w.runId || '')}" data-id="${esc(card.id)}"><span class="aw-bar" aria-hidden="true"><i style="width:${Math.min(100, (left / (w.secs || 1)) * 100)}%"></i></span><span class="aw-text">⚡ No answer in <b class="aw-n">${left}</b>s and ${then}.</span><button type="button" class="aw-hold" title="Stop the clock: the card waits until you answer">Wait for me</button></div>`;
 }

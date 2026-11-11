@@ -42,7 +42,7 @@ import { languageChecks } from './langchecks.js';
 import { loadHooks, matchHooks, hookLine, safeHookFile, HOOK_WHEN, HOOK_BLOCKS } from './hooks.js';
 import { HELPER_ROLES, rolesFrom, canWord } from './helperroles.js';
 import { OTHER_NOTES_FILES, readOtherNotes, otherNotesPrompt } from './othernotes.js';
-import { editGuard } from './editguard.js';
+import { editGuard, runsLaterWhy } from './editguard.js';
 import { splitTools, loadToolsDef, RARE_TOOLS } from './lazytools.js';
 import { loadMemory, memoryPrompt, checkMemory, addMemory, itemsFor, REMEMBER_TOOL, RECALL_TOOL } from './memory.js';
 import { audit } from './audit.js';
@@ -3756,6 +3756,24 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   function secretOf(rel) {
     try { return secretKind(path.relative(realish(root), realish(safePath(root, String(rel)))), String(rel)); } catch { return secretKind(String(rel)); }
   }
+  // A file that defines what runs later (a CI workflow, git hooks, a dev container: runsLaterWhy in editguard.js) is
+  // never changed without the user, in ⚡ YOLO too: a card says which file and why it asks. Once per file per reply;
+  // in YOLO an unanswered card skips the change after the usual wait, so the reply goes on. '' = go ahead.
+  async function runsLaterGate(name, rel, abs) {
+    const kind = runsLaterWhy(rel), k = String(rel).replaceAll('\\', '/').toLowerCase();
+    if (!kind || run.laterOk?.has(k)) return '';
+    const shown = String(rel).replaceAll('\\', '/');
+    const verb = name === 'delete_file' ? 'Delete' : name === 'write_file' && !fs.existsSync(abs) ? 'Create' : 'Change';
+    const card = { id: newApprovalId(), tool: 'run_later', free: true, est: 0, noAlways: true, what: `${verb} ${shown}`,
+      why: `${shown} is ${kind}. A change here runs commands later, out of sight, so QuorX always asks first, in ⚡ YOLO too.`,
+      yes: verb === 'Delete' ? 'Allow deleting it' : verb === 'Create' ? 'Allow creating it' : 'Allow this change', no: verb === 'Delete' ? 'Keep it' : 'Don\'t change it' };
+    const waitMs = S.approval === 'yolo' ? yoloWait() : 0;
+    const ans = await askUser(card, waitMs ? { ms: waitMs, then: 'keep file', onTimeout: () => ({ approve: false, by: 'timeout', reason: `No answer in ${Math.round(waitMs / 1000)}s, so ${shown} was not changed` }) } : null);
+    emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
+    if (!ans.approve) return `${declined(name, ans)} ${shown} is ${kind}; it stays as it was. If the change is needed, tell the user what you would change and why, and let them make it or ask you again.`;
+    (run.laterOk ||= new Set()).add(k);
+    return '';
+  }
   async function codeTool(name, args) {
     if (!root) return 'Error: the project folder is switched off.';
     // A path outside the project (absolute): a folder the user added to this chat, or a card that asks to add it.
@@ -3781,6 +3799,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         emit({ t: 'guard', tool: name, path: String(args.path), why: stale, at: at() });
         return `Not changed: ${args.path} ${stale}. Read it again with read_file, then make your change to what it holds now, so nothing they changed is lost.`;
       }
+      const later = await runsLaterGate(name, real, safePath(root, String(args.path)));
+      if (later) return later;
       const bw = await runHooks('before_write', { file: String(args.path) });
       if (bw.blocked) return bw.text.trim();
       checkpoint(root, filesId, args.path);
@@ -5820,6 +5840,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     const shown = abs, rel = f.rel;
     if (writes) { const no = agentWriteBlocked(rel); if (no) return `Refused: ${no}.`; }
+    if (writes) { const later = await runsLaterGate(name, rel, abs); if (later) return later; }
     const outsideNote = writes ? `\n(Outside the project, in ${f.dir}: Undo doesn't cover this change.)` : '';
     const check = async (todo) => (CHECKED.test(shown) ? await checked(shown, await checkFile(f.dir, rel), todo) : '') + linted(shown, lintFile(f.dir, rel));
     if (name === 'list_files') { const l = listFiles(abs); return l.length ? l.map((x) => `${x.path} (${x.size} bytes)`).join('\n') : `${abs} is empty.`; }
