@@ -259,3 +259,19 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .rmx-dialog .rmx-price { color: var(--money, #e8b04a); font: 11.5px var(--mono, monospace); white-space: nowrap; }
 .rmx-dialog .sq-check { display: flex; margin: 6px 0; }
 @media (max-width: 900px) { body.two-chats .chat-head .ch-own, .wt-tab .own-sq { display: none !important; } }
+
+/* ---------- W4: the layout buttons in the top bar (a segmented control) ---------- */
+.ws-layouts { display: inline-flex; align-items: center; flex: none; height: 26px; margin: 0 6px; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
+.ws-layouts:empty { display: none; }
+.ws-layouts button { height: 20px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.ws-layouts button:hover:not(:disabled) { color: var(--text); background: var(--panel-3, var(--line)); }
+.ws-layouts button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.ws-layouts button:disabled { opacity: .45; cursor: default; }
+.ws-layouts .wl-mine { border-left: 1px solid var(--line); border-radius: 0 5px 5px 0; }
+@media (max-width: 1100px) { .ws-layouts button { padding: 0 6px; } }
+@media (max-width: 900px) { .ws-layouts { display: none !important; } }
+.wl-list { min-width: 220px; max-height: 360px; overflow: auto; }
+.wl-list .wl-row { display: flex; align-items: center; gap: 2px; }
+.wl-list .wl-apply { flex: 1; text-align: left; }
+.wl-list .wl-apply.on { color: var(--accent); }
+.wl-list .wl-ren, .wl-list .wl-del { flex: none; width: 28px; }

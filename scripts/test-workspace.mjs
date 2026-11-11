@@ -362,3 +362,75 @@ test('workspace W3: a second chat in a group of its own; only some groups shown;
   const back = W.parse(W.serialise(lay, {}, [], { pins: { g1: 'b', g9: 'c', chat: '' } }));
   assert.deepEqual(back.pins, { g1: 'b' });
 });
+
+test('workspace W4: layouts fit the project without closing anything; your own are saved as shapes', () => {
+  { // workspace W4: every built-in layout fits a fresh project, within the cap
+    for (const k of W.LAYOUT_ORDER) {
+      const r = W.fitLayout(W.defaultLayout(), W.LAYOUTS[k], { chat2: 'b' });
+      assert.ok(W.groups(r.layout).length <= W.MAX_GROUPS, k);
+      assert.equal(W.findGroup(r.layout, 'chat').active, 'chat:main', `${k} keeps the chat`);
+      assert.equal(W.findGroup(r.layout, 'g1')?.id, 'g1', `${k} keeps the first pane group (its box stays)`);
+    }
+    const b = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build);
+    assert.deepEqual(W.groups(b.layout).map((g) => g.active), ['chat:main', 'browser:g1', 'terminal:g2']);
+    assert.equal(b.follow, 'g1');
+    assert.deepEqual(b.added, ['g2']);
+    const c = W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare, { chat2: 'b' });
+    assert.equal(shape(c.layout.root).replace(/\[[^\]]*\]/g, ''), 'row(col(chat g1) col(chat2 g2))');
+    assert.deepEqual(c.pins, { g1: 0, g2: 1 });
+    // Without a second chat Compare drops its second chat group.
+    assert.equal(W.findGroup(W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare).layout, 'chat2'), null);
+  }
+  { // workspace W4: switching keeps every tab: file tabs go to the nearest group, pane groups keep their ids
+    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout; // chat, g1, g2, g3
+    lay = W.placeTab(lay, 'viewer:a', 'g3', 'center').layout;
+    lay = W.placeTab(lay, 'viewer:b', 'g1', 'center').layout;
+    const r = W.fitLayout(lay, W.LAYOUTS.review); // one pane group
+    assert.deepEqual(r.removed, ['g2', 'g3']);
+    const g1 = W.findGroup(r.layout, 'g1');
+    assert.ok(g1.tabs.includes('viewer:a') && g1.tabs.includes('viewer:b'), 'nothing closes');
+    assert.equal(g1.active, 'files:g1');
+    assert.deepEqual(W.allTabs(r.layout).filter((t) => t.startsWith('viewer:')).sort(), ['viewer:a', 'viewer:b']);
+  }
+  { // workspace W4: what is on screen saves as a shape that fits again; stored shapes are checked
+    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare, { chat2: 'b' }).layout;
+    const sh = W.shapeOf(lay, { follow: 'g2', pins: { g1: 'a', g2: 'b' }, chats: ['a', 'b'] });
+    assert.equal(sh.follow, 's2');
+    assert.deepEqual(sh.pins, { s1: 0, s2: 1 });
+    assert.equal(sh.chats, 2);
+    assert.deepEqual(W.cleanShape(JSON.parse(JSON.stringify(sh))), sh);
+    const again = W.fitLayout(W.defaultLayout(), W.cleanShape(sh), { chat2: 'b' });
+    assert.equal(shape(again.layout.root).replace(/\[[^\]]*\]/g, ''), 'row(col(chat g1) col(chat2 g2))');
+    assert.equal(W.cleanShape({ root: { t: 'g', id: 's1', kind: 'art' } }), null, 'a layout needs the chat');
+    assert.equal(W.cleanShape({ root: { t: 's', dir: 'row', kids: [{ t: 'g', id: 'chat' }, { t: 'g', id: 's1', kind: 'nope' }] } }), null);
+    assert.equal(W.cleanShape(null), null);
+  }
+  { // workspace W4: a second chat stays beside the first when the layout has room; the first area is kept first
+    const two = W.withChat2(W.LAYOUTS.build);
+    assert.equal(W.groups(two.root).map((g) => g.id).join(), 'chat,chat2,s1,s2');
+    assert.equal(W.withChat2(W.LAYOUTS.debug), W.LAYOUTS.debug, 'no room past the cap');
+    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout;
+    const r = W.fitLayout(lay, W.LAYOUTS.review, { order: ['g3', 'g1', 'g2'] });
+    assert.deepEqual(W.sideGroups(r.layout).map((g) => g.id), ['g3']);
+    assert.equal(W.parse(W.serialise(r.layout, {}, [], { preset: 'review' })).preset, 'review');
+  }
+});
+
+test('workspace W4: where things open: one rule set, never in a chat group', () => {
+  const lay = W.createLayout(W.split('row', [W.group('chat', ['chat:a']), W.group('chat2', ['chat:b']), W.split('col', [W.group('g1', ['browser:g1']), W.group('g2', ['steps:g2']), W.group('g3', ['files:g3'])])]));
+  const rects = { chat: { x: 0, y: 0, w: 100, h: 300 }, chat2: { x: 110, y: 0, w: 100, h: 300 }, g1: { x: 220, y: 0, w: 100, h: 100 }, g2: { x: 220, y: 100, w: 100, h: 100 }, g3: { x: 220, y: 200, w: 100, h: 100 } };
+  const shows = { g1: 'browser', g2: 'trace', g3: 'files' };
+  // A server: the follow group, else the group showing the Browser.
+  assert.equal(W.openTarget('server', { lay, rects, shows, follow: 'g3' }), 'g3');
+  assert.equal(W.openTarget('server', { lay, rects, shows }), 'g1');
+  assert.equal(W.openTarget('server', { lay, rects, shows: {}, from: 'chat' }), 'g2', 'no Browser anywhere: the nearest group');
+  // Steps: the group showing Steps for that chat; one pinned to the other chat doesn't count.
+  assert.equal(W.openTarget('steps', { lay, rects, shows, chat: 'a', owner: { g2: 'a' } }), 'g2');
+  assert.notEqual(W.openTarget('steps', { lay, rects, shows, chat: 'b', owner: { g1: 'a', g2: 'a', g3: 'b' }, chatGroup: 'chat2' }), 'g2');
+  // Files: the nearest group to where you clicked; a side question or Changes: beside its chat.
+  assert.equal(W.openTarget('file', { lay, rects, from: 'g3' }), 'g3');
+  assert.equal(W.openTarget('changes', { lay, rects, chatGroup: 'chat2' }), 'g2');
+  // Never a chat group, whatever is asked.
+  for (const k of ['server', 'steps', 'file', 'page', 'side', 'changes']) assert.ok(!W.isChatGroup(W.openTarget(k, { lay, rects, from: 'chat', shows, chat: 'a' })), k);
+  assert.equal(W.openTarget('file', { lay: W.createLayout(W.group('chat', ['chat:a'])) }), null);
+});
