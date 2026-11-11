@@ -704,7 +704,11 @@ test('launch entries: the user’s entry is never overwritten by name; replacing
     reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['a.js'] }]]),
     reply('', [['launch_config', { action: 'save', name: 'mine-too', command: 'node', args: ['b.js'] }]]),
     reply('Done.'),
-  ][i], { prep: (d) => { fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'launch.json'), JSON.stringify(mine)); },
+  ][i], { prep: (d) => {
+    fs.mkdirSync(path.join(d, '.quorx'), { recursive: true }); fs.writeFileSync(path.join(d, '.quorx', 'launch.json'), JSON.stringify(mine));
+    // Saved after the one-time move of old previews to Pages (server/pages.js): the user's own project server.
+    fs.writeFileSync(path.join(d, '.quorx', 'pages.json'), JSON.stringify({ version: 1, migrated: true, pages: [] }));
+  },
     onEvent: (e, id) => { if (e.t === 'approval' && e.tool === 'launch_config') { cards++; setTimeout(() => answerApproval(id, e.id, { approve: false }), 10); } } });
   assert.match(toolOut(bodies, 1), /^Error: a launch config named "site" already exists/);
   assert.equal(cards, 1, 'replacing on purpose asks you');

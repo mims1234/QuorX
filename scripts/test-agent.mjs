@@ -1492,7 +1492,7 @@ test('a planned build gets the longer step limit', async () => {
   assert.ok(of(events, 'note').some((e) => /from 4 to 10/.test(e.msg)));
 });
 
-test('preview_site runs the site from the launch file (.quorx/serve.mjs) and opens it as a server, not an artifact', async () => {
+test('preview_site shows the site as a page (the pages server, not the launch file) and opens it, not as an artifact', async () => {
   let b = 0;
   const { events, dir } = await run(() => [
     reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
@@ -1501,9 +1501,9 @@ test('preview_site runs the site from the launch file (.quorx/serve.mjs) and ope
   ][b++]);
   const sv = of(events, 'server');
   assert.equal(sv.length, 1);
-  assert.equal(sv[0].name, 'site');
+  assert.equal(sv[0].page, true);
   assert.equal(sv[0].entry, 'index.html');
-  assert.ok(fs.existsSync(path.join(dir, '.quorx', 'serve.mjs')), 'the static server script is in the project');
+  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'launch.json')), 'nothing saved to the launch file (more in test-pages.mjs)');
   assert.equal(of(events, 'artifact').length, 0, 'no artifact for a live site');
 });
 
