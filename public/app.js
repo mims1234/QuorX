@@ -7,6 +7,7 @@
 import { setChatStats, showReadout } from './perf.js';
 import { startTour, maybeStartTour } from './tour.js';
 import { mergeChat } from './chat-merge.js';
+import { sentencePieces, pickVoice } from './speak.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
@@ -5289,8 +5290,9 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
+    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}${speakOK() ? `<button type="button" class="mt-btn mt-speak ${G.speak?.m === m ? 'on' : ''}" title="${G.speak?.m === m ? 'Stop reading' : 'Read aloud with this computer’s voices (code, tables and files are skipped)'}" aria-label="${G.speak?.m === m ? 'Stop reading' : 'Read aloud'}" aria-pressed="${G.speak?.m === m}">${msgIcon(G.speak?.m === m ? 'stop' : 'speak')}</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
+    const say = $('.foot .mt-speak', el); if (say) say.onclick = () => readAloud(m, el);
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
     const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
   }
@@ -12539,7 +12541,7 @@ setInterval(async () => {
 
 // ---------- small icons under messages (copy, remix, rewind), like the row under a chat reply ----------
 function msgIcon(n) {
-  const d = { copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>', branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>', rewind: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>', check: '<path d="m5 12 5 5 9-10"/>' }[n];
+  const d = { copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>', branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>', rewind: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>', check: '<path d="m5 12 5 5 9-10"/>', speak: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>', stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>' }[n];
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 }
 function wireIconCopy(btn, text) {
@@ -12549,6 +12551,84 @@ function wireIconCopy(btn, text) {
     setTimeout(() => { btn.innerHTML = msgIcon('copy'); btn.classList.remove('done'); }, 1400);
   };
 }
+
+// ---------- 🔊 read a reply aloud ----------
+// The system's own voices (speechSynthesis): nothing is downloaded and nothing leaves the PC. Only the reply's words are
+// read: code blocks, tables, maths, pictures and file cards are skipped. The sentence being read is lit with a CSS
+// highlight, so the message itself is never rewritten. One reply reads at a time; 🔊 again (or ■) stops it.
+const speakOK = () => typeof window.speechSynthesis !== 'undefined' && typeof window.SpeechSynthesisUtterance === 'function';
+const SPEAK_SKIP = 'pre, code.block, .md-code, table, .md-table, .katex, .katex-display, img, svg, video, audio, figure, details, button, .review-slot, [class*="media"], [class*="file"]';
+// The reply's sentences, in order, each with the Range it covers (for the highlight).
+function speakParts(body) {
+  const blocks = [...body.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, dt, dd')]
+    .filter((b) => !b.closest(SPEAK_SKIP) && !b.querySelector('p, li, blockquote, h1, h2, h3, h4, h5, h6'));
+  const lang = document.documentElement.lang || navigator.language || 'en', parts = [];
+  for (const b of blocks) {
+    const nodes = []; let text = '';
+    const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest(SPEAK_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    for (let n; (n = walk.nextNode());) { nodes.push({ n, at: text.length }); text += n.data; }
+    for (const { from, to, text: words } of sentencePieces(text, lang)) {
+      let range = null;
+      try {
+        const at = (pos) => { const k = nodes.findLastIndex((x) => x.at <= pos); const x = nodes[Math.max(0, k)]; return [x.n, Math.min(x.n.data.length, pos - x.at)]; };
+        range = document.createRange(); range.setStart(...at(from)); range.setEnd(...at(to));
+      } catch { range = null; }
+      parts.push({ text: words, range });
+    }
+  }
+  return parts;
+}
+// A voice on this computer in the page's language (speak.js); none yet (they load a moment late): the system's default.
+const speakVoice = () => pickVoice(speechSynthesis.getVoices?.() || [], navigator.language || 'en-US');
+function speakMark(range) {
+  if (!window.CSS?.highlights || typeof window.Highlight !== 'function') return;
+  if (range) CSS.highlights.set('qx-speak', new Highlight(range)); else CSS.highlights.delete('qx-speak');
+}
+function speakButtons(m, on) {
+  for (const b of m?.el?.querySelectorAll?.('.mt-speak') || []) {
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+    b.title = on ? 'Stop reading' : 'Read aloud with this computer’s voices (code, tables and files are skipped)'; b.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud');
+    b.innerHTML = msgIcon(on ? 'stop' : 'speak');
+  }
+}
+function stopReading() {
+  const was = G.speak; if (!was) return;
+  G.speak = null;
+  was.stopped = true;
+  try { speechSynthesis.cancel(); } catch { /* nothing was speaking */ }
+  speakMark(null);
+  speakButtons(was.m, false);
+}
+function readAloud(m, el) {
+  if (!speakOK()) return uiAlert('This window has no speech voices. Read aloud uses the voices installed in Windows (Settings → Time & language → Speech).');
+  const mine = G.speak?.m === m;
+  stopReading();
+  if (mine) return; // 🔊 again stops it
+  const body = $('.body', el) || el;
+  const parts = speakParts(body);
+  if (!parts.length) return flashTip($('.mt-speak', el) || el, 'Nothing to read here: only code, tables or files.');
+  const run = { m, el, parts, i: 0, stopped: false };
+  G.speak = run;
+  speakButtons(m, true);
+  const voice = speakVoice();
+  const next = () => {
+    if (run.stopped || G.speak !== run) return;
+    if (run.i >= parts.length) { stopReading(); return; }
+    const p = parts[run.i++];
+    // The reply was drawn again meanwhile: find the sentence in the new copy, else read on without the highlight.
+    if (p.range && !body.isConnected) p.range = null;
+    speakMark(p.range);
+    const u = new SpeechSynthesisUtterance(p.text);
+    if (voice) { u.voice = voice; u.lang = voice.lang; }
+    u.onend = next;
+    u.onerror = (e) => { if (run.stopped || e.error === 'interrupted' || e.error === 'canceled') return; stopReading(); flashTip($('.mt-speak', el) || el, `Couldn’t read it aloud (${e.error || 'no voice'}).`); };
+    speechSynthesis.speak(u);
+  };
+  // Voices can arrive a moment after the page opens; speaking starts either way.
+  next();
+}
+// Leaving the page, or a new reply starting to read, stops the old one.
+window.addEventListener('pagehide', stopReading);
 
 // ---------- "restart the harness" notice: its server code changed after it started ----------
 async function checkStale() {
