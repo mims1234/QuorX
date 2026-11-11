@@ -10,6 +10,7 @@ import { mergeChat } from './chat-merge.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
@@ -502,6 +503,9 @@ function paletteItems(q) {
   const projName = (id) => G.projects.find((p) => p.id === id)?.name || id;
   const out = [];
   const chats = [...G.chats].filter((x) => x.messages > 0).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  // Unsent drafts first: the chats with words waiting in their box, newest draft first, and Home's.
+  const drafted = [...(G.drafts.home ? [{ id: 'home', title: 'Home', projectId: null }] : []), ...G.chats.filter((x) => G.drafts[x.id])].sort((a, b) => G.drafts[b.id].at - G.drafts[a.id].at);
+  for (const x of (words.length ? drafted : drafted.slice(0, 6))) if (hit(`${x.title} ${G.drafts[x.id].text || ''} draft drafts`)) out.push({ group: 'Chats with a draft', icon: '✎', label: x.title, hint: draftLine(G.drafts[x.id], 50), run: () => (x.id === 'home' ? goHome() : showChat(x.id)) });
   for (const x of (words.length ? chats : chats.slice(0, 6))) if (hit(`${x.title} ${projName(x.projectId)}`)) out.push({ group: 'Chats', icon: '💬', label: x.title, hint: `${projName(x.projectId)} · ${ago(x.lastAt || Date.now())}`, run: () => showChat(x.id) });
   for (const [k, desc, fn] of COMMANDS) if ((c || PAL_GLOBAL.has(k)) && hit(`/${k} ${desc}`)) out.push({ group: 'Commands', icon: '⚡', label: `/${k}`, hint: desc, run: () => (c ? runCommand(c, `/${k}`) : fn(null, '')) });
   const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
@@ -726,7 +730,51 @@ function renderAttachments(c) {
   for (const b of box.querySelectorAll('[data-cmt]')) b.onclick = () => { c.comments.splice(Number(b.dataset.cmt), 1); renderAttachments(c); };
   const lb = $('.lent-back', box); if (lb) lb.onclick = () => takeBackTab(c.id);
   wireDocChips(c, box);
+  noteDraft(c);
 }
+
+// ---------- unsent drafts: the message box's text and attachments survive a restart (public/drafts.js) ----------
+// Typing in a chat's box (or Home's) is kept in this browser's storage half a second after you stop, and comes back
+// when the chat opens again, after switching chats, reloading or restarting QuorX. Sending clears it. The chat shows
+// a "draft" mark in the sidebar, and Ctrl+K lists the chats with a draft.
+G.drafts = {};
+const draftTimers = new Map(); // draft id → its pending save
+const draftId = (c) => (c && c === G.homeDraft ? 'home' : c?.id);
+function loadDrafts() {
+  try { G.drafts = liveDrafts(JSON.parse(localStorage.getItem(DRAFTS_KEY) || 'null')); } catch { G.drafts = {}; }
+  G.landingDraft = G.drafts.home?.text || '';
+}
+// d null (or empty): the chat has no draft any more.
+function writeDraft(id, d) {
+  if (!id || sameDraft(G.drafts[id], d)) return;
+  const had = !!G.drafts[id];
+  G.drafts = putDraft(G.drafts, id, d);
+  try { if (Object.keys(G.drafts).length) localStorage.setItem(DRAFTS_KEY, JSON.stringify(G.drafts)); else localStorage.removeItem(DRAFTS_KEY); } catch { /* kept while the page is open */ }
+  if (had !== !!G.drafts[id] && id !== 'home') renderSidebar();
+}
+// The box changed: saved a moment later (now, for a send). The text is read from the box while the chat is on screen.
+function noteDraft(c, now = false) {
+  const id = draftId(c);
+  if (!id || c.agent?.messages == null) return;
+  const ta = c.el?.root?.isConnected && $('.input', c.el.root);
+  if (ta) c.unsent = ta.value;
+  clearTimeout(draftTimers.get(id));
+  const save = () => { draftTimers.delete(id); writeDraft(id, { text: c.unsent || '', ctx: c.ctx, docs: c.docs }); };
+  if (now) save(); else draftTimers.set(id, setTimeout(save, 500));
+}
+// The chat's box drawn (again): its text back, and once per loaded chat its saved attachments.
+function restoreDraft(c, ta) {
+  const d = G.drafts[draftId(c)];
+  if (!c.draftRestored) {
+    c.draftRestored = true;
+    if (d && c.unsent == null) c.unsent = d.text;
+    if (d?.ctx && !c.ctx?.length) c.ctx = d.ctx.map((x) => ({ ...x }));
+    if (d?.docs && !(c.docs || []).length) c.docs = d.docs.map((x) => ({ ...x }));
+  }
+  if (c.unsent && !ta.value) { ta.value = c.unsent; requestAnimationFrame(() => fitInput(ta)); }
+}
+// Closing or reloading the page: saves still waiting are written now.
+addEventListener('pagehide', () => { for (const c of [...G.open.values(), G.homeDraft]) if (c && draftTimers.has(draftId(c))) noteDraft(c, true); });
 
 // ---------- sidebar: projects and chats ----------
 // The sidebar holds each project's newest chats (SB_PER), the open ones, and every project's counts (G.chatStats); a
@@ -863,7 +911,7 @@ function renderSidebar() {
           : ended === 'error' ? '<b class="st-say">Stopped with an error</b>' : ended ? '<b class="st-say">Finished: not seen yet</b>' : '';
         return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv} ${st}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
+            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${G.drafts[c.id] ? `<span class="sb-draft" title="Not sent yet: ${esc(draftLine(G.drafts[c.id]))}">✎ draft</span>` : ''}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
             ${prev ? `<div class="sb-chat-prev">${prev}</div>` : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
@@ -1013,6 +1061,7 @@ async function deleteChat(id) {
   if (!await uiConfirm(`Delete "${c?.title}"?\nIt moves to data/trash (recoverable). The project folder and its files stay.${f ? `\n${footprintText(f)}` : ''}`)) return;
   footCache.delete(id);
   await fetch(`/api/chats/${id}`, { method: 'DELETE' });
+  writeDraft(id, null);
   if (G.open.has(id)) releasePane(G.open.get(id));
   G.open.delete(id);
   const i = G.panes.indexOf(id);
@@ -1908,6 +1957,7 @@ function homeDraft(projectId) {
 }
 // Its first message sent: the draft is a chat like any other, open in the main pane.
 function promoteDraft(c) {
+  writeDraft('home', null);
   G.homeDraft = null; G.landingDraft = ''; G.landingProject = c.projectId;
   G.open.set(c.id, c);
   G.panes = [c.id]; G.focus = 0;
@@ -3636,7 +3686,9 @@ function wirePane(c, root, i) {
   form.addEventListener('submit', () => setTimeout(() => fitInput(ta))); // the box shrinks back once it's cleared
   form.onsubmit = (e) => { e.preventDefault(); const t = ta.value; if (/^\/\w+(\s|$)/.test(t.trim()) && runCommand(c, t.trim())) { ta.value = ''; return; } if (c.running?.runId && t.trim() && openApprovalCards(root).length) { ta.value = ''; for (const card of openApprovalCards(root)) card._reply?.(t.trim()); if (hasAttachments(c)) steer(c, ''); return; } if (c.running?.runId && (t.trim() || hasAttachments(c))) { ta.value = ''; steer(c, t.trim()); return; } if ((t.trim() || hasAttachments(c)) && !c.running) { if (folderMissing(c)) return; if ((c.docs || []).some((d) => d.busy)) { uiAlert('Some attached files are still being read. Send when their chips say they are ready.'); return; } ta.value = ''; send(c, t); } };
   ta.onkeydown = (e) => { if (suggestKey(c, e)) return; if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } };
-  ta.oninput = () => { updateSuggest(c); fitInput(ta); for (const card of openApprovalCards(root)) card._replySync?.(); };
+  form.addEventListener('submit', () => noteDraft(c, true)); // after the handler above: whatever it left in the box
+  ta.oninput = () => { updateSuggest(c); fitInput(ta); for (const card of openApprovalCards(root)) card._replySync?.(); noteDraft(c); };
+  restoreDraft(c, ta);
   ta.onblur = () => setTimeout(() => hideSuggest(c), 150);
   ta.onpaste = (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addFiles(c, files); } };
   root.ondragover = (e) => { const ty = [...e.dataTransfer.types]; if (['Files', 'application/x-quorx-file', 'application/x-quorx-tab', 'application/x-quorx-term'].some((k) => ty.includes(k))) { e.preventDefault(); root.classList.add('drop'); } };
@@ -6357,6 +6409,7 @@ async function steer(c, text) {
   const cmts = (c.comments || []).splice(0);
   const imgs = [...c.images.splice(0), ...cmts.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))], docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy), ctxItems = c.ctx.splice(0);
   renderAttachments(c);
+  noteDraft(c, true);
   const pointed = cmts.length ? `The user pointed at on the page: ${cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}` : '';
   const context = [pointed, ctxItems.length ? await contextText(ctxItems).catch(() => '') : ''].filter(Boolean).join('\n\n');
   const r = await postJ(`/api/runs/${c.running.runId}/steer`, { text, images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), context }).catch((e) => ({ error: e.message }));
@@ -6412,6 +6465,7 @@ async function send(c, text) {
   const imgs = [...c.images.splice(0), ...comments.filter((x) => x.crop).map((x) => ({ thumb: x.crop, full: x.crop }))];
   const docs = (c.docs || []).splice(0).filter((d) => d.id && !d.busy);
   renderAttachments(c);
+  noteDraft(c, true); // sent: the box's draft goes
   if ((!c.title || c.title === 'New chat') && text) { c.title = text.replace(/\s+/g, ' ').slice(0, 60); if (c.el) { $('.ch-name', c.el.root).value = c.title; } }
   runChat(c, text, ctx, imgs, { docs, comments });
   if (c === G.homeDraft) promoteDraft(c);
@@ -10139,6 +10193,7 @@ async function boot() {
   G.settings.maxSteps = Math.max(2, Math.min(1000, Number(G.settings.maxSteps) || d.maxSteps));
   G.sideHidden = !!saved?.sideHidden; G.projectOrder = saved?.projectOrder || []; G.foldedProjects = saved?.foldedProjects || []; G.favModels = saved?.favModels || {}; G.followAgent = saved?.followAgent !== false; G.quickRow = saved?.quickRow !== false; G.perms = saved?.perms || {}; G.budgetSeen = saved?.budgetSeen || {}; G.recentModels = saved?.recentModels || {}; G.pickerSort = saved?.pickerSort || {}; G.sizes = saved?.sizes || {}; G.theme = saved?.theme || null;
   G.sessionCost = saved?.sessionCost || 0; G.templates = saved?.templates || [];
+  loadDrafts();
   applySizes(); applyTheme();
   const start = G.settings.ui?.sidebarStart || 'remember';
   if (start !== 'remember') G.sideHidden = start === 'rail';
