@@ -323,7 +323,7 @@ function normalise(doc) {
     quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
     // What this chat allows on its own (rules, tools and when they were allowed and used, apps, folders): kept on load,
     // or the next save dropped them.
-    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), ...(agent.limitSwitch ? { limitSwitch: agent.limitSwitch } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -857,7 +857,7 @@ function renderSidebar() {
         // waiting for you first. The chat on screen adds its own ring and glow on top of whichever it is.
         const ended = !running && G.unseen?.get(c.id);
         const st = waiting ? 'st-wait' : drv ? 'st-drive' : running ? 'st-run' : ended ? `st-${ended}` : '';
-        const prev = waiting ? `<b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'budget' ? 'Waiting: chat budget reached' : 'Waiting for your approval'}</b>`
+        const prev = waiting ? `<b class="needs">${waiting === 'answer' ? 'Waiting for your answer' : waiting === 'limit' ? 'Usage limit reached' : waiting === 'reset' ? 'Waiting for the limit to reset' : waiting === 'budget' ? 'Waiting: chat budget reached' : 'Waiting for your approval'}</b>`
           : drv ? `<i class="st-say">${live.driving === 'chrome' ? 'Using your Chrome…' : 'Using your desktop…'}</i>`
           : running ? '<i class="st-say">Working…</i>'
           : ended === 'error' ? '<b class="st-say">Stopped with an error</b>' : ended ? '<b class="st-say">Finished: not seen yet</b>' : '';
@@ -3459,6 +3459,7 @@ function paneHTML(c) {
         <div class="space-pop" role="dialog" aria-label="The agent's folder" hidden></div>
       </header>
       <div class="msgs"></div>
+      <div class="limit-bar" role="status" hidden></div>
       <form class="composer composer-v2">
         <div class="composer-box">
         <div class="cmp-quick" role="toolbar" aria-label="Quick settings for this chat"></div>
@@ -3748,12 +3749,13 @@ function renderChatHead(c) {
   // State: Ready, Running, or waiting for your approval.
   const st = $('.dir-a-state-badge', r), state = c.waiting ? 'waiting' : c.running ? 'running' : 'idle'; // not 'approval': that class belongs to the approval cards
   st.className = `dir-a-state-badge ${state}`;
-  st.innerHTML = state === 'idle' ? 'Ready' : `<span class="live-beacon ${state}"></span>${state === 'running' ? 'Running' : c.waiting === 'answer' ? 'Needs your answer' : c.waiting === 'budget' ? 'Budget reached' : 'Needs your approval'}`;
+  st.innerHTML = state === 'idle' ? 'Ready' : `<span class="live-beacon ${state}"></span>${state === 'running' ? 'Running' : c.waiting === 'answer' ? 'Needs your answer' : c.waiting === 'limit' ? 'Limit reached' : c.waiting === 'reset' ? 'Waiting for reset' : c.waiting === 'budget' ? 'Budget reached' : 'Needs your approval'}`;
   st.title = st.textContent; // in a narrow chat only the dot shows; the words stay here
 }
 // The control centre above the message box: model, reasoning, Strict/YOLO for THIS chat.
 function renderComposerBar(c) {
   if (!c.el) return;
+  drawLimitBar(c); // the model in use after a usage limit, right above the model button
   const s = c.agent.setup;
   const bar = $('.cbar', c.el.root);
   const rack = bar.closest('.cmp-control-rack'), slot = $('.cmp-model-slot', rack), glob = $('.cs-glob', rack), setBtn = $('.cmp-set-btn', rack), panel = $('.chat-set', rack), followSlot = $('.cmp-follow-slot', rack), scrim = $('.cs-scrim', rack);
@@ -5757,6 +5759,10 @@ function traceRows(m) {
     else if (e.t === 'file') row(e.at, `${e.deleted ? '🗑' : '📝'} ${esc(e.path)}${e.deleted ? ' · moved to trash' : e.bytes != null ? ` · ${e.bytes} bytes` : ' · edited'}`, 'file');
     else if (e.t === 'compacted') row(e.at, `🗜 Earlier turns summarised to keep the context small<details class="out"><summary>summary</summary><pre>${esc(e.summary)}</pre></details>`, 'note');
     else if (e.t === 'note') row(e.at, `<span class="${e.level === 'info' ? '' : 'warn'}">${e.level === 'info' ? 'ℹ' : '⚠'} ${esc(e.msg)}</span>`, e.level === 'info' ? 'note' : 'warn');
+    else if (e.t === 'limit_switch') row(e.at, `<span class="warn">⇄ Usage limit: moved from ${esc(short(e.from))} to <b>${esc(short(e.to))}</b>${e.by === 'timeout' ? ' after the countdown' : ''}${e.until ? `, until ${esc(limWhen(e.until))}` : ''}</span>`, 'warn');
+    else if (e.t === 'limit_wait') row(e.at, `⏳ Waiting for ${esc(short(e.from))}'s limit to reset at ${esc(limWhen(e.until))}`, 'warn');
+    else if (e.t === 'limit_resumed') row(e.at, `▶ The limit reset: carrying on on ${esc(short(e.model))}`);
+    else if (e.t === 'limit_back') row(e.at, `⇄ The limit reset: back on <b>${esc(short(e.from))}</b>`);
     else if (e.t === 'llm_retry') row(e.at, `<span class="warn">↻ ${esc(retryWhy(e))} (${esc(e.msg)}); retry ${e.attempt} of ${e.of} after ${secs(e.wait)}${e.asked ? ', as the provider asked' : ''}</span>`, 'warn');
     // An OpenCode call that failed (or a source skipped for the rest of the reply): OpenRouter answered.
     else if (e.t === 'source_fallback') row(e.at, `<span class="warn">⤵ ${e.kind === 'skipped' ? `${esc(SOURCE_NAME[e.source] || e.source)} skipped` : esc(e.why)} → <code>${esc(e.to)}</code> on OpenRouter${e.role && e.role !== 'writer' ? ` (${esc(e.role)})` : ''}</span>${e.kind === 'skipped' ? `<div class="sub">${esc(e.why)}</div>` : e.rest ? '<div class="sub">The rest of this reply stays on OpenRouter. Every chat skips that model for a while (Test the connection tries it again at once).</div>' : ''}${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`, 'warn');
@@ -6215,6 +6221,7 @@ function wireBudget(card, c, m) {
 // ---------- questions the agent asks (ask_user) ----------
 // An answered question folds to one line (what was asked, what you chose); open it for the whole card.
 function questionHTML(q, live = true) {
+  if (q.card.gate === 'limit') return limitCardHTML(q, live);
   const c = q.card, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
   const full = questionCardHTML(q, live);
   if (!a || c.secret) return full;
@@ -6335,6 +6342,7 @@ document.addEventListener('click', (e) => {
   if (c) openArtifact(c, b.dataset.art);
 });
 function wireQuestion(card, m) {
+  if (card.classList.contains('limitq')) return wireLimit(card, m);
   if (card.classList.contains('qmulti')) return wireQuestions(card, m);
   if (card.classList.contains('secretq')) return wireSecret(card, m);
   const id = card.dataset.id, own = $('.own', card);
@@ -6348,6 +6356,78 @@ function wireQuestion(card, m) {
   // 1–9 picks that answer while the card (not the text box) has focus.
   card.addEventListener('keydown', (e) => { if (e.target === own || !/^[1-9]$/.test(e.key)) return; const b = card.querySelectorAll('.opt')[Number(e.key) - 1]; if (b && !b.disabled) { e.preventDefault(); b.click(); } });
 }
+
+// ---------- a usage limit hit: switch models, wait for the reset, or stop ----------
+// A subscription or provider ran out of usage and the user chose a fallback model for it (⚙ Settings → Providers, on
+// the provider's card). The card says what hit its limit and when it resets. It counts down and switches in ⚡ YOLO, or
+// when the fallback costs nothing per call; in 🔒 Strict a paid fallback asks first. Once switched, the bar above the
+// message box shows the model in use, with "Switch back at <reset>" (ticked by default). The chat's own model stays
+// what it was: picking another model ends the switch.
+const limWhen = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const limPrice = (id) => { const p = shortPrice(id); return /^\$/.test(p) ? `${p} per M` : p; };
+const limModel = (id) => `<b class="lim-model">${esc(short(id))}</b>${limPrice(id) ? ` <span class="lim-price">${esc(limPrice(id))}</span>` : ''}`;
+const LIM_KIND = { free: 'free-model limit', rate: 'rate limit', quota: 'usage limit' };
+function limitCardHTML(q, live = true) {
+  const c = q.card, L = c.limit || {}, a = q.answer || (live ? null : { label: '(not answered: the reply ended)' });
+  const head = `<b class="lim-title">${esc(L.name || 'The provider')} hit its ${LIM_KIND[L.kind] || 'usage limit'}</b> <span class="lim-from">(${esc(short(L.from || ''))})</span>`;
+  const reset = L.reset ? `Resets at ${esc(limWhen(L.reset))}.` : 'It didn’t say when it resets.';
+  if (a) {
+    const ch = a.choice != null ? Number(a.choice) : null;
+    const said = ch === 0 ? `✓ ${a.by === 'timeout' ? 'Switched after the countdown' : 'Switched'} to ${limModel(L.to)}`
+      : ch === 1 ? (q.resumed ? `✓ Waited for the reset, then carried on on ${limModel(L.from)}` : live ? `⏳ Waiting for the reset at ${esc(limWhen(L.reset))}, then carrying on on ${limModel(L.from)}` : `Waited for the reset at ${esc(limWhen(L.reset))}`)
+      : ch === 2 ? '■ Stopped here. ▶ Continue picks up from the last step.' : esc(a.label || 'Not answered: the reply ended');
+    return `<div class="approval question qbox limitq done"><div class="lim-top"><span class="lim-ico" aria-hidden="true">⏱</span><div class="lim-text">${head}<div class="lim-sub">${reset}</div></div></div><div class="lim-said">${said}</div></div>`;
+  }
+  const w = c.wait, C = 2 * Math.PI * 17;
+  const left = w ? Math.max(0, Math.ceil((w.until - Date.now()) / 1000)) : 0;
+  const ring = w ? `<span class="lim-ring" data-until="${w.until}" data-secs="${w.secs}" aria-hidden="true"><svg viewBox="0 0 40 40" width="40" height="40"><circle cx="20" cy="20" r="17" class="lim-track"/><circle cx="20" cy="20" r="17" class="lim-arc" stroke-dasharray="${((left / (w.secs || 1)) * C).toFixed(1)} ${C.toFixed(1)}"/></svg><b class="lim-n">${left}</b></span>` : '<span class="lim-ico ask" aria-hidden="true">⏸</span>';
+  const sub = w ? `${reset} Switching to ${limModel(L.to)} in <b class="lim-n2">${left}</b>s.` : `${reset} Switch to ${limModel(L.to)}? It is paid, so QuorX asks first.`;
+  return `<div class="approval question qbox limitq" data-id="${esc(c.id)}" tabindex="-1">
+    <div class="lim-top">${ring}<div class="lim-text">${head}<div class="lim-sub">${sub}</div></div></div>
+    <div class="acts lim-acts"><button type="button" class="primary sm" data-i="0">Switch now</button><button type="button" class="secondary sm" data-i="1" ${L.reset ? '' : 'disabled title="It didn’t say when it resets"'}>Wait for reset</button><button type="button" class="secondary sm" data-i="2">Cancel</button></div>
+  </div>`;
+}
+function wireLimit(card, m) {
+  const id = card.dataset.id;
+  for (const b of card.querySelectorAll('[data-i]')) b.onclick = () => {
+    card.querySelectorAll('button').forEach((x) => (x.disabled = true));
+    const r = $('.lim-ring', card); if (r) delete r.dataset.until; // the clock stops at once
+    postJ('/api/answer', { runId: m.runId, id, choice: Number(b.dataset.i) }).catch(() => {});
+  };
+}
+// The countdown ring and its seconds; at zero the server switches and the card redraws with the answer.
+setInterval(() => {
+  if (document.hidden) return;
+  for (const el of document.querySelectorAll('.lim-ring[data-until]')) {
+    const ms = Number(el.dataset.until) - Date.now(), n = Math.max(0, Math.ceil(ms / 1000)), C = 2 * Math.PI * 17;
+    const arc = $('.lim-arc', el); if (arc) arc.setAttribute('stroke-dasharray', `${(Math.max(0, ms / 1000 / (Number(el.dataset.secs) || 1)) * C).toFixed(1)} ${C.toFixed(1)}`);
+    $('.lim-n', el).textContent = String(n);
+    const n2 = el.closest('.limitq')?.querySelector('.lim-n2'); if (n2) n2.textContent = String(n);
+  }
+}, 250);
+// The switch in force for this chat now, or null. It ends when the chat's model was changed by hand, or when the reset
+// passed with "Switch back" ticked.
+function limitSwitchNow(c) {
+  const a = c?.agent, sw = a?.limitSwitch;
+  if (!sw) return null;
+  if (sw.from !== a.setup?.model || (sw.back && sw.until && Date.now() >= sw.until)) { delete a.limitSwitch; saveChat(c); return null; }
+  return sw;
+}
+function drawLimitBar(c) {
+  const bar = c?.el && $('.limit-bar', c.el.root); if (!bar) return;
+  const sw = limitSwitchNow(c);
+  bar.hidden = !sw;
+  if (!sw) { bar.innerHTML = ''; return; }
+  const due = sw.until && Date.now() >= sw.until;
+  bar.innerHTML = `<span class="lim-bar-ico" aria-hidden="true">⇄</span><span class="lim-bar-text">Now on ${limModel(sw.to)} <span class="lim-bar-was">instead of ${esc(short(sw.from))}${sw.until && !due ? `, which hit its limit` : ''}</span></span>
+    ${sw.until && !due ? `<label class="sq-check lim-back" title="When the limit resets, the chat goes back to ${esc(short(sw.from))}"><input type="checkbox" ${sw.back ? 'checked' : ''}><span>Switch back at ${esc(limWhen(sw.until))}</span></label>` : ''}
+    <button type="button" class="secondary sm lim-back-now" title="Go back to ${esc(short(sw.from))} now">Back to ${esc(short(sw.from))}</button>`;
+  const cb = $('.lim-back input', bar);
+  if (cb) cb.onchange = () => { sw.back = cb.checked; saveChat(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/limit`, { back: cb.checked }).catch(() => {}); };
+  $('.lim-back-now', bar).onclick = () => { delete c.agent.limitSwitch; saveChat(c); drawLimitBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/limit`, { back: true, now: true }).catch(() => {}); };
+}
+// The bar goes by itself once the reset passes (and "Switch back" is ticked).
+setInterval(() => { for (const c of G.open?.values?.() || []) if (c.agent?.limitSwitch) drawLimitBar(c); }, 30e3);
 
 // ---------- running (each chat runs independently, so chats work in parallel) ----------
 // While the agent works, what you send goes to it as a note it reads at its next step (it doesn't stop).
@@ -6442,8 +6522,9 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const settings = { ...G.settings, approval: c.approval, tools: chatTools(c), ...qualitySettings(c), chromeAccess: !!c.tools?.chrome, appsAccess: !!c.tools?.apps, mcpServers: mcpOn(c) };
   // ⚙ Settings as they are, for quorx_settings to read (settings above is this chat's view of them).
   const prefs = { ...G.settings, theme: G.theme ?? 'system' };
-  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+  const lsw = limitSwitchNow(c);
+  const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, async (signal) => {
@@ -6611,7 +6692,12 @@ async function followRun(c, m, open) {
         if (e.t === 'llm_done' && e.toolCalls.length) moveAside(e);
         // A retried call starts its text again (an OpenCode call that fell back to OpenRouter too); a reply
         // sent back to fix problems was not the answer.
-        if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer')) { moveAside(e); lastStep = -1; }
+        if (e.t === 'llm_retry' || e.t === 'sent_back' || (e.t === 'source_fallback' && e.role === 'writer') || e.t === 'limit_switch' || e.t === 'limit_resumed') { moveAside(e); lastStep = -1; }
+        // A usage limit: the chat moves to its fallback (the bar above the message box), waits for the reset, or moves back.
+        if (e.t === 'limit_switch') { a.limitSwitch = { source: e.source, from: e.from, to: e.to, until: e.until || 0, back: !!e.back }; saveChat(c); drawLimitBar(c); }
+        if (e.t === 'limit_back') { delete a.limitSwitch; saveChat(c); drawLimitBar(c); }
+        if (e.t === 'limit_wait') { c.waiting = 'reset'; renderSidebar(); renderChatHead(c); }
+        if (e.t === 'limit_resumed') { for (const x of Object.values(m.questions || {})) if (x.card.gate === 'limit' && x.answer?.choice === 1) x.resumed = true; c.waiting = false; renderSidebar(); renderChatHead(c); }
         if (e.t === 'artifact') { addArtifact(c, m, e.artifact); continue; }
         if (e.t === 'server') { serverUp(c, e); continue; }
         if (e.t === 'file' && G.watch?.chat === c.id) setTimeout(reloadPreview, 300);
@@ -6633,7 +6719,7 @@ async function followRun(c, m, open) {
           continue;
         }
         if (e.t === 'approval_done' && m.approvals[e.id]) { m.approvals[e.id].outcome = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
-        if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = 'answer'; renderSidebar(); renderChatHead(c); note('answer'); } }
+        if (e.t === 'question') { m.questions[e.id] = { card: e }; if (!e.auto) { c.waiting = e.gate === 'limit' ? 'limit' : 'answer'; renderSidebar(); renderChatHead(c); note('answer'); } }
         if (e.t === 'budget_ask') { m.budgetAsk = { card: e }; c.waiting = 'budget'; renderSidebar(); renderChatHead(c); note('budget'); }
         if (e.t === 'budget_done' && m.budgetAsk) { m.budgetAsk.outcome = e; c.waiting = false; refreshSidebar(); renderChatHead(c); }
         if (e.t === 'answer' && m.questions[e.id]) { const qc = m.questions[e.id].card; e.label = e.answers ? (e.defaults ? 'the recommended answers' : e.answers.map((x, i) => (x.choice != null ? qc.questions?.[i]?.options[x.choice] : x.text || '–')).join(' · ')) : e.choice != null ? qc.options[e.choice] : e.text; m.questions[e.id].answer = e; c.waiting = false; renderSidebar(); renderChatHead(c); }
@@ -8499,6 +8585,13 @@ function paintSrcAcc(el) {
   const eye = $('[data-src-act="acc-reveal"]', el); if (eye) eye.hidden = !c && !(a.windows || []).some((x) => x.cap);
   grid.innerHTML = `${credits}${(a.windows || []).map(w).join('')}<div class="kx-checked">Checked ${new Date(a.checked).toLocaleTimeString()}</div>`;
 }
+// The model a chat moves to when this provider says its usage is spent (a card counts down, or asks first in 🔒 Strict
+// for a paid one). Saved with ⚙ Settings like the rest; none set keeps "When a call fails" as it is.
+function srcLimitHTML(x) {
+  const id = ST.draft?.limitFallback?.[x.id] || '';
+  return `<div class="src-limit"><div class="src-limit-l"><b class="src-limit-t">When its usage limit is hit</b><p class="st-row-help">Switch the chat to this model until the limit resets. You can switch now, wait for the reset or stop on the card that shows. Empty: “When a call fails” decides, as before.</p></div>
+    <div class="st-fb"><button type="button" class="sx-model" data-src-act="limit-pick" title="Pick the model to switch to">${id ? `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small>` : '<span class="sx-av" aria-hidden="true">＋</span>No fallback'}<span class="sx-change">Change</span></button>${id ? '<button type="button" class="st-btn secondary sm" data-src-act="limit-clear" title="No fallback for this provider">✕</button>' : ''}</div></div>`;
+}
 function drawSourceCards(box, r, list, say) {
   const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const card = (x) => {
@@ -8517,6 +8610,7 @@ function drawSourceCards(box, r, list, say) {
       <p class="st-row-help src-what">${esc(g.what || '')}</p>
       ${srcInfoHTML(x, g)}
       ${x.direct ? srcOptsHTML(x) : ''}
+      ${srcLimitHTML(x)}
       ${x.account && x.key ? `<div class="src-acc" data-src-acc data-what="${x.billing === 'paid' ? 'balance' : 'plan'}"><header class="src-acc-head"><b>${x.billing === 'paid' ? 'Your balance' : 'Your plan'}</b><span class="src-acc-plan"></span><span class="kx-spacer"></span><button type="button" class="kx-icon" data-src-act="acc-reveal" title="${srcAccShown() ? 'Hide amounts' : 'Show amounts'}">${srcAccShown() ? '🙈' : '👁'}</button><button type="button" class="kx-icon" data-src-act="acc-refresh" title="Check again">↻</button></header><div class="kx-acc-grid src-acc-grid"><div class="kx-wait">Loading…</div></div></div>` : ''}
       <div class="src-test"><button type="button" class="kx-btn sm" data-src-act="test" ${srcReady(x) ? '' : 'disabled'}>Test the connection</button><button type="button" class="kx-btn sm" data-src-act="pick" ${x.on && srcReady(x) ? '' : 'disabled'}>Choose a model for new chats</button>${last}</div>
       <p class="kx-note src-test-msg" hidden></p><p class="kx-note src-msg" hidden></p>
@@ -8553,6 +8647,16 @@ function drawSourceCards(box, r, list, say) {
       const res = await postJ(`/api/sources/${id}/options`, body).catch((er) => ({ error: er.message }));
       if (res.error) { btn.disabled = false; say(msg, `⚠ ${res.error}`, true); return; }
       redraw(res.sources, { id, where: 'src-msg', text: act === 'route' ? (route === 'direct' ? `✓ OpenRouter’s ${x.short} models now run on your ${x.name} key.` : `✓ OpenRouter’s ${x.short} models run on OpenRouter again.`) : `✓ Calls go to ${res.sources.find((y) => y.id === id)?.base || 'its own address'}. Test the connection to check it.` });
+      return;
+    }
+    if (act === 'limit-pick' || act === 'limit-clear') {
+      const pick = act === 'limit-clear' ? '' : await pickModel('chat', ST.draft.limitFallback?.[id] || '', { context: `When ${x.name} hits its usage limit` });
+      if (act === 'limit-pick' && !pick) return;
+      if (pick && pick.split('/')[0] === id) { say(msg, `Pick a model outside ${x.name}: it is the one out of usage.`, true); return; }
+      ST.draft.limitFallback = { ...(ST.draft.limitFallback || {}) };
+      if (pick) ST.draft.limitFallback[id] = pick; else delete ST.draft.limitFallback[id];
+      ST.dirty = true; ST.changed?.add('limitFallback'); updateDirty();
+      const row = $('.src-limit', c); if (row) row.outerHTML = srcLimitHTML(x);
       return;
     }
     if (act === 'acc-reveal') { ST.revealSrcAcc = !srcAccShown(); revealButton(btn, srcAccShown()); paintSrcAcc($('[data-src-acc]', c)); return; }
