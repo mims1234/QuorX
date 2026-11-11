@@ -36,7 +36,7 @@ import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
 import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
@@ -202,6 +202,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, sidebarChats({ per: Math.max(1, Math.min(200, Number(url.searchParams.get('per')) || 30)), ids }));
     }
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
+    // 📌 Pin or unpin a chat (the top of its project in the sidebar): { on }. Pins live apart from the chat files.
+    const pinm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/pin$/i);
+    if (pinm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); try { return json(res, 200, { pins: setChatPin(pinm[1], !!b.on) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
     // Search inside chats (server/chatsearch.js): Ctrl+K's Messages group and the Search chats window.

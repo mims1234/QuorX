@@ -1147,14 +1147,18 @@ function renderSidebar() {
   const hiddenProjects = ordered.length - listed.length;
   $('#projectList').innerHTML = listed.map((p) => {
     // Newest first: the chat you used last is at the top of its project.
-    const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => (b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0));
+    // 📌 Pinned chats first, in the order they were pinned; then newest first.
+    const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || ((b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0)));
     const matching = chats.filter((c) => !q || c.title.toLowerCase().includes(q) || String(c.preview || '').toLowerCase().includes(q));
     if (q && !matching.length) return '';
     // Not searching: the newest (SB_PER, or more after Show more), plus open chats wherever they sit.
     const limit = (G.sbLimit || {})[p.id] || SB_PER;
-    const shown = q ? matching : matching.filter((c, i) => i < limit || G.panes.includes(c.id));
+    const listedNow = q ? matching : matching.filter((c, i) => i < limit || G.panes.includes(c.id) || c.pinned);
+    // Idle chats fold into "Older" at the end (⚙ Appearance → Fold idle chats); never while searching.
+    const { recent: shown, older } = q ? { recent: listedNow, older: [] } : splitIdle(listedNow);
+    const olderOpen = (G.olderOpen || []).includes(p.id);
     const st = stats[p.id], total = Math.max(st?.active ?? 0, chats.filter((c) => c.messages > 0).length);
-    const moreN = q ? 0 : total - shown.filter((c) => c.messages > 0).length;
+    const moreN = q ? 0 : total - listedNow.filter((c) => c.messages > 0).length;
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted), and
     // replies running now as they stood when it was fetched: replies running in this page add what they have spent since.
     const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
@@ -1167,7 +1171,7 @@ function renderSidebar() {
         <div class="sb-pname-wrap"><b class="sb-pname" title="${esc(p.name)} · ${esc(p.dir)}">${esc(p.name)}</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} this project's chats" aria-label="${folded ? 'Show' : 'Hide'} chats of ${esc(p.name)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${p.missing ? '<button type="button" class="sb-missing" title="The project folder was moved, renamed or deleted: click to reselect it">⚠ missing</button>' : p.needsFolder ? '<button type="button" class="sb-missing needs" title="Pick a folder for this project: its files sit inside QuorX itself and are copied to the folder you pick" aria-label="Pick a folder for this project">📁</button>' : ''}${working ? '<span class="sb-pworking" title="A chat in this project is working" aria-label="Working"></span>' : ''}<span class="sb-psp"></span><button type="button" class="sb-pin sb-picon ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Unpin' : 'Pin to the top (up to 3)'}" aria-label="${p.pinned ? 'Unpin' : 'Pin'} ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button><button type="button" class="sb-edit sb-picon" title="Project settings: pin, archive, folder, colour" aria-label="Settings for ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button><button type="button" class="sb-new sb-picon" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><span class="sb-grip" draggable="true" tabindex="0" role="button" title="Drag to move this project (or focus it and press ↑ / ↓)" aria-label="Move ${esc(p.name)}: drag, or press up or down"><svg viewBox="0 0 10 16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span></div>
         ${p.id === curProject ? projectSpendHTML(p, total, cost, chats) : ''}
       </div>
-      ${shown.map((c) => {
+      ${[...shown, ...(olderOpen ? older : [])].map((c, ci) => {
         const live = G.open.get(c.id);
         const running = !!live?.running, waiting = running && live.waiting;
         const spent = (c.cost || 0) + liveOf(G.open.get(c.id));
@@ -1185,19 +1189,22 @@ function renderSidebar() {
           : drv ? `<i class="st-say">${live.driving === 'chrome' ? 'Using your Chrome…' : 'Using your desktop…'}</i>`
           : running ? '<i class="st-say">Working…</i>'
           : ended === 'error' ? '<b class="st-say">Stopped with an error</b>' : ended ? '<b class="st-say">Finished: not seen yet</b>' : '';
-        return `<div class="sb-chat sb-chat-item ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv} ${st}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
+        const olderHead = ci === shown.length && older.length ? olderBtn(p.id, older.length, true) : '';
+        return `${olderHead}<div class="sb-chat sb-chat-item ${ci >= shown.length ? 'sb-older' : ''} ${c.pinned ? 'pinned' : ''} ${G.panes.includes(c.id) ? 'on active' : ''} ${running ? 'running' : ''} ${drv} ${st}" data-c="${esc(c.id)}" data-tip-delay="900" title="${esc(tip)}">
           <div class="sb-chat-content">
-            <div class="sb-chat-topline"><span class="sb-chat-title">${esc(c.title)}</span>${schTag}${G.drafts[c.id] ? `<span class="sb-draft" title="Not sent yet: ${esc(draftLine(G.drafts[c.id]))}">✎ draft</span>` : ''}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
+            <div class="sb-chat-topline">${c.pinned ? `<span class="sb-chat-pin" title="Pinned to the top of ${esc(p.name)}" aria-label="Pinned">${PIN_SVG}</span>` : ''}<span class="sb-chat-title">${esc(c.title)}</span>${schTag}${G.drafts[c.id] ? `<span class="sb-draft" title="Not sent yet: ${esc(draftLine(G.drafts[c.id]))}">✎ draft</span>` : ''}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
             ${prev ? `<div class="sb-chat-prev">${prev}</div>` : ''}
             <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· $${((c.cost || 0) + liveOf(G.open.get(c.id))).toFixed(3)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-chat-menu" title="Rename, duplicate or delete (or right-click the chat)" aria-label="Chat options" aria-haspopup="menu">${ICO.more}</button></div>
         </div>`;
-      }).join('') || '<div class="sb-empty">No chats yet</div>'}
+      }).join('') || (older.length ? '' : '<div class="sb-empty">No chats yet</div>')}
+      ${older.length && !olderOpen ? olderBtn(p.id, older.length, false) : ''}
       ${moreN > 0 ? `<button type="button" class="sb-more" data-more="${esc(p.id)}">Show more chats <small>${moreN.toLocaleString()} more</small></button>` : ''}
     </div>`;
   }).join('') + (hiddenProjects > 0 ? `<button type="button" class="sb-more sb-more-proj">Show more projects <small>${hiddenProjects.toLocaleString()} more</small></button>` : '')
     + (q && G.sbFound?.q === q && G.sbFound.total > G.sbFound.chats.length ? `<div class="sb-empty">Showing the newest ${G.sbFound.chats.length} of ${G.sbFound.total.toLocaleString()} matches: type more to narrow it.</div>` : '');
+  for (const b of document.querySelectorAll('#projectList [data-older]')) b.onclick = () => toggleOlder(b.dataset.older);
   for (const b of document.querySelectorAll('#projectList [data-more]')) b.onclick = () => { b.disabled = true; b.textContent = 'Loading…'; showMoreChats(b.dataset.more); };
   const mp = $('#projectList .sb-more-proj'); if (mp) mp.onclick = () => { G.sbProjLimit = projLimit + SB_PROJECTS; renderSidebar(); };
   renderArchive(all);
@@ -1214,7 +1221,8 @@ function renderSidebar() {
     const id = el.dataset.c;
     el.onclick = (e) => { if (!e.target.closest('button')) { showChat(id, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); } };
     // Rename, duplicate and delete: from ⋯, or by right-clicking the chat.
-    const menu = (e) => popMenu(e, [['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
+    const pinned = !!all.find((x) => x.id === id)?.pinned;
+    const menu = (e) => popMenu(e, [[pinned ? '📌 Unpin' : '📌 Pin to the top', () => pinChat(id, !pinned)], ['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
     el.oncontextmenu = menu;
     $('.sb-chat-menu', el).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); menu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: r.left, clientY: r.bottom + 4 }); };
   }
@@ -1282,6 +1290,38 @@ function renderSidebar() {
     };
   }
   wsChrome(); // the chat tabs and the status bar show the same states
+}
+// ---------- pinned chats and idle chats ----------
+// 📌 A pinned chat stays at the top of its project (the pins live on the server, apart from the chat files).
+// Chats idle longer than ⚙ Appearance → "Fold idle chats" fold into an "Older" row at the end of their project: one
+// click shows them, nothing is deleted or moved. Pinned, open, working and not-yet-seen chats never fold.
+const PIN_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg>';
+const IDLE_DAY = 864e5;
+function idleDays() { const n = Number(uiOf(G.settings).idleHide); return Number.isFinite(n) && n > 0 ? n : 0; }
+function splitIdle(list, now = Date.now()) {
+  const days = idleDays();
+  if (!days) return { recent: list, older: [] };
+  const cut = now - days * IDLE_DAY, recent = [], older = [];
+  for (const c of list) {
+    const keep = c.pinned || G.panes.includes(c.id) || G.open.get(c.id)?.running || G.unseen?.has(c.id) || !c.messages;
+    (keep || (c.lastAt || c.updated || now) >= cut ? recent : older).push(c);
+  }
+  return { recent, older };
+}
+function olderBtn(pid, n, open) {
+  return `<button type="button" class="sb-older-btn" data-older="${esc(pid)}" aria-expanded="${open}" title="${open ? 'Fold the idle chats away again' : `Chats with nothing new for ${idleDays()} day${idleDays() === 1 ? '' : 's'} or more: nothing is deleted`}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Older <small>${n.toLocaleString()}</small></button>`;
+}
+function toggleOlder(pid) {
+  const set = new Set(G.olderOpen || []);
+  if (set.has(pid)) set.delete(pid); else set.add(pid);
+  G.olderOpen = [...set]; renderSidebar();
+}
+async function pinChat(id, on) {
+  const r = await postJ(`/api/chats/${encodeURIComponent(id)}/pin`, { on });
+  if (!r || r.error) return uiAlert(`The chat could not be ${on ? 'pinned' : 'unpinned'}: ${r?.error || 'no answer'}`);
+  for (const c of [...G.chats, ...Object.values(G.moreChats || {}).flat(), ...(G.sbFound?.chats || [])]) { if (r.pins[c.id]) c.pinned = r.pins[c.id]; else delete c.pinned; }
+  if (on && !G.chats.some((c) => c.id === id)) return refreshSidebar(); // an older chat: load its row
+  renderSidebar();
 }
 async function renameChat(id) {
   const c = await getChat(id) || G.open.get(id);
@@ -8973,7 +9013,7 @@ function wireCatEditor(el) {
   if (res) res.onchange = () => el.querySelectorAll('.slot').forEach((sl) => sl.upd());
 }
 // ---------- settings page: categories on the left, that category's settings on the right ----------
-const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember',
+const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember', idleHide: 0,
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
 const SETTINGS_NAV = [
   ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
@@ -9107,6 +9147,7 @@ function settingsPanels(S) {
       stCard('Layout', 'Where things sit in your window. Click a part of it for its option.', '<div data-live="window"></div>'
         + stRow('Sidebar when QuorX opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart), { id: 'stRowSidebar' })
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
+        + stRow('Fold idle chats', 'Chats with nothing new for this long fold into an “Older” row at the end of their project in the sidebar. One click shows them; nothing is deleted. Pinned, open and working chats always stay in view. Pin a chat from its ⋯ menu.', stSeg('ui.idleHide', [['0', 'Off'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['30', '30 days']], String(uiOf(S).idleHide || 0)))
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
       `<details class="sf-adv" id="appearanceAdv"><summary><span class="sf-adv-title">Under the hood</span><span class="sf-adv-sub">For finding what makes QuorX slow. Most people never need this.</span></summary><div class="sf-adv-body">`
         + stCard('Performance', '', stRow('Performance readout', 'A small box in the bottom-left corner: QuorX\'s memory, browser tabs, chats loaded, pictures, 3D views, timers and stutters. Copy puts the numbers on the clipboard for a bug report.', stSwitch('ui.perfReadout', U.perfReadout)))
@@ -10034,7 +10075,7 @@ function saveSettings() {
   }
   G.settings = S;
   savePrefs(); applyTheme(); applyUi();
-  renderToolbars(); renderPanes(); renderSpend();
+  renderToolbars(); renderPanes(); renderSpend(); renderSidebar(); // the sidebar folds idle chats by a setting
   // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
   // check work from here), and the footer says it was saved.
   const main = $('#stMain'), top = main?.scrollTop || 0;

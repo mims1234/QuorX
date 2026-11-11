@@ -3330,3 +3330,15 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 #rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
 #rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }
+
+/* Pinned chats (a small pin before the title) and the "Older" row that idle chats fold into: a quiet text row with a
+   chevron, not dashed like Show more, so the two read as different things. */
+.sb-chat-pin { display: inline-flex; flex: none; width: 11px; height: 11px; margin-right: 5px; color: var(--accent); vertical-align: -1px; }
+.sb-chat-pin svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sb-older-btn { display: flex; align-items: center; gap: 5px; width: calc(100% - 14px); margin: 2px 0 4px 14px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); text-align: left; cursor: pointer; }
+.sb-older-btn svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
+.sb-older-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+.sb-older-btn small { margin-left: auto; font: 500 10.5px var(--mono); color: var(--dim); }
+.sb-older-btn:hover { color: var(--text); background: var(--accent-dim); }
+.sb-chat.sb-older { opacity: .82; }
+.sb-project.folded .sb-older-btn { display: none; }
