@@ -3665,7 +3665,7 @@ function renderPanes() {
     if (older) (c.watchers ||= []).push(older);
     c.shownAt = Date.now();
   });
-  renderToolbars(); syncLayout(); renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
+  renderToolbars(); syncLayout(); if (PA.tpl) { eachArea(renderPane); paneMarkAreas(); } else renderPane(); applyKeyLock(); budgetNotices(); folderNotices();
   for (const id of G.panes) checkSpace(G.open.get(id));
   for (const pid of new Set(G.panes.map((id) => G.open.get(id)?.projectId))) refreshUndoable(pid);
   pollDev();
@@ -7822,7 +7822,7 @@ function paneChat(c) {
   const pid = projOf(c), same = PA.chat !== undefined && PA.pid === pid;
   PA.chat = id; PA.pid = pid;
   if (same) {
-    for (const a of PA.list) if (a !== AREA) inArea(a, () => { if (G.view.trace) G.view = paneView(c, 'trace'); });
+    for (const a of PA.list) if (a !== AREA) inArea(a, () => { const ac = focused(); if (G.view.trace && ac && !ac.agent.messages.some((m) => m.runId === G.view.trace)) G.view = paneView(ac, 'trace'); });
     PA.saved = '';
     paneMarkAreas();
     return PA.list.length > 1;
@@ -7850,7 +7850,7 @@ function paneChat(c) {
       if (t.termTf) a.st.termTf = t.termTf;
       for (const tid of g.tabs.filter(isFileTab)) { const st = WS.tabKind('viewer').load(r.tabs[tid]); if (st.f) wsTab(tid).st = st; else WK.lay = WS.removeTab(WK.lay, tid); }
       const ft = isFileTab(g.active) && WK.tabs.get(g.active)?.st.f;
-      inArea(a, () => { G.view = ft ? { id: ft.id, src: false, files: false, ftab: g.active } : paneView(c, WS.groupPane(g), WS.tabKind('artifact').load(tab('artifact')).art || null); });
+      inArea(a, () => { G.view = ft ? { id: ft.id, src: false, files: false, ftab: g.active } : paneView(focused() || c, WS.groupPane(g), WS.tabKind('artifact').load(tab('artifact')).art || null); });
     }
     PA.focus = areaOf(r.layout.focus) || a0; AREA = PA.focus; WP.chatFocus = r.layout.focus === WS.CHAT_GROUP;
     wsSync();

@@ -161,8 +161,8 @@ main.layout.ws-free > section.work > .chats { position: absolute !important; ins
 main.layout.ws-free > section.work > .chats > .chatpane { position: absolute !important; left: var(--gx, 0) !important; top: var(--gy, 0) !important; width: var(--gw, 100%) !important; height: var(--gh, 100%) !important; min-height: 0 !important; border-right: 0 !important; }
 main.layout.ws-free > section.work > .chats > .landing { height: 100%; }
 /* Two chats: a clear ring around the one you are typing in or clicked last. */
-body.two-chats main.layout.ws-free .chats > .chatpane.focus { box-shadow: inset 0 0 0 2px var(--accent) !important; border-radius: 4px; z-index: 1; }
-body.two-chats main.layout.ws-free .chats > .chatpane:not(.focus) { box-shadow: inset 0 0 0 1px var(--line) !important; }
+body.two-chats main.layout.ws-free .chats > .chatpane.focus { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+body.two-chats main.layout.ws-free .chats > .chatpane:not(.focus) { outline: 1px solid var(--line); outline-offset: -1px; }
 main.layout.ws-free > aside#pane { position: absolute !important; inset: 0 !important; width: auto !important; height: auto !important; max-width: none !important; min-width: 0 !important; display: block; pointer-events: none; background: none !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; transform: none !important; grid-column: auto !important; }
 main.layout.ws-free > aside#pane > .pane-area { position: absolute !important; left: var(--gx, 0); top: var(--gy, 0); width: var(--gw, 100%); height: var(--gh, 100%); pointer-events: auto; min-height: 0 !important; background: var(--panel); border-left: 1px solid var(--line); overflow: hidden; }
 main.layout.ws-free > aside#pane > .pane-area[hidden] { display: none !important; }
@@ -258,3 +258,4 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .rmx-dialog .rmx-model { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rmx-dialog .rmx-price { color: var(--money, #e8b04a); font: 11.5px var(--mono, monospace); white-space: nowrap; }
 .rmx-dialog .sq-check { display: flex; margin: 6px 0; }
+@media (max-width: 900px) { body.two-chats .chat-head .ch-own, .wt-tab .own-sq { display: none !important; } }
