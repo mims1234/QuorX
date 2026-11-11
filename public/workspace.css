@@ -275,3 +275,16 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .wl-list .wl-apply { flex: 1; text-align: left; }
 .wl-list .wl-apply.on { color: var(--accent); }
 .wl-list .wl-ren, .wl-list .wl-del { flex: none; width: 28px; }
+
+/* ---------- W5: a pop-out window (desktop app): only its group or chat, with a bar to dock it back ---------- */
+.pop-bar { display: none; }
+body.qx-pop .pop-bar { display: flex; align-items: center; gap: 8px; flex: none; height: 34px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); -webkit-app-region: drag; }
+body.qx-pop .pop-bar .pop-name { font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.qx-pop .pop-bar .pop-sp { flex: 1; }
+body.qx-pop .pop-bar button { -webkit-app-region: no-drag; }
+body.qx-pop .ws-rail, body.qx-pop .sidebar, body.qx-pop #sideResizer, body.qx-pop .ws-panel, body.qx-pop .sidebar-backdrop,
+body.qx-pop #wsTop, body.qx-pop #wsStatus, body.qx-pop #mnav, body.qx-pop .ws-layouts, body.qx-pop [data-pa="max"], body.qx-pop .ch-move, body.qx-pop .ch-panel, body.qx-pop .ch-unsplit, body.qx-pop .pa-follow, body.qx-pop .pa-own { display: none !important; }
+body.qx-pop .shell { min-height: 0; }
+/* A narrow pop-out keeps the desktop layout (no phone views). */
+body.qx-pop[data-mview] .layout, body.qx-pop[data-mview] .pane, body.qx-pop[data-mview] .work { visibility: visible; }
+body.qx-pop[data-mview="chat"] main.layout.ws-free > aside#pane { display: none !important; }

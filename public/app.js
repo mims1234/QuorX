@@ -186,6 +186,10 @@ for (const k of ['view', 'traceRun', 'traceShown', 'traceAt', 'traceTimer', 'bAc
 // draws or is clicked, CTX.chat is the chat that owns that group (pinned to it, else the one you use), so everything the
 // group does means that chat. focused() is that chat when set, else the one you use.
 const CTX = { chat: null };
+// A pop-out window (desktop app) is this same page, told by its address what it shows: one pane group of a chat, or one
+// chat (see "pop-out windows"). It saves nothing of the main window's own (layout, preferences): it hands its state to
+// the main window, which docks it back when it closes.
+const POP = (() => { try { const q = new URLSearchParams(location.search).get('qxpop'); const j = q ? JSON.parse(q) : null; return j && typeof j.id === 'string' && typeof j.chat === 'string' ? j : null; } catch { return null; } })();
 const typingChat = () => G.open.get(G.panes[G.focus]) || G.open.get(G.panes[0]);
 const focused = () => CTX.chat || typingChat();
 const curId = () => G.panes[G.focus] ?? G.panes[0] ?? null;
@@ -193,6 +197,7 @@ const primaryChat = () => G.open.get(G.panes[0]) || null;
 
 // ---------- preferences (this browser) and chats (the server) ----------
 function savePrefs() {
+  if (POP) return; // a pop-out window keeps the main window's preferences as they are
   try { localStorage.setItem(STORE, JSON.stringify({ settings: G.settings, templates: G.templates, sideHidden: G.sideHidden, projectOrder: G.projectOrder, foldedProjects: G.foldedProjects, favModels: G.favModels, recentModels: G.recentModels, budgetSeen: G.budgetSeen, followAgent: G.followAgent, quickRow: G.quickRow, perms: G.perms, pickerSort: G.pickerSort, panes: G.panes, sessionCost: G.sessionCost, sizes: G.sizes, theme: G.theme })); } catch { /* storage unavailable */ }
 }
 // Preferences saved under the app's earlier names (OpenHarness, before that Agent-001) are read until the next save.
@@ -1907,6 +1912,7 @@ function toggleProjectFold(id) {
 
 // ---------- opening chats into the panes ----------
 async function showChat(id, pane = G.focus) {
+  if (POP && G.panes.length && id !== POP.chat) { window.ohDesktop?.popout?.('tell', { type: 'show-chat', id }); return; }
   const c = await getChat(id);
   if (!c) return uiAlert('Could not open that chat.');
   G.unseen?.delete(id); // seen now: its "finished" or "stopped with an error" mark goes
@@ -6689,6 +6695,7 @@ function usedTags(m) {
   return [...seen].slice(0, 3);
 }
 function notifyRun(c, kind, tags = []) {
+  if (POP) return; // the main window tells you, once
   const pref = uiOf(G.settings).notify;
   if (pref === 'off' || (pref === 'needs' && (kind === 'done' || kind === 'error'))) return;
   if (document.visibilityState === 'visible' && document.hasFocus()) return;
@@ -7046,7 +7053,7 @@ function setPaneHidden(on, quiet) {
   G.paneHidden = !!on;
   syncPaneToggles();
   $('.layout')?.classList.toggle('pane-hidden', G.paneHidden);
-  try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ }
+  if (!POP) { try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ } }
   if (!quiet) { syncLayout?.(); deskPlace?.(true); window.dispatchEvent(new Event('resize')); }
 }
 function paneVisible() {
@@ -7142,6 +7149,7 @@ function wsTabState() {
 let layoutMigrated = false; try { layoutMigrated = localStorage.getItem(LAYOUT_MIGRATED) === '1'; } catch { /* storage off */ }
 // A project's saved layout; until the old per-chat splits are converted (first start), this chat's own split.
 function wsLoad(c) {
+  if (POP) return popLayout();
   let text = null; try { text = localStorage.getItem(LAYOUT_KEY(c.projectId || 'scratch')); } catch { /* storage off */ }
   const r = WS.parse(text);
   if (r || layoutMigrated) return r;
@@ -7151,7 +7159,7 @@ function wsLoad(c) {
 // First start with per-project layouts: each chat's saved split moves to its project (the most recently used chat's
 // wins). The old keys stay, so going back to an older QuorX keeps them.
 async function wsMigrate() {
-  if (layoutMigrated) return;
+  if (layoutMigrated || POP) return;
   const old = [], have = new Set();
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -7269,6 +7277,7 @@ function paneMakeArea(gid) {
 }
 // A new group beside `targetGid` (zone: left, right, top, bottom), holding the pane's five tabs (and `tabs` too).
 function paneAddArea(targetGid, zone = 'bottom', { tabs = [], active = null } = {}) {
+  if (POP) return null; // a pop-out holds one group
   WK.preset = null; queueMicrotask(() => wsLayoutsDraw());
   if (PA.list.length >= PANE_MAX_AREAS) return null;
   const gid = `g${WK.lay.next}`;
@@ -7380,6 +7389,7 @@ function setChatFocus(i) {
   paneMarkAreas();
 }
 async function openBeside(id, { target = WS.CHAT_GROUP, zone = 'right', focus = true } = {}) {
+  if (POP) { window.ohDesktop?.popout?.('tell', { type: 'show-chat', id }); return; }
   if (isPhone() || !G.panes.length) return showChat(id);
   const c = await getChat(id); if (!c) return uiAlert('Could not open that chat.');
   const at = G.panes.indexOf(id);
@@ -7666,6 +7676,141 @@ function wsOpenAt(kind, c, from = null) {
   return areaOf(gid) ? gid : null;
 }
 
+// ---------- pop-out windows (desktop app) ----------
+// Any tab, a whole pane group or a chat can go to a window of its own: from the tab's right-click menu, the group's ⋯,
+// the chat's ⠿ or tab menu, or by dragging a tab out of the window. The window is a light QuorX window (this page, told
+// what it shows) with that group's strip and Dock back. Closing it docks its tabs back where they were (a file opened
+// there comes too). Its box is remembered per project and kind (WS.popKey). Real browser tabs move into it without
+// loading again (the desktop app re-parents the view); terminals reconnect with their scrollback; chats, approvals and
+// Stop go through the server, so both windows are one app. In a browser (not the desktop app) Pop out is hidden.
+const canPop = () => DESK && !!window.ohDesktop?.popout && !POP && !isPhone();
+const POPPED_KEY = 'oh-popped', popBoxKey = (pid) => `oh-pop-boxes:${pid}`;
+let popped = (() => { try { return WS.cleanPopped(JSON.parse(localStorage.getItem(POPPED_KEY) || '[]')); } catch { return []; } })();
+function popSave() { try { localStorage.setItem(POPPED_KEY, JSON.stringify(popped)); } catch { /* storage off */ } }
+function popBoxes(pid) { try { return JSON.parse(localStorage.getItem(popBoxKey(pid)) || '{}') || {}; } catch { return {}; } }
+const wsRecName = (rec) => { const f = isFileTab(rec.active) && WK.tabs.get(rec.active)?.st.f; return f ? baseName(f.label || f.name || 'File') : PANE_TAB_NAMES[WS.KIND_PANE[WS.kindOf(rec.active)]] || 'Pane'; };
+async function popOut(src, at = null) {
+  if (!canPop()) return;
+  const c = primaryChat(); if (!c) return;
+  const id = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, pid = projOf(c);
+  let entry;
+  if (src.type === 'chat') {
+    const chat = await getChat(src.id); if (!chat) return;
+    entry = { id, project: projOf(chat), chat: chat.id, title: chat.title };
+    // Off this window (it goes on running, in the pop-out).
+    const i = G.panes.indexOf(chat.id);
+    if (i >= 0 && G.panes.length > 1) closeSide(i); else if (i >= 0) showLanding();
+  } else {
+    const tab = src.type === 'file' ? src.tid : src.type === 'pane' ? WS.tabId(WS.PANE_KINDS[src.tab] || 'artifact', src.from.gid) : null;
+    const from = src.type === 'group' ? src.a : src.from || areaOf(WS.groupOf(WK.lay, tab)?.id);
+    const r = src.type === 'group' ? WS.popGroup(WK.lay, from.gid) : WS.popTab(WK.lay, tab, `g${WK.lay.next}`);
+    if (!r.ok) return flashTip(from?.el || document.body, r.reason === 'last' ? 'The last group stays in the window: ◧ hides it' : 'This can’t pop out', 2200);
+    const rec = r.rec, owner = from ? areaChat(from) : c;
+    const st = from ? { bActive: src.type === 'file' ? null : from.st.bActive || null, termTf: from.st.termTf || null } : {};
+    const files = Object.fromEntries(rec.tabs.filter(isFileTab).map((t) => [t, WS.tabKind('viewer').save(WK.tabs.get(t)?.st || {})]));
+    entry = { id, project: pid, chat: owner?.id || c.id, rec, st, files, title: wsRecName(rec) };
+    if (src.type === 'group') { paneDropArea(from, { keepTabs: true }); WK.lay = r.layout; }
+    else {
+      WK.lay = r.layout;
+      // The group it came from shows something else (a page can be in one place at a time).
+      if (from) inArea(from, () => { if (G.view.ftab === src.tid || (src.type === 'pane' && paneTab() === src.tab && !G.view.ftab)) G.view = paneView(focused(), 'art'); renderPane(); });
+    }
+    for (const t of Object.keys(files)) WK.tabs.delete(t);
+  }
+  entry.btabs = projTabs(entry.project).map(({ sid, url, title }) => ({ sid, url: url || '', title: title || '' }));
+  popped = WS.cleanPopped([...popped, entry]); popSave();
+  const key = WS.popKey(entry.rec || { chat: entry.chat }), box = popBoxes(entry.project)[key];
+  const bounds = at ? { x: at.x - 80, y: at.y - 16, width: box?.width || 960, height: box?.height || 640 } : box || { width: 960, height: 640 };
+  const url = `${location.origin}/?qxpop=${encodeURIComponent(JSON.stringify({ ...entry, v: 1 }))}`;
+  const ok = await window.ohDesktop.popout('open', { id, url, bounds, title: `QuorX · ${clip(entry.title, 60)}` }).catch(() => false);
+  if (src.type !== 'chat') wsPlaced();
+  if (!ok) popDock(id, null, null);
+}
+// A pop-out closed: its tabs back where they were (their state as the window left it), its box remembered.
+function popDock(id, state, bounds) {
+  const i = popped.findIndex((x) => x.id === id); if (i < 0) return;
+  const e = popped.splice(i, 1)[0]; popSave();
+  if (bounds) try { localStorage.setItem(popBoxKey(e.project), JSON.stringify(WS.rememberBox(popBoxes(e.project), WS.popKey(e.rec || { chat: e.chat }), bounds))); } catch { /* storage off */ }
+  // Browser tabs the window opened join the project's list.
+  for (const t of state?.btabs || []) if (t?.sid && !projTabs(e.project).some((x) => x.sid === t.sid)) projTabs(e.project).push({ sid: t.sid, url: t.url || '', title: t.title || '' });
+  if (!e.rec) { if (!G.panes.length) showChat(e.chat); else if (!G.panes.includes(e.chat)) openBeside(e.chat, { focus: false }); return; }
+  const rec = state?.rec?.tabs ? { ...e.rec, tabs: state.rec.tabs, active: state.rec.active || e.rec.active } : e.rec;
+  const files = { ...(e.files || {}), ...(state?.files || {}) }, st = { ...(e.st || {}), ...(state?.st || {}) };
+  const cur = primaryChat();
+  if (!cur || projOf(cur) !== e.project) {
+    // Another project on screen now: docked into that project's saved layout, for when it comes back.
+    const r = readLayout(e.project), lay = r?.layout || WS.defaultLayout(), d = WS.dockBack(lay, rec);
+    const tabs = { ...(r?.tabs || {}), ...Object.fromEntries(Object.entries(files).map(([t, v]) => [t, { kind: 'viewer', ...v }])) };
+    try { localStorage.setItem(LAYOUT_KEY(e.project), WS.serialise(d.layout, tabs, r?.closed || [], { follow: r?.follow, max: r?.max, pins: r?.pins, preset: r?.preset })); } catch { /* storage off */ }
+    return;
+  }
+  for (const [t, v] of Object.entries(files)) { const x = WS.tabKind('viewer').load(v); if (x.f) wsTab(t).st = x; }
+  const d = WS.dockBack(WK.lay, rec);
+  WK.lay = d.layout;
+  if (d.gid && !d.merged) {
+    const a = paneMakeArea(d.gid), g = WS.findGroup(WK.lay, d.gid);
+    if (st.bActive) a.st.bActive = st.bActive;
+    if (st.termTf) a.st.termTf = st.termTf;
+    if (e.chat !== cur.id && G.panes.includes(e.chat)) WK.pins = { ...(WK.pins || {}), [d.gid]: e.chat };
+    const ft = isFileTab(g.active) && WK.tabs.get(g.active)?.st.f;
+    inArea(a, () => { G.view = ft ? { id: ft.id, src: false, files: false, ftab: g.active } : paneView(focused(), WS.groupPane(g)); });
+  }
+  WK.preset = null;
+  paneMarkAreas(); eachArea(renderPane); paneSave(); deskPlace(true); wsLayoutsDraw();
+}
+// The main window started again (Ctrl+R, a restart): pop-outs that closed meanwhile dock back now.
+async function popSync() {
+  if (!canPop() || !popped.length) return;
+  const open = new Set(await window.ohDesktop.popout('list').catch(() => []) || []);
+  for (const e of [...popped]) if (!open.has(e.id)) popDock(e.id, null, null);
+}
+if (!POP) window.ohDesktop?.on?.((ev) => {
+  if (ev.type === 'popout-closed') popDock(ev.id, ev.state, ev.bounds);
+  if (ev.type === 'popout-msg' && ev.msg?.type === 'show-chat' && ev.msg.id) showChat(ev.msg.id);
+});
+// A tab dragged out of the window: it pops out where you let go.
+document.addEventListener('dragend', (e) => {
+  const src = WD.src; if (!src || !canPop()) return;
+  const out = e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight;
+  if (out && (e.screenX || e.screenY)) { wsDropHide(); popOut(src, { x: e.screenX, y: e.screenY }); }
+}, true);
+
+// The pop-out window's own side: what it shows, its bar with Dock back, and its state for the main window.
+function popLayout() {
+  if (!POP?.rec) return null;
+  const g = POP.rec;
+  const lay = WS.createLayout(WS.split('row', [WS.group(WS.CHAT_GROUP, [WS.tabId('chat', POP.chat)]), WS.group(g.gid, g.tabs, g.active)]), g.gid);
+  const tabs = Object.fromEntries(Object.entries(POP.files || {}).map(([t, v]) => [t, { kind: 'viewer', ...v }]));
+  if (POP.st?.bActive) tabs[WS.tabId('browser', g.gid)] = { kind: 'browser', b: POP.st.bActive };
+  if (Array.isArray(POP.st?.termTf)) tabs[WS.tabId('terminal', g.gid)] = { kind: 'terminal', tf: POP.st.termTf };
+  return { layout: lay, tabs, closed: [], max: g.gid, follow: g.gid, pins: { [g.gid]: POP.chat }, preset: null };
+}
+let popTimer = 0;
+function popState() {
+  clearTimeout(popTimer);
+  popTimer = setTimeout(() => {
+    const g = POP.rec && WS.findGroup(WK.lay, POP.rec.gid), a = g && areaOf(g.id);
+    const files = g ? Object.fromEntries(g.tabs.filter(isFileTab).map((t) => [t, WS.tabKind('viewer').save(WK.tabs.get(t)?.st || {})])) : {};
+    const state = { rec: g ? { tabs: g.tabs, active: g.active } : null, files, st: a ? { bActive: a.st.bActive || null, termTf: a.st.termTf || null } : {}, btabs: projTabs(POP.project).map(({ sid, url, title }) => ({ sid, url: url || '', title: title || '' })) };
+    window.ohDesktop?.popout?.('state', POP.id, state).catch(() => {});
+  }, 250);
+}
+async function popBoot() {
+  document.body.classList.add('qx-pop');
+  document.title = `QuorX · ${POP.title || 'Window'}`;
+  (G.btabsBy ||= {})[POP.project] = (POP.btabs || []).map((t) => ({ sid: t.sid, url: t.url, title: t.title }));
+  const bar = document.createElement('div');
+  bar.className = 'pop-bar';
+  bar.innerHTML = `<span class="pop-ico" aria-hidden="true">🗗</span><b class="pop-name"></b><span class="pop-sp"></span><button type="button" class="pv-btn pop-dock" title="Put this back in the main window (closing this window does the same)">⧉ Dock back</button>`;
+  $('.pop-name', bar).textContent = POP.title || '';
+  $('.pop-dock', bar).onclick = () => window.ohDesktop?.popout?.('dock', POP.id);
+  document.body.prepend(bar);
+  document.body.dataset.mview = POP.rec ? 'preview' : 'chat';
+  await showChat(POP.chat);
+  if (!POP.rec) { setPaneHidden(true); syncLayout(); }
+  popState();
+}
+
 // ---------- layouts: Build, Debug, Compare, Review, Focus, and your own ----------
 // One click puts the whole workspace in a layout (WS.LAYOUTS). Nothing closes: pane groups keep their boxes (so pages
 // don't reload and terminals keep their screen), file tabs go to the nearest group, and the chats stay open as tabs.
@@ -7774,6 +7919,7 @@ function wsMoveChat(zone) {
 function wsChatMenu(e) {
   const side = (z) => { const r = WS.rects(WK.lay, { x: 0, y: 0, w: 1000, h: 1000 }).groups[WS.CHAT_GROUP]; return r && ({ left: r.x === 0 && r.w < 1000, right: r.x + r.w === 1000 && r.w < 1000, top: r.y === 0 && r.h < 1000, bottom: r.y + r.h === 1000 && r.h < 1000 })[z]; };
   popMenu(e, [
+    ...(canPop() ? [['🗗 Pop out this chat', () => popOut({ type: 'chat', id: curId() }), { title: 'This chat in a window of its own (drag it to another screen); closing it docks it back' }], null] : []),
     ['⬅ Chat on the left', () => wsMoveChat('left'), { disabled: side('left') && !side('top') && !side('bottom') }],
     ['➡ Chat on the right', () => wsMoveChat('right'), { disabled: side('right') && !side('top') && !side('bottom') }],
     ['⬆ Chat on top', () => wsMoveChat('top'), { disabled: side('top') && !side('left') && !side('right') }],
@@ -7794,6 +7940,7 @@ function pinItems(a) {
 }
 // ⋯ on a group's strip: split it, move its tab, maximise, follow the agent, close.
 function wsGroupMenu(e, a) {
+  if (POP) return popMenu(e, [['⧉ Dock back into the main window', () => window.ohDesktop?.popout?.('dock', POP.id)]]);
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), tab = inArea(a, () => (G.view.ftab ? { type: 'file', tid: G.view.ftab } : { type: 'pane', tab: paneTab(), from: a }));
   const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
   popMenu(e, [
@@ -7804,6 +7951,7 @@ function wsGroupMenu(e, a) {
     ...pinItems(a),
     [WK.max === a.gid ? '⤡ Restore the other groups' : '⤢ Maximise this group', () => wsMaxToggle(a.gid)],
     ['💾 Save layout as…', () => wsSaveLayoutAs(), { title: 'Keep this arrangement as one of your layouts, offered in every project' }],
+    ...(canPop() ? [['🗗 Pop out this group', () => popOut({ type: 'group', a }), { disabled: PA.list.length < 2, title: PA.list.length < 2 ? 'The last group stays in the window (◧ hides it)' : 'This group in a window of its own (drag it to another screen); closing it docks it back' }]] : []),
     [wsFollowGid() === a.gid && PA.list.length > 1 ? '👁 Follows the agent ✓' : '👁 This group follows the agent', () => wsSetFollow(a.gid), { disabled: wsFollowGid() === a.gid && G.followAgent !== false }],
     null,
     ['Close this group', () => paneCloseArea(a), { disabled: PA.list.length < 2, danger: true }],
@@ -7811,6 +7959,7 @@ function wsGroupMenu(e, a) {
 }
 // Right-click on a tab: split it off, move it to another group, keep or close a file.
 function wsTabMenu(e, a, src) {
+  if (POP) { const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null; return popMenu(e, [...(st?.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ...(st ? [['Close', () => wsCloseFileTab(src.tid)]] : []), ['⧉ Dock back into the main window', () => window.ohDesktop?.popout?.('dock', POP.id)]]); }
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), phone = isPhone();
   const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null, name = st ? baseName(st.f?.label || st.f?.name || 'File') : PANE_TAB_NAMES[src.tab] || 'Tab';
   const capped = { disabled: cap || phone, title: cap ? CAP_TIP : '' };
@@ -7820,6 +7969,7 @@ function wsTabMenu(e, a, src) {
     ...others.map((o) => [`→ Move to ${wsWith(o)}`, () => wsDropAt(src, o.gid, 'center')]),
     null,
     ...(src.type === 'pane' ? pinItems(a) : []),
+    ...(canPop() ? [['🗗 Pop out to its own window', () => popOut(src), { title: 'Or drag the tab out of the window' }], null] : []),
     ...(st ? [...(st.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ['Close', () => wsCloseFileTab(src.tid)]] : [['Close this group', () => paneCloseArea(a), { disabled: PA.list.length < 2, danger: true }]]),
   ]);
 }
@@ -7919,6 +8069,7 @@ function drawFileTabs(box) {
 // release, so an older QuorX keeps the split.
 const paneKey = (id) => `oh-pane-areas:${id}`;
 function paneSave() {
+  if (POP) return popState();
   const c = primaryChat(); if (!c || PA.chat !== c.id) return;
   wsSync();
   const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1, own = WT.pid === projOf(c);
@@ -8379,7 +8530,7 @@ async function wtCheck() {
 // The tabs and closed stack go into the project's layout save: through paneSave when its chat is on screen, else
 // straight into the saved layout.
 function wtSave() {
-  if (!WT.pid) return;
+  if (!WT.pid || POP) return;
   const c = focused();
   if (c && projOf(c) === WT.pid && PA.chat === c.id) return paneSave();
   const r = readLayout(WT.pid), lay = WS.withChatTabs(r?.layout || WS.defaultLayout(), WT.tabs.filter((x) => x !== WS.chat2Id(r?.layout || WS.defaultLayout())), G.panes[0]);
@@ -8595,6 +8746,7 @@ function wtMenu(e, id) {
   const last = WT.closed.at(-1);
   popMenu(e, [
     ...besideItems(id),
+    ...(canPop() ? [['🗗 Pop out to its own window', () => popOut({ type: 'chat', id })]] : []),
     ['Close', () => wtClose(id)],
     ['Close other tabs', () => { for (const x of WT.tabs.filter((y) => y !== id)) wtClose(x, { quiet: true }); if (curId() !== id) showChat(id); wsChrome(); }, { disabled: WT.tabs.length < 2 }],
     ['Close tabs to the right', () => { for (const x of WT.tabs.slice(WT.tabs.indexOf(id) + 1)) wtClose(x, { quiet: true }); wsChrome(); }, { disabled: WT.tabs.indexOf(id) === WT.tabs.length - 1 }],
@@ -8728,6 +8880,7 @@ function wsStatusWire() {
 // handed to the window); the window title says it too, in any browser.
 let badgeWas = -1;
 function wsBadge() {
+  if (POP) return;
   const n = needsYou().length;
   if (n === badgeWas) return;
   badgeWas = n;
@@ -11624,7 +11777,7 @@ function applyTheme() {
 }
 const isNarrow = () => matchMedia('(max-width: 900px)').matches;
 // Phones get their own layout: one full-screen view at a time (chat list, chat, preview), chosen in the bottom bar.
-const isPhone = () => matchMedia('(max-width: 900px)').matches;
+const isPhone = () => !POP && matchMedia('(max-width: 900px)').matches;
 function setMView(v) {
   G.mview = v;
   document.body.dataset.mview = v;
@@ -11766,6 +11919,7 @@ async function boot() {
   wsChromeInit();
   renderPanes();
   renderSidebar(); renderSpend(); refreshBalance();
+  if (POP) popBoot(); else popSync();
   // Chats with a reply still running on the server (started before a reload) reattach too.
   fetch('/api/runs').then((r) => r.json()).then(async (list) => { for (const r of list) if (r.chatId && !G.open.has(r.chatId)) { await getChat(r.chatId); renderSidebar(); } }).catch(() => {});
   loadModels();
