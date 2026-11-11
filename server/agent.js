@@ -169,6 +169,7 @@ export const DEFAULTS = {
   lazyTools: 'auto',       // 'auto': rarely used tools are listed by name and load when the agent asks (or calls one) · 'off': every schema on every call
   statusEvery: 0,          // steps with tool calls and no word to the user before the agent is asked for one short status line (0 = never)
   wrapUp: true,            // after a reply that did work: a line on what wasn't checked, when something wasn't
+  nextSteps: true,         // after a finished reply: up to three suggested next messages as buttons (one helper-model call; the page asks)
   verify: true,            // before the final reply: re-check changed files and open what was built
   browseReadOnly: true,    // 🧩 Chrome and lent tabs: for a request that only reads, typing outside a search box asks the user
   chromeCheck: true,       // 🧩 Chrome and lent tabs: the deciders check each typing step against the request (never the page)
@@ -6414,6 +6415,28 @@ export async function briefFor(runId, { model } = {}) {
 // A brief of a whole chat (for /fresh, and for attaching one chat to another): its goal, what was built,
 // what's left. Cached in data/briefs until the chat gets new messages, so attaching it again costs nothing.
 const BRIEF_DIR = path.join(HOME, 'data', 'briefs');
+// ---------- suggested next steps (buttons under a finished reply) ----------
+// One short call to the helper model after a reply ends: up to three things the user might ask next, in the user's
+// own voice. The page asks only when "Suggest next steps" is on, so the setting off costs nothing.
+export function parseNextSteps(text) {
+  let s = String(text || '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+  let list = null;
+  try { const v = JSON.parse(s.slice(s.indexOf('['), s.lastIndexOf(']') + 1)); if (Array.isArray(v)) list = v; } catch { /* not JSON: read lines */ }
+  if (!list) list = s.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, ''));
+  const seen = new Set();
+  return list.map((x) => String(typeof x === 'string' ? x : x?.text || '').replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim())
+    .filter((x) => x && x.length <= 120 && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase())).slice(0, 3);
+}
+export async function nextStepsFor({ request, reply, model, chatModel, call } = {}) {
+  const ask = clip(String(request || '').trim(), 1500), said = clipKeepEnd(String(reply || '').trim(), 4000);
+  if (!said) return { items: [], cost: 0 };
+  const use = String(model || '').trim() || helperFor(chatModel);
+  const r = await (call || briefChat)({ model: use, max_tokens: 160, temperature: 0.3, ...REASONING.off, messages: [
+    { role: 'system', content: 'You suggest what a user might ask an AI agent next, after its reply. Give 0 to 3 suggestions as a JSON array of strings. Each is something the user would type, in their voice ("Add a dark mode", "Run the tests"), at most 8 words, concrete and different from each other, following on from the reply. No questions back to the agent, nothing already done, nothing risky (deleting, paying, publishing). If nothing useful follows, return []. Only the JSON array.' },
+    { role: 'user', content: `The user asked:\n${ask || '(not shown)'}\n\nThe agent replied:\n${said}` }] });
+  return { items: parseNextSteps(r.message?.content), model: r.model || use, cost: Number(r.usage?.cost) || 0 };
+}
+
 export async function briefForChat(chatId, { model } = {}) {
   const doc = getChat(String(chatId));
   if (!doc) throw new Error('No such chat.');

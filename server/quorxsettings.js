@@ -80,6 +80,7 @@ export const SETTINGS = [
   E('lazyTools', 'loop', 'Load rare tools when needed', 'enum', { values: [['auto', 'Auto'], ['off', 'Off']], help: 'Auto: Android, the debugger, desktop apps, QuorX settings and other rarely used tools are listed by name and load when the agent asks for one, so every call is smaller. Off: every tool on every call.' }),
   E('statusEvery', 'loop', 'Ask for a short status line every', 'int', { min: 0, max: 50, unit: ' steps', help: 'Steps of tool calls without a word to you before the agent is asked to say what it is doing. 0 = never.' }),
   E('guardEdits', 'loop', 'Protect files that changed', 'bool', { help: 'A file you or another chat changed since the agent read it must be read again before the agent changes it.' }),
+  E('nextSteps', 'loop', 'Suggest next steps', 'bool', { help: 'Under the newest finished reply, up to three short next messages as buttons (one small helper-model call per reply; off means no call).' }),
   E('wrapUp', 'loop', 'End each reply with a wrap-up', 'bool', { help: 'After a reply that did work: a short recap, what wasn\'t checked, and up to two next steps to send with a click.' }),
   E('otherNotes', 'loop', 'Read other agents\' notes', 'bool', { help: 'AGENTS.md, CLAUDE.md and similar files in the project are read with AGENT.md.' }),
   E('otherNotesFiles', 'loop', 'Other agents\' note files', 'text', { help: 'File names in the project, separated by commas.' }),
