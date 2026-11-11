@@ -270,13 +270,10 @@ export function setWeights(lay, weights) {
  */
 export function serialise(lay, tabs = {}, closed = [], extra = {}) {
   const live = new Set(allTabs(lay)), has = (id) => typeof id === 'string' && !!findGroup(lay, id);
-  // extra: the group marked to follow the agent, the maximised one, and reading positions ({ key: pixels }).
-  const scroll = extra.scroll && typeof extra.scroll === 'object' ? Object.fromEntries(Object.entries(extra.scroll).filter(([, v]) => Number.isFinite(v) && v > 0).slice(-SCROLL_CAP)) : null;
+  // extra: the group marked to follow the agent, and the maximised one.
   return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}),
-    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(scroll && Object.keys(scroll).length ? { scroll } : {}) });
+    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}) });
 }
-/** How many reading positions a project keeps (the newest). */
-export const SCROLL_CAP = 60;
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
   let s = text;
@@ -300,8 +297,7 @@ export function parse(text) {
   const live = new Set(allTabs(lay));
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
   const gid = (v) => (typeof v === 'string' && findGroup(lay, v) ? v : null);
-  const scroll = s.scroll && typeof s.scroll === 'object' ? Object.fromEntries(Object.entries(s.scroll).filter(([k, v]) => typeof k === 'string' && Number.isFinite(v) && v > 0).slice(-SCROLL_CAP)) : {};
-  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), scroll };
+  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max) };
 }
 
 // ---------- open chats, and the tabs you closed ----------

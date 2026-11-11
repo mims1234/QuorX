@@ -325,14 +325,12 @@ test('workspace W2: groups placed by rectangles; bars resize neighbours; the cha
     assert.equal(W.nearestGroup(lay, 'g1', rs), 'g1');
     assert.equal(W.nearestGroup(W.createLayout(W.group('chat', ['chat:a'])), 'chat', {}), null);
   }
-  { // workspace W2: the follow mark, the maximised group and reading positions are saved with the layout
+  { // workspace W2: the follow mark and the maximised group are saved with the layout
     const lay = W.defaultLayout();
-    const text = W.serialise(lay, {}, [], { follow: 'g1', max: 'nope', scroll: { 'steps:g1': 420, bad: -3, 'x': 'no' } });
-    const back = W.parse(text);
+    const back = W.parse(W.serialise(lay, {}, [], { follow: 'g1', max: 'nope' }));
     assert.equal(back.follow, 'g1');
     assert.equal(back.max, null, 'a group that is not there is not kept');
-    assert.deepEqual(back.scroll, { 'steps:g1': 420 });
-    assert.deepEqual(W.parse(W.serialise(lay)).scroll, {});
+    assert.equal(W.parse(W.serialise(lay)).follow, null);
     // A file tab saves the file, its chat and whether it is still a preview.
     const v = W.tabKind('viewer');
     assert.deepEqual(v.load(v.save({ f: { id: 'file:a.png', src: '/f/a.png', kind: 'image' }, chat: 'c1', preview: true })), { f: { id: 'file:a.png', src: '/f/a.png', kind: 'image' }, chat: 'c1', preview: true });

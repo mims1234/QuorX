@@ -3394,12 +3394,24 @@ function keepAtBottom(c, msgs, root) {
     c.watchers = [ro, mo]; // stopped when the chat leaves the screen (releasePane)
   }
   // Reading position: a chat you left part way up opens there again (at the end it follows the newest, as before).
+  // Until it is back there (or you scroll yourself), the chat drawing itself doesn't count as you moving.
   const pk = `chat:${c.id}`, py = POS.get(pk);
-  msgs.addEventListener('scroll', () => posPut(pk, nearEnd() ? 0 : msgs.scrollTop), { passive: true });
+  let hold = !!py;
+  msgs.addEventListener('scroll', () => { if (!hold) posPut(pk, nearEnd() ? 0 : msgs.scrollTop); }, { passive: true });
   if (py) {
     c.follow = false; jump.hidden = false;
-    const back = () => { if (!c.follow && msgs.isConnected && msgs.scrollHeight - msgs.clientHeight >= py - 2 && msgs.scrollTop < 4) msgs.scrollTop = py; };
-    requestAnimationFrame(back); setTimeout(back, 300); setTimeout(back, 1200);
+    const mine = () => { hold = false; };
+    for (const ev of ['wheel', 'touchmove', 'keydown', 'pointerdown']) msgs.addEventListener(ev, mine, { once: true, passive: true });
+    let n = 0, got = false;
+    const back = () => {
+      if (!hold || !msgs.isConnected) return;
+      if (msgs.scrollHeight - msgs.clientHeight >= py - 2) { got = true; c.follow = false; jump.hidden = false; msgs.scrollTop = py; }
+      if (++n < 10) return setTimeout(back, 120 * n);
+      hold = false;
+      // The chat is shorter than where you were (it changed since): its newest messages, as before.
+      if (!got) { c.follow = true; toEnd(); }
+    };
+    setTimeout(back, 0);
     return;
   }
   toEnd();
@@ -7187,6 +7199,7 @@ function paneWireArea(a) {
   a.el.addEventListener('focusin', () => { WP.chatFocus = false; paneFocus(a); });
   // Reading position: what you scrolled to in this area is kept for the tab it shows (see "reading position").
   a.el.addEventListener('scroll', (e) => posNote(a, e.target), true);
+  for (const ev of ['wheel', 'keydown', 'touchmove', 'pointerdown']) a.el.addEventListener(ev, () => { a._posHold = null; }, { capture: true, passive: true });
 }
 // A group of the layout that has no area yet gets one: a copy of the template, added at the end of the pane. Where it
 // shows is set by wsPlace, never by where it sits in the page, so adding one never moves the others.
@@ -7517,7 +7530,7 @@ const wsWith = (a) => `the group with ${wsAreaName(a)}`;
 // ⋯ on a group's strip: split it, move its tab, maximise, follow the agent, close.
 function wsGroupMenu(e, a) {
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), tab = inArea(a, () => (G.view.ftab ? { type: 'file', tid: G.view.ftab } : { type: 'pane', tab: paneTab(), from: a }));
-  const capped = { disabled: cap, title: cap ? CAP_TIP : '' };
+  const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
   popMenu(e, [
     ['◫ Split right', () => paneSplitTab(a.gid, null, 'right'), capped],
     ['⊟ Split down', () => paneSplitTab(a.gid, null, 'bottom'), capped],
@@ -7656,7 +7669,9 @@ function paneSave() {
 function paneChat(c) {
   const id = c?.id || null;
   if (PA.chat === id || !PA.tpl) return false;
-  const pid = c ? projOf(c) : null, same = PA.chat !== undefined && pid != null && PA.pid === pid;
+  // Home or News: only the chat's box shows, and the groups wait as they are for the next chat.
+  if (!c) { PA.chat = null; return false; }
+  const pid = projOf(c), same = PA.chat !== undefined && PA.pid === pid;
   PA.chat = id; PA.pid = pid;
   if (same) {
     for (const a of PA.list) if (a !== AREA) inArea(a, () => { if (G.view.trace) G.view = paneView(c, 'trace'); });
@@ -7710,7 +7725,7 @@ function posPut(key, y) {
   if ((was || 0) === v) return;
   POS.delete(key); if (v) POS.set(key, v);
   while (POS.size > POS_CAP) POS.delete(POS.keys().next().value);
-  clearTimeout(posTimer); posTimer = setTimeout(() => { try { localStorage.setItem(POS_KEY, JSON.stringify(Object.fromEntries(POS))); } catch { /* this session only */ } }, 400);
+  clearTimeout(posTimer); posTimer = setTimeout(() => { try { localStorage.setItem(POS_KEY, JSON.stringify(Object.fromEntries(POS))); } catch { /* kept until the page reloads */ } }, 400);
 }
 // What an area shows, as the key of its reading position (null: nothing to keep).
 function posKey(a) {
@@ -7724,7 +7739,8 @@ function posKey(a) {
 function posNote(a, el) {
   if (!el || el.nodeType !== 1 || el.closest('.xterm, .pane-tabs, .ws-drop')) return;
   const key = posKey(a);
-  if (key && a._posKey === key) posPut(key, el.scrollTop);
+  // While the tab is being put back where you were, its own drawing doesn't count as you scrolling.
+  if (key && a._posKey === key && a._posHold !== key) posPut(key, el.scrollTop);
 }
 // The box that scrolls in what an area drew: the tallest one that can.
 function posScroller(root) {
@@ -7742,6 +7758,8 @@ function posBack(a) {
   if (!key) return;
   const body = $('#paneBody', a.el); if (!body) return;
   let n = 0;
+  if (POS.get(key)) a._posHold = key;
+  const done = () => { if (a._posHold === key) a._posHold = null; };
   const hook = (f) => {
     try {
       const w = f.contentWindow; if (!w || w.__qxPos) return;
@@ -7754,13 +7772,12 @@ function posBack(a) {
     if (a._posKey !== key || !body.isConnected) return;
     const f = body.querySelector('iframe');
     if (f) { if (f.contentDocument?.readyState === 'complete' && f.contentWindow?.location.href !== 'about:blank') hook(f); else f.addEventListener('load', () => hook(f), { once: true }); return; }
-    const y = POS.get(key); if (!y) return;
+    const y = POS.get(key); if (!y || a._posHold !== key) return done();
     const el = posScroller(body);
-    if (el && el.scrollTop > 4) return; // you are somewhere already
-    if (el && el.scrollHeight - el.clientHeight >= y - 2) { el.scrollTop = y; return; }
-    if (++n < 8) setTimeout(go, [40, 90, 160, 300, 500, 800, 1200][n - 1]);
+    if (el && el.scrollHeight - el.clientHeight >= y - 2) { el.scrollTop = y; return done(); }
+    if (++n < 9) setTimeout(go, [40, 90, 160, 300, 500, 800, 1200, 2000][n - 1]); else done();
   };
-  requestAnimationFrame(go);
+  setTimeout(go, 0);
 }
 // The pane's dropdown lists this chat's artifacts plus the one open "Steps" (if any).
 // Page artifacts are hosted by the server (/art/<chat>/<id>), so the preview is always the newest version;
@@ -8577,7 +8594,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   mountCode($('.pv-body', view), t.length > 600000 ? t.slice(0, 600000) : t, langOf(name), { name });
 }
 async function renderFiles(c) {
-  const body = $('#paneBody'), bar = $('#appBar');
+  const body = $('#paneBody'), bar = $('#appBar'), area = AREA;
   const p = G.projects.find((x) => x.id === c.projectId);
   bar.hidden = false;
   bar.innerHTML = `🗂 <b>Explorer</b> <span class="dim">${esc(p?.name || c.projectId)}</span> <code title="${esc(p?.dir || '')}">${esc(p?.dir || '')}</code> <button type="button" class="os-open" title="Open this folder in File Explorer">📂 Open in File Explorer</button> <button type="button" class="back">✕ Close</button>`;
@@ -8637,12 +8654,18 @@ async function renderFiles(c) {
   // folders read their entries the first time they open and remember being open.
   const wire = (box) => {
     for (const b of box.querySelectorAll(':scope > .fl[data-p]')) {
+      // A click opens the file as a preview tab in the group beside this one, when there is another group to show it
+      // in; with this group alone it shows in the viewer here, as before. A double-click opens it as a tab to keep.
+      const fileOf = () => { const path = b.dataset.p; return { key: `ws:${c.projectId}:${path}`, name: path, src: `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`, size: Number(b.dataset.size) || 0, full: fullOf(path) }; };
+      const beside = () => PA.list.some((x) => x !== area && !x.el.hidden && x.el.style.display !== 'none');
       b.onclick = () => {
         select(b);
-        const path = b.dataset.p, src = `/ws/${c.projectId}/${path.split('/').map(encodeURIComponent).join('/')}`;
+        const f = fileOf();
+        if (beside()) return openFileInPane(c, f, { from: area.gid });
         G.filesProject = c.projectId;
-        previewFile(view, { name: path, src, size: Number(b.dataset.size) || 0, full: fullOf(path) });
+        previewFile(view, f);
       };
+      b.ondblclick = () => openFileInPane(c, fileOf(), { from: beside() ? area.gid : null, into: beside() ? null : area.gid, keep: true });
       b.oncontextmenu = (e) => filesMenu(e, c.projectId, b.dataset.p, fullOf(b.dataset.p));
       b.draggable = true;
       b.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-file', JSON.stringify({ projectId: c.projectId, path: b.dataset.p })); e.dataTransfer.effectAllowed = 'copy'; };
