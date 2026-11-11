@@ -51,6 +51,22 @@ export function runningAll(projectIds) {
   return items;
 }
 
+/**
+ * What is working right now across every project, for the desktop app: it keeps the PC awake while something works,
+ * and names it when you quit. replies: the running replies ({ chatId, title, scheduled }), which the caller looks up.
+ * → { replies: [{ chatId, title, scheduled }], servers: [{ name, projectId }], commands: [{ label, projectId }] }
+ * Commands are the agent's and yours (including the ones moved to the background) and the agent's own terminals;
+ * your own terminal tabs are left out (an open shell is not work in progress).
+ */
+export function busyNow(replies = []) {
+  return {
+    replies: replies.map((r) => ({ chatId: r.chatId || null, title: String(r.title || 'A reply').slice(0, 80), scheduled: !!r.scheduled })),
+    servers: listServers().filter((s) => s.status !== 'stopped').map((s) => ({ name: s.name, projectId: s.projectId })),
+    commands: [...runningJobs().map((j) => ({ label: String(j.label || 'a command').slice(0, 80), projectId: j.projectId })),
+      ...listTerms().filter((t) => t.running).map((t) => ({ label: String(t.label || 'a terminal').slice(0, 80), projectId: t.projectId }))],
+  };
+}
+
 /** Stops one row. Your terminal tabs close; everything else ends with all it started. */
 export async function stopRunning(projectId, id) {
   const [kind, ...rest] = String(id || '').split(':'), key = rest.join(':');
