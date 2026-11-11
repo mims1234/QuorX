@@ -13290,7 +13290,7 @@ const busyCount = (b) => (b && !b.error ? (b.replies?.length || 0) + (b.servers?
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.
 async function drawDesktopSettings() {
   const box = $('#stDesktop'); if (!box || !DESK) return;
-  const [info, login, onClose] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask')]);
+  const [info, login, onClose, awake] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask'), window.ohDesktop.keepAwake?.().catch(() => null)]);
   if (!box.isConnected) return;
   const canQuit = typeof window.ohDesktop.quit === 'function';
   const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
@@ -13299,10 +13299,13 @@ async function drawDesktopSettings() {
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
     // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
     + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
+    // Keeping the PC awake (desktop/keep-awake.js): only while something works, so it never stops the PC sleeping for good.
+    + (awake ? stRow('Keep the PC awake while QuorX works', 'Only while a reply (a scheduled chat’s too) or a command runs: Windows doesn’t go to sleep, and may again as soon as all of it is done. The screen can still turn off. A server left running on its own doesn’t keep the PC awake.', `<label class="sq-check"><input type="checkbox" id="stDeskAwake"${awake.on ? ' checked' : ''}><span>On</span></label> <span class="st-awake-now" id="stDeskAwakeNow"${awake.held ? '' : ' hidden'}>keeping it awake now</span>`) : '')
     + stRow('Updates', '', `<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
     + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
   if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
+  if ($('#stDeskAwake')) $('#stDeskAwake').onchange = async (e) => { const r = await window.ohDesktop.keepAwake(e.target.checked).catch(() => null); if (!r) { e.target.checked = !e.target.checked; return; } e.target.checked = r.on; $('#stDeskAwakeNow').hidden = !r.held; };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
   for (const b of box.querySelectorAll('#stDeskClose .st-seg-btn')) b.onclick = async () => {
     const v = await window.ohDesktop.closeAction(b.dataset.v).catch(() => null);

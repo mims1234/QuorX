@@ -852,3 +852,6 @@
 .src-card .src-limit-t { display: block; font-size: 13px; color: var(--text-bright, var(--text)); margin-bottom: 2px; }
 .src-card .src-limit .st-row-help { margin: 0; }
 .src-card .src-limit .st-fb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* "keeping it awake now": a quiet status note next to the Keep awake checkbox (not a button, not a tag). */
+.st-awake-now { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.st-awake-now::before { content: '● '; color: var(--ok, #22c55e); }

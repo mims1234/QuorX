@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   tabs: (op, sid) => call('tabs', op, sid),
   loginItem: (on) => call('loginItem', on),
   closeAction: (v) => call('closeAction', v),
+  keepAwake: (on) => call('keepAwake', on),
   quit: () => call('quit'),
   update: (op, arg) => call('update', op, arg),
   info: () => call('info'),
