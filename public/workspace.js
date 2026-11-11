@@ -483,3 +483,105 @@ export function migrateAreas(old, chats, have = new Set()) {
   }
   return Object.fromEntries([...best].map(([pid, { text }]) => [pid, text]));
 }
+
+// ---------- layouts: Build, Debug, Compare, Review, Focus, and your own ----------
+// A layout is a shape: a tree like a layout's, whose chat groups are 'chat' / 'chat2' and whose pane groups are slots
+// 's1', 's2'… each with the pane tab it shows (kind: art, browser, trace, term, files). It may name the slot that
+// follows the agent (follow), slots pinned to the first or second chat (pins: { s1: 0 }), and hide the pane (focus).
+// fitLayout puts a project's groups into a shape without closing anything: its pane groups keep their ids (so their
+// boxes, frames and terminals stay), file tabs go to the nearest slot, and the chats keep their tabs.
+const slot = (id, kind, w = 1) => ({ t: 'g', id, kind, w: w3(w) });
+export const LAYOUTS = {
+  build: { name: 'Build', tip: 'The chat on the left; the browser over the terminal on the right', root: split('row', [slot(CHAT_GROUP, null, 1.4), split('col', [slot('s1', 'browser'), slot('s2', 'term')])]), follow: 's1' },
+  debug: { name: 'Debug', tip: 'The chat, its steps, and the browser over the terminal', root: split('row', [slot(CHAT_GROUP, null, 1.2), slot('s1', 'trace'), split('col', [slot('s2', 'browser'), slot('s3', 'term')])]), follow: 's2' },
+  compare: { name: 'Compare', tip: 'Two chats side by side, each with its own browser below it', root: split('row', [split('col', [slot(CHAT_GROUP, null, 1.3), slot('s1', 'browser')]), split('col', [slot(CHAT2_GROUP, null, 1.3), slot('s2', 'browser')])]), follow: 's1', pins: { s1: 0, s2: 1 }, chats: 2 },
+  review: { name: 'Review', tip: 'The chat and the project\'s files, to read what changed', root: split('row', [slot(CHAT_GROUP, null, 1), slot('s1', 'files', 1.3)]) },
+  focus: { name: 'Focus', tip: 'Only the chat', root: split('row', [slot(CHAT_GROUP, null, 1.4), slot('s1', 'art')]), focus: true },
+};
+export const LAYOUT_ORDER = ['build', 'debug', 'compare', 'review', 'focus'];
+const SLOT_KINDS = new Set(['art', 'browser', 'trace', 'term', 'files']);
+/** A layout's shape, from what is on screen (Save layout as…). chats: the chat ids on screen, in order. */
+export function shapeOf(lay, { follow = null, pins = {}, chats = [], focus = false } = {}) {
+  const ids = {}; let n = 0;
+  for (const g of groups(lay)) if (!isChatGroup(g.id)) ids[g.id] = `s${++n}`;
+  const walk = (x) => (x.t === 'g' ? slot(isChatGroup(x.id) ? x.id : ids[x.id], isChatGroup(x.id) ? null : groupPane(x), x.w) : split(x.dir, x.kids.map(walk), x.w));
+  const out = { root: walk(copy(lay.root)) };
+  if (ids[follow]) out.follow = ids[follow];
+  const pn = Object.fromEntries(Object.entries(pins || {}).filter(([g, c]) => ids[g] && chats.includes(c)).map(([g, c]) => [ids[g], chats.indexOf(c)]));
+  if (Object.keys(pn).length) out.pins = pn;
+  if (findGroup(lay, CHAT2_GROUP)) out.chats = 2;
+  if (focus) out.focus = true;
+  return out;
+}
+/** Checks a stored shape (your saved layouts); null when it can't be used. */
+export function cleanShape(x) {
+  if (!x || typeof x !== 'object' || !x.root) return null;
+  const seen = new Set();
+  const check = (n, d) => {
+    if (!n || typeof n !== 'object' || d > 8) return null;
+    if (n.t === 'g') {
+      const id = String(n.id || '');
+      if (seen.has(id) || !(isChatGroup(id) || (/^s\d+$/.test(id) && SLOT_KINDS.has(n.kind)))) return null;
+      seen.add(id); return slot(id, isChatGroup(id) ? null : n.kind, n.w);
+    }
+    if (n.t === 's' && Array.isArray(n.kids)) { const kids = n.kids.map((k) => check(k, d + 1)).filter(Boolean); return kids.length ? split(n.dir, kids, n.w) : null; }
+    return null;
+  };
+  const root = check(x.root, 0);
+  const slots = groups(root).filter((g) => !isChatGroup(g.id));
+  if (!root || !seen.has(CHAT_GROUP) || !slots.length || groups(root).length > MAX_GROUPS) return null;
+  const has = (k) => slots.some((g) => g.id === k);
+  return { root, ...(has(x.follow) ? { follow: x.follow } : {}), ...(x.pins && typeof x.pins === 'object' ? { pins: Object.fromEntries(Object.entries(x.pins).filter(([k, v]) => has(k) && (v === 0 || v === 1))) } : {}), ...(seen.has(CHAT2_GROUP) ? { chats: 2 } : {}), ...(x.focus ? { focus: true } : {}) };
+}
+const isPaneTab = (t, gid) => kindOf(t) in KIND_PANE && t === tabId(kindOf(t), gid);
+/**
+ * The project's layout in a shape. chat2: the chat for the second chat group (null drops it from the shape).
+ * Gives { layout, follow, pins: { gid: chatIndex }, kinds: { gid: pane }, added: [gid], removed: [gid] }.
+ */
+export function fitLayout(lay, shape, { chat2 = null } = {}) {
+  const old = sideGroups(lay), slots = groups(shape.root).filter((g) => !isChatGroup(g.id));
+  let next = lay.next;
+  const ids = {}; slots.forEach((g, i) => { ids[g.id] = old[i]?.id || `g${next++}`; });
+  // Tabs of the pane groups that aren't their five pane tabs (files): to the slot at the same place, else the last.
+  const extra = slots.map(() => []);
+  old.forEach((g, i) => { for (const t of g.tabs) if (!isPaneTab(t, g.id)) extra[Math.min(i, slots.length - 1)].push(t); });
+  const curChat = findGroup(lay, CHAT_GROUP), cur2 = findGroup(lay, CHAT2_GROUP);
+  const kinds = {};
+  const build = (n) => {
+    if (n.t === 'g') {
+      if (n.id === CHAT_GROUP) return group(CHAT_GROUP, curChat?.tabs?.length ? curChat.tabs : [tabId('chat', 'main')], curChat?.active, n.w);
+      if (n.id === CHAT2_GROUP) { const id = chat2 ?? (cur2 ? chat2Id(lay) : null); return id ? group(CHAT2_GROUP, [tabId('chat', id)], null, n.w) : null; }
+      const gid = ids[n.id], i = slots.findIndex((x) => x.id === n.id); kinds[gid] = n.kind;
+      return group(gid, [...paneTabs(gid), ...extra[i]], tabId(PANE_KINDS[n.kind] || 'artifact', gid), n.w);
+    }
+    const kids = n.kids.map(build).filter(Boolean);
+    return kids.length ? split(n.dir, kids, n.w) : null;
+  };
+  const root = norm(build(copy(shape.root)));
+  const layout = { root, focus: ids[shape.follow] || ids.s1 || CHAT_GROUP, next };
+  if (!findGroup(root, layout.focus)) layout.focus = groups(root)[0]?.id ?? null;
+  const pins = Object.fromEntries(Object.entries(shape.pins || {}).filter(([k]) => ids[k]).map(([k, v]) => [ids[k], v]));
+  const now = new Set(Object.values(ids));
+  return { layout, follow: ids[shape.follow] || null, pins, kinds, added: Object.values(ids).filter((g) => !old.some((o) => o.id === g)), removed: old.map((g) => g.id).filter((g) => !now.has(g)) };
+}
+
+// ---------- where things open ----------
+// One rule set for everything that opens in the workspace. Nothing ever opens in a chat group, so nothing replaces the
+// chat you are typing in. kind: 'server' (a started project server): the group marked to follow the agent, else the
+// group already showing the Browser; 'steps' (🧭 a reply's steps): the group showing Steps for that chat; 'file' /
+// 'page': the nearest group to where you clicked that isn't a chat; 'side' / 'changes' (a side question, the Changes
+// of a reply): beside its chat, the nearest group to that chat's group. Each falls back to the nearest group to its
+// chat (or to from). ctx: { lay, rects, from, follow, shows: { gid: pane }, owner: { gid: chatId }, chat, chatGroup }.
+// null when there is no pane group at all.
+export function openTarget(kind, { lay, rects = {}, from = null, follow = null, shows = {}, owner = {}, chat = null, chatGroup = CHAT_GROUP } = {}) {
+  const side = sideGroups(lay).map((g) => g.id), mine = (g) => !chat || !owner[g] || owner[g] === chat;
+  if (!side.length) return null;
+  const near = (start) => nearestGroup(lay, start && findGroup(lay, start) ? start : chatGroup, rects);
+  if (kind === 'server') {
+    if (follow && side.includes(follow)) return follow;
+    return side.find((g) => shows[g] === 'browser' && mine(g)) || side.find((g) => shows[g] === 'browser') || near(from);
+  }
+  if (kind === 'steps') return side.find((g) => shows[g] === 'trace' && mine(g)) || nearestGroup(lay, chatGroup, rects, (g) => isChatGroup(g.id) || !mine(g.id)) || near(chatGroup);
+  if (kind === 'side' || kind === 'changes') return near(chatGroup);
+  return near(from);
+}
