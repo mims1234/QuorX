@@ -17,6 +17,7 @@ import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, device
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
+import { SHORTCUTS, KEY_GROUPS, byId as keyDef, bindings, actionFor, checkCombo, clashWith, conflicts, comboParts, comboText, normCombo } from './keymap.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
 // body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
@@ -531,7 +532,7 @@ function paletteItems(q) {
   for (const x of (words.length ? chats : chats.slice(0, 6))) if (hit(`${x.title} ${projName(x.projectId)}`)) out.push({ group: 'Chats', icon: '💬', label: x.title, hint: `${projName(x.projectId)} · ${ago(x.lastAt || Date.now())}`, run: () => showChat(x.id) });
   if (q.length >= 2 && PAL.msgs?.q === q) out.push(...PAL.msgs.items); // inside chats: asked of the server as you type
   for (const [k, desc, fn] of COMMANDS) if ((c || PAL_GLOBAL.has(k)) && hit(`/${k} ${desc}`)) out.push({ group: 'Commands', icon: '⚡', label: `/${k}`, hint: desc, run: () => (c ? runCommand(c, `/${k}`) : fn(null, '')) });
-  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', 'Your messages and the agent’s replies · Ctrl+Shift+F', () => openChatSearch(q)], ['↺', 'Reopen closed tab', 'Ctrl+Shift+T · the last chat, area, file or page you closed', () => wsReopen()], ['‹', 'Back', 'Alt+← · what you looked at before', () => wsStep(-1)], ['›', 'Forward', 'Alt+→', () => wsStep(1)],['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
+  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', `${keyHint('chatsearch')}your messages and the agent’s replies`, () => openChatSearch(q)], ['↺', 'Reopen closed tab', `${keyHint('tab.reopen')}the last chat, area, file or page you closed`, () => wsReopen()], ['‹', 'Back', `${keyHint('nav.back')}what you looked at before`, () => wsStep(-1)], ['›', 'Forward', keyLabel('nav.forward') || 'what you left', () => wsStep(1)], ['⌨', 'Keyboard shortcuts', 'See and change every key', () => openSettings('shortcuts')],['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
   for (const [icon, label, hint, run] of acts) if (hit(`${label} ${hint}`)) out.push({ group: 'Actions', icon, label, hint, run });
   if (words.length) for (const p of G.projects) if (hit(`${p.name} new chat project`)) out.push({ group: 'Projects', icon: '📁', label: `New chat in ${p.name}`, hint: `${p.spent ? `$${p.spent.toFixed(3)} spent` : 'project'}`, run: () => newChat(p.id) });
   for (const [group, items] of SETTINGS_NAV) for (const [id, icon, label] of items) if (words.length && hit(`${label} settings ${group}`)) out.push({ group: 'Settings', icon, label, hint: `⚙ Settings · ${group}`, run: () => openSettings(id) });
@@ -559,7 +560,7 @@ function paletteDialog() {
   const input = $('#palInput', d);
   input.oninput = () => { drawPalette(); paletteMessages(input.value.trim()); };
   input.onkeydown = (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); e.stopPropagation(); $('#palette').close(); openChatSearch(input.value.trim()); return; }
+    if (actionFor(keyCombo(e), keyMap()) === 'chatsearch') { e.preventDefault(); e.stopPropagation(); $('#palette').close(); openChatSearch(input.value.trim()); return; }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); PAL.active = (PAL.active + (e.key === 'ArrowDown' ? 1 : -1) + PAL.items.length) % Math.max(1, PAL.items.length); paintActive(); }
     if (e.key === 'Enter') { e.preventDefault(); runPalette(PAL.active); }
   };
@@ -607,12 +608,6 @@ function openPalette() {
 // message, save a name or answer a card, so while a word is being composed no handler on the page sees that Enter
 // (the input method still gets it). keyCode 229 is what some browsers report during composition instead.
 window.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.stopImmediatePropagation(); }, true);
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
-    e.preventDefault();
-    const d = $('#palette'); if (d?.open) d.close(); else openPalette();
-  }
-});
 const fileCache = new Map();
 async function projectFiles(pid) {
   const hit = fileCache.get(pid);
@@ -849,7 +844,7 @@ function paletteMessages(q) {
     if (seq !== palMsgSeq || !$('#palette')?.open || $('#palInput').value.trim() !== q || r.error) return;
     const items = (r.chats || []).map((c) => ({ group: 'Messages', cls: 'pal-msg', icon: csHitIcon(c.hits[0]), html: markSnippet(leadSnippet(c.hits[0])), label: c.hits[0].snippet,
       hint: `${c.title} · ${c.project}`, run: () => openChatAt(c.id, c.hits[0].i, q) }));
-    items.push({ group: 'Messages', cls: 'pal-more', icon: '🔎', label: items.length ? 'Every match, with filters' : 'No messages match: search with filters', hint: 'Ctrl+Shift+F', run: () => openChatSearch(q) });
+    items.push({ group: 'Messages', cls: 'pal-more', icon: '🔎', label: items.length ? 'Every match, with filters' : 'No messages match: search with filters', hint: keyLabel('chatsearch'), run: () => openChatSearch(q) });
     PAL.msgs = { q, items };
     drawPalette({ keep: true });
   }, 180);
@@ -1073,13 +1068,6 @@ function openChatSearch(q = '') {
   $('#csInput', d).focus(); $('#csInput', d).select();
   runChatSearch();
 }
-document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
-    e.preventDefault();
-    const d = $('#chatFind');
-    if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); }
-  }
-});
 
 // ---------- attached images: 📷, paste or drop; downscaled in the browser ----------
 function downscale(file, max = 1568) {
@@ -9333,13 +9321,8 @@ window.ohDesktop?.on?.((ev) => {
   if (ev.type === 'find' && FIND.scope?.kind === 'desk' && FIND.scope.sid === ev.sid) { findCount(ev.of ? `${ev.at} of ${ev.of}` : 'No matches'); FIND.bar?.classList.toggle('none', !ev.of); }
   if (ev.type === 'find-open') { const a = PA.list.find((x) => x.st.dsk?.sid === ev.sid); if (a) { PA.focus = a; AREA = a; WP.chatFocus = false; paneMarkAreas(); findOpen(); } }
 });
-// Ctrl+F (caught first, so a terminal or a box with its own find doesn't take it); Settings keeps its own.
-document.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'f' || e.isComposing) return;
-  if (settingsOpen() || document.querySelector('dialog[open]')) return;
-  if (FIND.bar?.contains(e.target)) { e.preventDefault(); $('.fb-q', FIND.bar).select(); return; }
-  if (findOpen()) { e.preventDefault(); e.stopPropagation(); }
-}, true);
+// Find in the tab (Ctrl+F unless changed) runs from the shortcut table (KEY_RUN.find), caught first so a terminal or a
+// box with its own find doesn't take it; Settings keeps its own Ctrl+F.
 // A click elsewhere moves on: the bar closes when its tab is no longer the one you use.
 document.addEventListener('pointerdown', (e) => {
   if (!FIND.bar || FIND.bar.contains(e.target)) return;
@@ -9490,18 +9473,119 @@ async function wsShowEntry(e) {
   }
   if (e.kind === 'file') { const f = paneFiles(c).find((x) => x.id === e.id); if (f) openFileInPane(c, f); }
 }
-// The keys: only while focus is on QuorX itself (a real browser tab gets its own keys in the desktop app, the terminal
-// keeps Ctrl+W and friends), and not over another window of the app (Settings may step back and forward).
+// ---------- keyboard shortcuts: one table (public/keymap.js) ----------
+// Every changeable shortcut runs from here, by its id in the table; Settings → Shortcuts changes the keys (saved in
+// settings.keys, the mic's in micKey). Only while focus is on QuorX itself: a real browser tab gets its own keys in
+// the desktop app, the terminal keeps Ctrl+W and friends, and another window of the app (a dialog) keeps its keys.
+// Settings may step back and forward. run() returns false when there was nothing to do, so the key does what it
+// normally would (Ctrl+W with no chat tab, Ctrl+3 with two tabs).
+const keyMap = () => bindings(G.settings || {});
+const keyLabel = (id) => comboText(keyMap().get(id) || '');
+const keyHint = (id) => { const k = keyLabel(id); return k ? `${k} · ` : ''; };
+const wtJump = (n) => { const id = n === 9 ? WT.tabs.at(-1) : WT.tabs[n - 1]; if (!id) return false; if (id !== curId()) showChat(id); return true; };
+const KEY_RUN = {
+  palette: { anywhere: true, run: () => { const d = $('#palette'); if (d?.open) d.close(); else openPalette(); } },
+  chatsearch: { anywhere: true, run: () => { const d = $('#chatFind'); if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); } } },
+  // Caught before anything else on the page (a terminal, an editor with its own find); no dialog, Settings included.
+  find: { capture: true, run: (e) => {
+    if (settingsOpen() || document.querySelector('dialog[open]')) return false;
+    if (FIND.bar?.contains(e.target)) { $('.fb-q', FIND.bar).select(); return true; }
+    if (!findOpen()) return false;
+    e.stopPropagation(); return true;
+  } },
+  'tab.next': { run: () => { const id = WS.cycleTab(WT.tabs, curId(), 1); if (id && id !== curId()) showChat(id); } },
+  'tab.prev': { run: () => { const id = WS.cycleTab(WT.tabs, curId(), -1); if (id && id !== curId()) showChat(id); } },
+  'tab.close': { run: () => (curId() && WT.tabs.includes(curId()) ? (wtClose(curId()), true) : false) },
+  'tab.reopen': { run: () => { wsReopen(); } },
+  'nav.back': { inSettings: true, run: () => { wsStep(-1); } },
+  'nav.forward': { inSettings: true, run: () => { wsStep(1); } },
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.${i + 1}`, { run: () => wtJump(i + 1) }])),
+};
+// The few that must be caught before the page's own boxes see the key (find) run in the capture phase.
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented || inTerminal(e.target) || e.isComposing) return;
-  const ctrl = e.ctrlKey || e.metaKey, k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const other = [...document.querySelectorAll('dialog[open]')].some((d) => d.id !== 'settings');
-  if (e.altKey && !ctrl && !e.shiftKey && (k === 'ArrowLeft' || k === 'ArrowRight')) { if (other) return; e.preventDefault(); return wsStep(k === 'ArrowLeft' ? -1 : 1); }
-  if (!ctrl || e.altKey || other || settingsOpen()) return;
-  if (k === 'Tab') { e.preventDefault(); const id = WS.cycleTab(WT.tabs, curId(), e.shiftKey ? -1 : 1); if (id && id !== curId()) showChat(id); return; }
-  if (k === 'w' && !e.shiftKey && curId() && WT.tabs.includes(curId())) { e.preventDefault(); return wtClose(curId()); }
-  if (k === 't' && e.shiftKey) { e.preventDefault(); return wsReopen(); }
+  if (e.isComposing || e.target.closest?.('.kc-chip')) return;
+  const id = actionFor(keyCombo(e), keyMap()), a = id && KEY_RUN[id];
+  if (!a?.capture) return;
+  if (a.run(e) !== false) e.preventDefault();
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.isComposing || e.target.closest?.('.kc-chip')) return;
+  const id = actionFor(keyCombo(e), keyMap()), a = id && KEY_RUN[id];
+  if (!a || a.capture) return;
+  if (!a.anywhere) {
+    if (inTerminal(e.target)) return;
+    const other = [...document.querySelectorAll('dialog[open]')].some((d) => d.id !== 'settings');
+    if (other || (settingsOpen() && !a.inSettings)) return;
+  }
+  if (a.run() === false) return;
+  e.preventDefault();
 });
+// Tips that name a key say the one you picked.
+function applyKeyTitles() {
+  const t = (sel, words, id) => { const el = $(sel); if (!el) return; const k = keyLabel(id); const v = k ? `${words} (${k})` : words; if (el.dataset.ohTitle != null) el.dataset.ohTitle = v; else el.title = v; };
+  t('#paletteBtn', 'Search chats, commands, settings and files', 'palette');
+  t('#wsBack', 'Back, or the mouse\'s back button', 'nav.back');
+  t('#wsFwd', 'Forward, or the mouse\'s forward button', 'nav.forward');
+  t('#wtMore', 'All open chats, and reopen closed tabs', 'tab.reopen');
+}
+// ⚙ Settings → Shortcuts: the table as a list with search and groups (listFilter), each changeable key a chip.
+// Click a chip and press the new keys: Esc leaves it, Backspace takes the key away, a key another shortcut has is
+// refused (saying which), and a key Windows or the browser already uses saves with a warning. ↺ puts one back;
+// Reset all puts every one back. Like the rest of Settings, it counts once you Save (S is the draft).
+const kcKeys = (combo) => (combo ? comboParts(combo).map((x) => (/^(then|or)$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join('') : '<span class="kc-none">No key</span>');
+function drawShortcuts(S, mark) {
+  const list = $('#kcList'); if (!list) return;
+  const warnFor = {};
+  // The filter reads the rows it is given, so it is set up again after each redraw (it keeps the words and group).
+  const filter = () => listFilter($('.kc-filter', list.closest('.st-card') || list.parentElement), { key: 'shortcuts', rows: () => list.querySelectorAll('.kc-row'), segLabel: (v) => KEY_GROUPS[v] || v, segOrder: Object.keys(KEY_GROUPS), placeholder: 'Search shortcuts: an action or a key', label: 'Group' });
+  const draw = () => {
+    const m = bindings(S), cl = conflicts(m);
+    list.innerHTML = SHORTCUTS.map((d) => {
+      const now = m.get(d.id), changed = !d.fixed && now !== d.keys, other = cl.get(d.id);
+      const warn = other ? `Also the key of “${other.map((x) => x.label).join('”, “')}”: pick another for one of them.` : warnFor[d.id] || '';
+      return `<div class="st-row kc-row ${changed ? 'changed' : ''}" data-id="${esc(d.id)}" data-lf-seg="${esc(d.group)}" data-lf-text="${esc(`${d.label} ${d.help || ''} ${comboText(now)} ${now} ${KEY_GROUPS[d.group] || ''}`.toLowerCase())}">
+        <span class="kc-what"><span class="st-row-label">${esc(d.label)}</span>${d.help ? `<span class="st-row-help">${esc(d.help)}</span>` : ''}</span>
+        <span class="kc-keys">${d.fixed ? `<span class="kc-fixed" title="This key can't be changed">${kcKeys(now)}</span>` : `<button type="button" class="kc-chip" data-id="${esc(d.id)}" title="Click, then press the new keys" aria-label="${esc(d.label)}: ${esc(comboText(now) || 'no key')}. Click to change">${kcKeys(now)}</button>`}${changed ? `<button type="button" class="kc-reset" data-id="${esc(d.id)}" title="Back to ${esc(comboText(d.keys))}" aria-label="Back to ${esc(comboText(d.keys))}">↺</button>` : ''}</span>
+        <span class="kc-warn" role="status"${warn ? '' : ' hidden'}>${esc(warn)}</span>
+      </div>`;
+    }).join('');
+    for (const b of list.querySelectorAll('.kc-chip')) wireChip(b);
+    for (const b of list.querySelectorAll('.kc-reset')) b.onclick = () => { set(b.dataset.id, null); };
+    filter();
+  };
+  // null: back to the default; '': no key; else the new keys.
+  const set = (id, combo, warn = '') => {
+    const d = keyDef.get(id);
+    if (warn) warnFor[id] = warn; else delete warnFor[id];
+    if (d.setting) S[d.setting] = combo == null ? d.keys : combo;
+    else { S.keys = { ...(S.keys || {}) }; if (combo == null || combo === d.keys) delete S.keys[id]; else S.keys[id] = combo; }
+    ST.changed.add(d.setting || 'keys'); mark(); draw();
+    requestAnimationFrame(() => list.querySelector(`.kc-chip[data-id="${CSS.escape(id)}"]`)?.focus());
+  };
+  const wireChip = (b) => {
+    const id = b.dataset.id, row = b.closest('.kc-row'), warn = $('.kc-warn', row);
+    const say = (t) => { warn.textContent = t; warn.hidden = !t; };
+    const stop = () => { b.classList.remove('kc-rec'); b.innerHTML = kcKeys(bindings(S).get(id)); };
+    b.onclick = () => { b.classList.add('kc-rec'); b.textContent = 'Press keys…'; say(''); };
+    b.onblur = () => { if (b.classList.contains('kc-rec')) stop(); };
+    b.onkeydown = (e) => {
+      if (!b.classList.contains('kc-rec')) return;
+      if (e.key === 'Tab') return stop();
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === 'Escape') return stop();
+      if ((e.key === 'Backspace' || e.key === 'Delete') && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) return set(id, '');
+      const combo = normCombo(keyCombo(e)); if (!combo) return; // Ctrl, Shift or Alt on its own: wait for the key
+      const ok = checkCombo(combo);
+      if (!ok.ok) return say(ok.error);
+      const other = clashWith(id, combo, bindings(S));
+      if (other) return say(`${comboText(combo)} is already “${other.label}”${other.fixed ? ', which can\'t be changed' : ': change that one first'}.`);
+      set(id, combo, ok.warn || '');
+    };
+  };
+  draw();
+  const ra = $('[data-act="keysResetAll"]', list.closest('.st-card') || document);
+  if (ra) ra.onclick = () => { S.keys = {}; S.micKey = MIC_KEY; for (const k of Object.keys(warnFor)) delete warnFor[k]; ST.changed.add('keys'); mark(); draw(); };
+}
 // The mouse's side buttons. In the desktop app they come from the window (app-command), which sends them to a real
 // browser tab when the pointer or focus is in one and here otherwise; in a browser the page sees them itself.
 document.addEventListener('mouseup', (e) => {
@@ -9598,7 +9682,7 @@ function wtMenu(e, id) {
     ['Close other tabs', () => { for (const x of WT.tabs.filter((y) => y !== id)) wtClose(x, { quiet: true }); if (curId() !== id) showChat(id); wsChrome(); }, { disabled: WT.tabs.length < 2 }],
     ['Close tabs to the right', () => { for (const x of WT.tabs.slice(WT.tabs.indexOf(id) + 1)) wtClose(x, { quiet: true }); wsChrome(); }, { disabled: WT.tabs.indexOf(id) === WT.tabs.length - 1 }],
     null,
-    [last ? `Reopen closed tab (${closedLabel(last)})` : 'Reopen closed tab', () => wsReopen(), { disabled: !last, title: 'Ctrl+Shift+T' }],
+    [last ? `Reopen closed tab (${closedLabel(last)})` : 'Reopen closed tab', () => wsReopen(), { disabled: !last, title: keyLabel('tab.reopen') }],
   ]);
 }
 // … : every open chat (search and a filter by state once there are many), then what was closed, newest first.
@@ -10739,10 +10823,9 @@ function settingsPanels(S) {
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
-    shortcuts: ['Shortcuts', 'Keys that work everywhere in QuorX.', [stCard('Keyboard', '', `<div class="sx-keys">${[['Ctrl + K', 'Search chats, commands, settings and files'], ['Enter', 'Send'], ['Shift + Enter', 'New line'], ['@', 'Add files, chats or projects as context'], ['/', 'Commands (/usage, /model, /strict, …)'], ['↑ ↓ then Enter or Tab', 'Pick a suggestion'], ['Esc', 'Close a dialog or suggestions'], [S.micKey || MIC_KEY, (S.micMode || MIC_MODE) === 'hold' ? 'Hold to speak into the message box' : 'Start or stop the mic']].map(([k, v]) => `<div class="st-row sx-key"><span class="sx-key-combo">${k.replace(/\+(?=\S)/g, ' + ').split(' ').map((x) => (/^[+]$|^then$|^or$/.test(x) ? x : `<kbd>${esc(x)}</kbd>`)).join(' ')}</span><span class="sx-key-what st-row-label">${v}</span></div>`).join('')}</div>`),
-      stCard('🎤 Mic', 'Speak instead of typing: what you say is typed into the message box of the chat you are in.',
-        stRow('Mic key', 'Click the box, then press the keys you want (Esc leaves it as it is).', `<input type="text" class="st-input st-keycap" data-bind="micKey" value="${esc(S.micKey || MIC_KEY)}" readonly aria-label="Mic key: click, then press the keys">`)
-        + stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || MIC_MODE)))]],
+    shortcuts: ['Shortcuts', 'Every key QuorX knows, in one list. Click a key to change it.', [stCard('Keyboard', 'Click a key, then press the new one. Esc leaves it as it was, Backspace takes the key away. A key another shortcut already has is refused. Changes count once you Save.', '<div class="kc-filter"></div><div class="kc-list" id="kcList"></div><div class="kc-foot"><button type="button" class="st-btn ghost sm" data-act="keysResetAll">Reset all shortcuts</button></div>'),
+      stCard('🎤 Mic', 'Speak instead of typing: what you say is typed into the message box of the chat you are in. Its key is in the list above.',
+        stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || MIC_MODE)))]],
     about: ['About', 'This copy of QuorX, where it keeps your data, and the desktop app.', [
       `<section class="st-card"><div class="sx-identity"><img src="brand/quorx-192.png" alt=""><div><h4>QuorX <code id="stVersion" class="sx-ver">v${esc(G.cfg?.version || '?')}</code></h4><p>An open-source AI agent with a quorum of models behind every call.</p></div></div>`
         + stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<span class="sx-status ok">v${esc(G.cfg?.version || '?')}</span>`)
@@ -11280,6 +11363,7 @@ function wireSettings() {
   drawExtPanel();
   drawEmbedPick();
   drawDesktopSettings();
+  drawShortcuts(S, mark);
   drawBackup({ postJ, esc, uiConfirm, store: STORE });
   setRulesText(G.storageRules);
   if (ST.cat === 'storage') drawStorage(storageHelpers()); else refreshStorageBadge(storageHelpers());
@@ -11324,6 +11408,7 @@ function resetCategory() {
   if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
   if (ST.cat === 'budget') Object.assign(S, { chatBudget: 10, budgetGrace: d.budgetGrace });
   if (ST.cat === 'skills') S.skillsOff = [];
+  if (ST.cat === 'shortcuts') { S.keys = {}; S.micKey = MIC_KEY; S.micMode = MIC_MODE; }
   if (ST.cat === 'video') for (const k of Object.keys(d)) if (/^video[A-Z]/.test(k)) S[k] = d[k];
   if (ST.cat === 'safety') {
     S.safety = { ...(d.safety || {}) }; S.debugger = 'earned';
@@ -11416,7 +11501,7 @@ function saveSettings() {
     postJ('/api/news/remote', { on: newsRemote }).then(() => { NEWS.data = null; if (NEWS.open) openNews(NEWS.tab); else newsLoad(); }).catch(() => {});
   }
   G.settings = S;
-  savePrefs(); applyTheme(); applyUi();
+  savePrefs(); applyTheme(); applyUi(); applyKeyTitles();
   renderToolbars(); renderPanes(); renderSpend(); renderSidebar(); // the sidebar folds idle chats by a setting
   // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
   // check work from here), and the footer says it was saved.
@@ -11450,7 +11535,7 @@ function settingChanged(e) {
   if (e.where === 'quorx') {
     if (e.key === 'theme') { G.theme = e.value === 'system' ? null : e.value; ST.themeAtOpen = G.theme; }
     else setPath(G.settings, e.key, e.value);
-    savePrefs(); applyTheme(); applyUi(); renderToolbars(); renderPanes(); renderSpend();
+    savePrefs(); applyTheme(); applyUi(); applyKeyTitles(); renderToolbars(); renderPanes(); renderSpend();
     if ($('#settings').open && ST.draft) { if (e.key === 'theme') ST.draft.theme = G.theme; else setPath(ST.draft, e.key, e.value); drawSettings(); }
   }
   if (e.where === 'mcp') loadMcp().then(() => { if ($('#settings').open && ST.draft) drawSettings(); });
@@ -12663,8 +12748,8 @@ const keyCombo = (e) => {
 };
 const micTarget = () => { const c = focused(); if (c?.el?.root?.isConnected) return c; return G.homeDraft?.el?.root?.isConnected ? G.homeDraft : null; };
 document.addEventListener('keydown', (e) => {
-  if (e.repeat || e.target.closest?.('.st-keycap') || G.settings?.tools?.listen?.on === false) return;
-  if (keyCombo(e) !== (G.settings.micKey || MIC_KEY)) return;
+  if (e.repeat || e.target.closest?.('.st-keycap, .kc-chip') || G.settings?.tools?.listen?.on === false) return;
+  if (!keyMap().get('mic') || normCombo(keyCombo(e)) !== keyMap().get('mic')) return;
   const c = micTarget(); if (!c) return;
   // It starts listening only while you're typing in that chat's message box (not in Settings or other fields); it stops from anywhere.
   if (!G.rec && !(e.target.closest?.('.composer .input') && c.el.root.contains(e.target))) return;
@@ -12673,7 +12758,7 @@ document.addEventListener('keydown', (e) => {
 }, true);
 document.addEventListener('keyup', (e) => {
   if (!micHold() || !G.micHeld) return;
-  const keys = (G.settings.micKey || MIC_KEY).split('+'), k = keyCombo({ ...e, key: e.key, code: e.code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }) || ({ Control: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' })[e.key];
+  const keys = (keyMap().get('mic') || MIC_KEY).split('+'), k = keyCombo({ ...e, key: e.key, code: e.code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }) || ({ Control: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' })[e.key];
   if (!keys.includes(k)) return;
   G.micHeld = false; G.rec?.stop();
 }, true);
@@ -12772,7 +12857,7 @@ async function boot() {
   applySizes(); applyTheme();
   const start = G.settings.ui?.sidebarStart || 'remember';
   if (start !== 'remember') G.sideHidden = start === 'rail';
-  applyUi();
+  applyUi(); applyKeyTitles();
   // Starter templates for the start screen's "Start from a template" cards (templates/ on the server).
   fetch('/api/starters').then((r) => r.json()).then((list) => { G.starters = Array.isArray(list) ? list : []; if (!G.panes.length && G.starters.length) renderPanes(); }).catch(() => {});
 
