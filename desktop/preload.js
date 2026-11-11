@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   nav: (sid, op) => call('nav', sid, op),
   close: (sid) => call('close', sid),
   find: (sid, op, text, opts) => call('find', sid, op, text, opts),
+  // Pop-out windows: open one, list them, a pop-out's state and Dock back, and a pop-out asking the main window.
+  popout: (op, a, b) => call('popout', op, a, b),
   snapshot: (sid) => call('snapshot', sid),
   sound: (op, arg) => call('sound', op, arg),
   tabs: (op, sid) => call('tabs', op, sid),

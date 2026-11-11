@@ -26,13 +26,14 @@ All calls return a promise.
 |---|---|---|---|
 | `available` | Always `true` (a value, not a call): the page is inside the desktop app | | `true` |
 | `open` | Opens a page in one of your browser tabs, making the tab if needed | `sid`, `url` (http or https only) | `true` |
-| `bounds` | Places a tab over the box the page drew for it (in the page's pixels) | `sid`, `{ x, y, width, height }` | `true`, or `false` for no such tab |
+| `bounds` | Places a tab over the box the page drew for it (in the page's pixels); from a pop-out window, the tab's view moves into that window first (its page isn't loaded again) | `sid`, `{ x, y, width, height }` | `true`, or `false` for no such tab |
 | `show` | Shows one tab and hides every other | `sid` (or nothing to hide all) | `true` |
-| `showSet` | Shows several tabs at once (one per pane area) and hides the rest | `[sid, ...]` | `true` |
+| `showSet` | Shows several tabs at once (one per pane area) and hides the rest of the calling window's tabs (a pop-out's tabs are its own) | `[sid, ...]` | `true` |
 | `hideAll` | Hides every tab | | `true` |
 | `nav` | Back, forward, reload, stop or DevTools for a tab | `sid`, `'back' \| 'forward' \| 'reload' \| 'stop' \| 'devtools'` | `true`, or `false` for no such tab |
 | `close` | Closes a tab (or forgets a sleeping one) | `sid` | `true` if there was one |
 | `find` | Ctrl+F in a tab's page: finds the text (the next or previous match), or stops and clears the marks; the count arrives as a `find` event | `sid`, `'find'`, text, `{ forward, findNext }` · `sid`, `'stop'` | `true`, or `false` for no such tab |
+| `popout` | Pop-out windows: a group, a tab or a chat in a light QuorX window of its own. `'open'`, `{ id, url, bounds, title }` opens one (the app's own address only; the box is kept on a screen that is there); `'list'` gives the ids open; from a pop-out, `'state'`, `id`, state keeps what it shows (handed back when it closes), `'dock'`, `id` closes it (Dock back), `'tell'`, `{ type: 'show-chat', id }` brings the main window forward with that message; `'focus'`, `id` brings a pop-out forward | per op: `true` / `false`, or the ids |
 | `snapshot` | A picture of a tab on screen, to stand in while something covers it | `sid` | a PNG data URL, or `null` |
 | `sound` | Volume and mute for every tab, the agent's tabs, or one tab | `'set'`, `{ volume, muted, agentMuted }` · `'tab'`, `{ sid, muted }` · nothing to read | the sound settings |
 | `tabs` | The Running list: every tab with its page and sound, or close one | nothing to list · `'close'`, `sid` | `[{ sid, agent, chatId, url, title, audible, muted, shown, asleep? }]` |
@@ -67,6 +68,8 @@ Sent on the `oh-desktop` channel; each has a `type`.
 | `zoom` | A tab's own zoom changed (`sid`, `factor`) |
 | `audio` | A tab started or stopped making sound (`sid`, `audible`) |
 | `find` | How many matches `find` found in a tab's page, and which one is current (`sid`, `at`, `of`) |
+| `popout-closed` | A pop-out window closed (✕ or Dock back): its last state and its box, so the main window docks its tabs back and remembers where it was (`id`, `state`, `bounds`). Its real tabs are back in the main window, hidden |
+| `popout-msg` | A pop-out asked the main window for something (`msg`, e.g. `{ type: 'show-chat', id }`) |
 | `find-open` | Ctrl+F was pressed inside a tab: the page opens its find bar for that tab's group (`sid`) |
 | `download` | A tab's download started, moved on or ended (`sid`, `state`, `name`, `file`, `received`, `total`) |
 | `sleep` | A hidden tab went to sleep to save memory (`sid`); it wakes by itself when placed, shown or reloaded |
@@ -84,7 +87,7 @@ Sent on the `oh-desktop` channel; each has a `type`.
 
 A replacement shell needs, roughly in order of effort:
 
-1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `find`,
+1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `find`, `popout`,
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
