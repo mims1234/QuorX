@@ -10973,6 +10973,83 @@ function termApply(t, e) {
 // or one of your terminals (only what was run from it).
 const termShows = (t, j, f = t.filter) => (f === 'all' ? true : f === 'agent' ? j.source === 'agent' && !j.server : f.startsWith('srv:') ? j.server === f.slice(4) : j.tab === f)
   && (j.status === 'running' || j.at >= (t.clearedBy?.[f] || 0));
+// ---------- ↪ send to chat: one way into a chat's next message, from anywhere ----------
+// The terminal, a reply's ❝ Quote, and later every other tab (files, the browser) hand text to a chat through here, so
+// they all land the same way. Two ways in:
+//   quote: true — the text goes into the message box as a Markdown quote (> …) after what is typed there, ready to
+//                 answer under it; the box gets the focus.
+//   otherwise   — it rides with the next message as a chip, like an attached file (`title` names it; `type` says what
+//                 it is), the way the terminal's ↪ always sent its output.
+// → true when it landed.
+function sendToChat(c, text, { quote = false, title = '', type = 'term', from, noChat = 'Open a chat first: this goes with your next message there.' } = {}) {
+  if (!c?.el) { uiAlert(noChat); return false; }
+  const t = String(text ?? '');
+  if (!t.trim()) { flashTip(from || document.body, 'Nothing to send yet'); return false; }
+  if (quote) {
+    const ta = $('.input', c.el.root);
+    if (!ta) return false;
+    const q = t.trim().split(/\r?\n/).map((l) => (l.trim() ? `> ${l}` : '>')).join('\n');
+    ta.value = `${ta.value.trim() ? ta.value.replace(/\s*$/, '\n\n') : ''}${q}\n\n`;
+    ta.dispatchEvent(new Event('input', { bubbles: true })); // the box grows and the draft is kept, as when typing
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    return true;
+  }
+  c.ctx.push({ type, id: `${type}-${Date.now().toString(36)}`, title, text: t.slice(-20000) });
+  renderAttachments(c);
+  flashTip(from || document.body, 'Added to your next message');
+  return true;
+}
+// ---------- ❝ Quote: select text in a reply, put it in that chat's message box as a quote ----------
+// One listener for the whole page (mouse or keyboard selection). The button shows over the selection while it lies
+// inside one reply; it goes into the box of the chat that reply belongs to (with two chats side by side, the right one).
+// With the button showing, Q does the same from the keyboard.
+const QUOTE = { btn: null, chat: null, text: '' };
+function quoteTarget() {
+  const sel = window.getSelection();
+  const text = sel && sel.rangeCount ? sel.toString().trim() : '';
+  if (!text) return null;
+  const inReply = (n) => (n?.nodeType === 1 ? n : n?.parentElement)?.closest?.('.msg.bot');
+  const a = inReply(sel.anchorNode), f = inReply(sel.focusNode);
+  if (!a || a !== f) return null; // across two messages, or outside the replies
+  const c = [...G.open.values()].find((x) => x.el?.root?.contains(a));
+  return c ? { c, text, rect: sel.getRangeAt(0).getBoundingClientRect() } : null;
+}
+function hideQuote() { if (QUOTE.btn) QUOTE.btn.hidden = true; QUOTE.chat = null; QUOTE.text = ''; }
+function checkQuote() {
+  const t = quoteTarget();
+  if (!t || (!t.rect.width && !t.rect.height)) return hideQuote();
+  if (!QUOTE.btn) {
+    const b = QUOTE.btn = document.createElement('button');
+    b.type = 'button'; b.className = 'quote-pop'; b.textContent = '❝ Quote';
+    b.title = 'Put the selected text in your message as a quote (Q)';
+    b.addEventListener('mousedown', (e) => e.preventDefault()); // the selection stays
+    b.onclick = doQuote;
+    document.body.appendChild(b);
+  }
+  Object.assign(QUOTE, { chat: t.c, text: t.text });
+  const b = QUOTE.btn; b.hidden = false;
+  const w = b.offsetWidth || 80, h = b.offsetHeight || 28;
+  const above = t.rect.top - h - 8 >= 4;
+  b.style.left = `${Math.round(Math.min(Math.max(8, t.rect.left + t.rect.width / 2 - w / 2), innerWidth - w - 8))}px`;
+  b.style.top = `${Math.round(above ? t.rect.top - h - 8 : Math.min(innerHeight - h - 4, t.rect.bottom + 8))}px`;
+}
+function doQuote() {
+  const { chat: c, text } = QUOTE;
+  hideQuote();
+  if (!c || !text) return;
+  window.getSelection()?.removeAllRanges();
+  sendToChat(c, text, { quote: true });
+}
+document.addEventListener('mouseup', (e) => { if (e.target !== QUOTE.btn) setTimeout(checkQuote, 0); });
+document.addEventListener('keyup', (e) => { if (e.key === 'Shift' || e.shiftKey || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a')) setTimeout(checkQuote, 0); });
+document.addEventListener('keydown', (e) => {
+  if (!QUOTE.btn || QUOTE.btn.hidden) return;
+  if (e.key === 'Escape') return hideQuote();
+  const ed = document.activeElement;
+  if (e.key.toLowerCase() === 'q' && !e.ctrlKey && !e.metaKey && !e.altKey && !(ed && (ed.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ed.tagName)))) { e.preventDefault(); doQuote(); }
+});
+document.addEventListener('selectionchange', () => { if (QUOTE.btn && !QUOTE.btn.hidden && !window.getSelection()?.toString().trim()) hideQuote(); });
+document.addEventListener('scroll', () => { if (QUOTE.btn && !QUOTE.btn.hidden) checkQuote(); }, true);
 // ---------- ↪ terminal output into the chat ----------
 // A command and its output (or what your own terminal shows) goes with your next message, as a chip like a file.
 function termJobText(j) {
@@ -10997,12 +11074,7 @@ function termScreenText(t, f) {
   return { title: `⌨ ${f === 'all' ? 'Activity' : f === 'agent' ? 'Agent' : f.startsWith('srv:') ? f.slice(4) : u?.name || 'Terminal'} (last ${jobs.length} command${jobs.length > 1 ? 's' : ''})`, text: jobs.map((j) => termJobText(j).text).join('\n\n') };
 }
 function termToChat(item, from) {
-  const c = focused();
-  if (!c?.el) return uiAlert('Open a chat first: the output goes with your next message there.');
-  if (!item?.text?.trim()) return flashTip(from || document.body, 'Nothing to send yet');
-  c.ctx.push({ type: 'term', id: `term-${Date.now().toString(36)}`, title: item.title, text: item.text.slice(-20000) });
-  renderAttachments(c);
-  flashTip(from || document.body, 'Added to your next message');
+  return sendToChat(focused(), item?.text, { title: item?.title, type: 'term', from, noChat: 'Open a chat first: the output goes with your next message there.' });
 }
 function termHead(t, j) {
   const chat = j.chatId && G.chats.find((x) => x.id === j.chatId);
