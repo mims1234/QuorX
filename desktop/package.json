@@ -37,6 +37,7 @@
       "tab-sleep.js",
       "keep-awake.js",
       "summon.js",
+      "popbox.js",
       "assets/**/*",
       "package.json"
     ],

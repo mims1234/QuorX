@@ -18,6 +18,7 @@ const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
 const { quitDialog } = require('./quit-prompt.js');
 const { POLL_MS: AWAKE_POLL_MS, keepAwakeOn, wantAwake, createAwake } = require('./keep-awake.js');
 const { SUMMON_DEFAULT, applySummon } = require('./summon.js');
+const { fitBox } = require('./popbox.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -140,7 +141,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
   // The page (re)loaded (Restart harness, Ctrl+R): it starts with no tabs of yours, so the ones it had are gone from
   // its tab strip but kept running unseen, sound and all. Closed, except one lent to an agent that may still be using it.
-  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg) closeTab(k); sleeping.clear(); });
+  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg && hostOf(t) === win) closeTab(k); sleeping.clear(); });
   // Zoom keys and Ctrl+wheel in the app go to the page, which knows what you're on: an artifact or a page preview
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
@@ -194,7 +195,9 @@ function createWindow() {
     if (act !== 'quit' && STORE && update.state === 'store-available' && update.version !== skippedUpdate) return askUpdateOnClose(act);
     if (act === 'quit') confirmQuit(); else if (act === 'tray') win.hide(); else askOnClose();
   });
-  win.on('closed', () => { win = null; tabs.clear(); });
+  win.on('closed', () => { win = null; tabs.clear(); for (const w of popWins()) w.destroy(); });
+  win.on('hide', hidePops);
+  win.on('show', () => { if (!compact) showPops(); });
 }
 // What ✕ does: 'ask' (the notice, until you tick "Don't show this again"), 'tray' or 'quit'.
 const closeAction = () => (['tray', 'quit'].includes(readConfig().onClose) ? readConfig().onClose : 'ask');
@@ -296,7 +299,54 @@ function browseSession() {
   return userSession;
 }
 function uniquePath(p) { if (!fs.existsSync(p)) return p; const { dir, name, ext } = path.parse(p); for (let i = 1; ; i++) { const q = path.join(dir, `${name} (${i})${ext}`); if (!fs.existsSync(q)) return q; } }
-function send(ev) { if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev); }
+// Events go to the main window; a tab's own events (its address, title, sound…) go to the pop-out windows too, as a
+// tab can be placed in one of them.
+function send(ev) {
+  if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev);
+  if (ev?.sid) for (const p of popouts.values()) if (!p.win.isDestroyed()) p.win.webContents.send('oh-desktop', ev);
+}
+// ---------- pop-out windows: a group, a tab or a chat in a window of its own ----------
+// A pop-out is a light QuorX window (the same page, told what it shows), so both windows share one app: chats, replies,
+// approvals and Stop go through the server as in the main window. A real browser tab belongs to the window that places
+// it last: placing it from another window moves its view there (the page in it doesn't load again). A pop-out closing
+// puts its tabs back in the main window (hidden) and tells the main window, which docks its group back.
+const popouts = new Map(); // id → { win, state, key }
+let caller = null; // the window whose page made the current call
+const hostOf = (t) => (t.host && !t.host.isDestroyed() ? t.host : win);
+function moveTab(t, w, sid = '') {
+  const h = hostOf(t);
+  if (!w || w.isDestroyed() || h === w) return;
+  try { h?.contentView.removeChildView(t.view); if (t.cover) h?.contentView.removeChildView(t.cover); } catch { /* already gone */ }
+  w.contentView.addChildView(t.view); if (t.cover) w.contentView.addChildView(t.cover);
+  t.host = w; t.viewRect = null; t.bounds = null;
+  vlog('move', sid, w === win ? 'main' : 'pop-out');
+}
+const popWins = () => [...popouts.values()].map((p) => p.win).filter((w) => !w.isDestroyed());
+function hidePops() { for (const w of popWins()) w.hide(); }
+function showPops() { for (const w of popWins()) w.showInactive(); }
+function openPopout({ id, url, bounds, title } = {}) {
+  id = String(id || ''); if (!/^[\w-]{1,40}$/.test(id) || popouts.has(id)) return false;
+  let ok = false; try { ok = [origin, appOrigin()].includes(new URL(url).origin); } catch { /* not a URL */ }
+  if (!ok || !win || win.isDestroyed()) return false;
+  const box = fitBox(bounds, screen.getAllDisplays().map((d) => d.workArea), win.getBounds());
+  const pw = new BrowserWindow({ ...box, minWidth: 360, minHeight: 260, show: false, backgroundColor: '#070908', title: String(title || 'QuorX').slice(0, 120), icon: iconImage(64), autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  popouts.set(id, { win: pw, state: null });
+  pw.once('ready-to-show', () => { if (!compact && win?.isVisible()) pw.show(); });
+  pw.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) pw.webContents.setZoomFactor(z); });
+  pw.webContents.on('will-navigate', (e, u) => { let same = false; try { same = [origin, appOrigin()].includes(new URL(u).origin); } catch { /* not a URL */ } if (same) return; e.preventDefault(); if (/^(https?|mailto):/i.test(u)) shell.openExternal(offAppHost(u)); });
+  pw.webContents.setWindowOpenHandler(({ url: u }) => { if (/^(https?|mailto):/i.test(u)) shell.openExternal(offAppHost(u)); return { action: 'deny' }; });
+  pw.on('close', () => {
+    // Its real tabs go back to the main window, hidden, before the window goes.
+    for (const [k, t] of tabs) if (t.host === pw) { if (win && !win.isDestroyed()) { moveTab(t, win, k); setShown(k, t, false, ' (dock)'); } }
+    const rec = popouts.get(id);
+    if (!quitting) send({ type: 'popout-closed', id, state: rec?.state || null, bounds: pw.isMinimized() ? pw.getNormalBounds() : pw.getBounds() });
+  });
+  pw.on('closed', () => popouts.delete(id));
+  pw.loadURL(url);
+  return true;
+}
+
 // The real browser tab the mouse is over, if any (views are placed in the window's content coordinates).
 function tabUnderPointer() {
   if (!win || win.isDestroyed()) return null;
@@ -315,8 +365,9 @@ function tabFor(sid) {
   const view = new WebContentsView({ webPreferences: { session: browseSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true } });
   view.setBackgroundColor('#ffffff');
   view.setVisible(false);
-  win.contentView.addChildView(view);
-  t = { view, shown: false, hiddenAt: Date.now() };
+  const host = caller && !caller.isDestroyed() ? caller : win;
+  host.contentView.addChildView(view);
+  t = { view, shown: false, hiddenAt: Date.now(), host };
   tabs.set(sid, t);
   wireView(sid, view);
   applySound(t);
@@ -389,11 +440,11 @@ function wake(sid) {
     const cw = t.cover.webContents, still = JSON.stringify(info.still);
     cw.loadURL('data:text/html,<html style="margin:0;background:%23fff;overflow:hidden"><body style="margin:0"></body></html>')
       .then(() => cw.executeJavaScript(`{ const i = new Image(); i.alt = ''; i.style.cssText = 'display:block;width:100%'; i.src = ${still}; document.body.appendChild(i); }`, true)).catch(() => {});
-    win.contentView.addChildView(t.cover);
+    hostOf(t).contentView.addChildView(t.cover);
     t.cover.setVisible(false);
   }
   if (info.bounds) { t.bounds = info.bounds; t.cover?.setBounds(info.bounds); placeView(t); }
-  const uncover = () => { if (!t.cover || tabs.get(sid) !== t) return; win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; };
+  const uncover = () => { if (!t.cover || tabs.get(sid) !== t) return; hostOf(t)?.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; };
   wc.once('did-finish-load', async () => {
     if (info.zoom && info.zoom !== 1) wc.setZoomFactor(info.zoom);
     if (info.scroll && (info.scroll[0] || info.scroll[1])) await within(wc.executeJavaScript(`scrollTo(${Number(info.scroll[0]) || 0}, ${Number(info.scroll[1]) || 0})`, true), 800, 'the scroll').catch(() => {});
@@ -496,13 +547,28 @@ function zoomKey(input) {
 }
 // Only the app's own page may drive tabs.
 const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === appOrigin(); } catch { return false; } };
-function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); return fn(...a); }); }
+function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); caller = BrowserWindow.fromWebContents(e.sender) || win; return fn(...a); }); }
+// What a pop-out window and the main window ask of each other (see "pop-out windows" above).
+handle('popout', (op, a, b) => {
+  if (op === 'open') return openPopout(a || {});
+  if (op === 'list') return [...popouts.keys()];
+  const rec = popouts.get(String(a || ''));
+  if (op === 'state') { if (rec) rec.state = b && typeof b === 'object' ? JSON.parse(JSON.stringify(b)) : null; return !!rec; }
+  if (op === 'dock') { if (rec && !rec.win.isDestroyed()) rec.win.close(); return !!rec; }
+  if (op === 'focus') { if (rec && !rec.win.isDestroyed()) { rec.win.show(); rec.win.focus(); } return !!rec; }
+  // A pop-out asks the main window for something (open a chat there): it comes to the front and is told.
+  if (op === 'tell') { showWindow(); send({ type: 'popout-msg', msg: a && typeof a === 'object' ? a : null }); return true; }
+  return false;
+});
 handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); sleeping.delete(sid); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
 handle('bounds', (sid, r) => {
   if (sleeping.has(sid)) { sleeping.get(sid).bounds = null; wake(sid); } // placed again: it is about to be seen
   const t = tabs.get(sid); if (!t) return false;
+  // Placed from another window (a pop-out, or back in the main one): the view moves there, its page as it is.
+  const w = caller && !caller.isDestroyed() ? caller : win;
+  moveTab(t, w, sid);
   // The page measures in its own pixels, which zooming QuorX scales; views are placed in the window's.
-  const z = win?.webContents.getZoomFactor() || 1;
+  const z = w?.webContents.getZoomFactor() || 1;
   const b = { x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.max(0, Math.round(r.width * z)), height: Math.max(0, Math.round(r.height * z)) };
   // The same place again (the page asks often): nothing to do, so the page isn't laid out again.
   if (t.bounds && t.bounds.x === b.x && t.bounds.y === b.y && t.bounds.width === b.width && t.bounds.height === b.height) { vlog('bounds skip', sid); return true; }
@@ -553,11 +619,12 @@ function placeView(t) {
 // Only views whose visibility changes are touched (setting it again on a shown view can make it flash).
 // A tab hidden is timed from then (tab-sleep.js); shown, it is awake for good until hidden again.
 function setShown(k, t, on, why = '') { vlog(on ? 'show' : `hide${why}`, k); t.shown = on; t.hiddenAt = on ? null : Date.now(); t.view.setVisible(on); t.cover?.setVisible(on); }
-handle('show', (sid) => { wake(sid); for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; setShown(k, t, on); } return true; });
+const mine = (t) => hostOf(t) === (caller && !caller.isDestroyed() ? caller : win);
+handle('show', (sid) => { wake(sid); for (const [k, t] of tabs) { if (!mine(t)) continue; const on = k === sid; if (t.shown === on) continue; setShown(k, t, on); } return true; });
 // Several tabs at once, one per area of a split pane (each placed in its own box): every other tab is hidden.
-handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const s of on) wake(s); for (const [k, t] of tabs) { const v = on.has(k); if (t.shown === v) continue; setShown(k, t, v); } return true; });
+handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const s of on) wake(s); for (const [k, t] of tabs) { if (!mine(t) && !on.has(k)) continue; const v = on.has(k); if (t.shown === v) continue; setShown(k, t, v); } return true; });
 // Hidden again even when we think it is (the page's safety net); only a tab that was shown starts its hidden time now.
-handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) setShown(k, t, false, ' (all)'); else { t.view.setVisible(false); t.cover?.setVisible(false); } } return true; });
+handle('hideAll', () => { for (const [k, t] of tabs) { if (!mine(t)) continue; if (t.shown) setShown(k, t, false, ' (all)'); else { t.view.setVisible(false); t.cover?.setVisible(false); } } return true; });
 handle('nav', (sid, op) => {
   if (sleeping.has(sid)) return op === 'reload' ? wake(sid) : false;
   const t = tabs.get(sid); if (!t) return false;
@@ -594,7 +661,8 @@ function closeTab(sid) {
   const asleep = sleeping.delete(sid);
   const t = tabs.get(sid); if (!t) return asleep;
   try { if (t.view.webContents.debugger.isAttached()) t.view.webContents.debugger.detach(); } catch { /* gone */ }
-  if (win && !win.isDestroyed()) { win.contentView.removeChildView(t.view); if (t.cover) win.contentView.removeChildView(t.cover); }
+  const h = hostOf(t);
+  if (h && !h.isDestroyed()) { h.contentView.removeChildView(t.view); if (t.cover) h.contentView.removeChildView(t.cover); }
   t.view.webContents.close(); t.cover?.webContents.close();
   tabs.delete(sid);
   return true;
@@ -919,6 +987,7 @@ function computerUse({ on, work, chatId } = {}) {
     if (was.max) win.maximize();
     if (was.full) win.setFullScreen(true);
     send({ type: 'compact', on: false });
+    showPops();
     return true;
   }
   const win32 = process.platform === 'win32';
@@ -941,6 +1010,7 @@ function computerUse({ on, work, chatId } = {}) {
   win.setContentProtection(true);
   if (win.isMinimized()) win.restore();
   if (!win.isVisible()) win.showInactive();
+  hidePops();
   send({ type: 'compact', on: true, chatId: chatId || null });
   // Sharing the screen, the apps keep to the part left of QuorX.
   return { area: shared ? toPx({ x: workDip.x, y: workDip.y, width: Math.max(0, rect.x - gap - workDip.x), height: workDip.height }) : null };
@@ -1009,10 +1079,10 @@ const COMMANDS = {
       t.cover = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
       t.cover.setBackgroundColor('#00000000');
       t.cover.webContents.loadURL(COVER);
-      win.contentView.addChildView(t.cover); // added after the page, so it sits on top
+      hostOf(t).contentView.addChildView(t.cover); // added after the page, so it sits on top
       if (t.bounds) t.cover.setBounds(t.bounds);
       t.cover.setVisible(t.shown);
-    } else if (!locked && t.cover) { win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; }
+    } else if (!locked && t.cover) { hostOf(t)?.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; }
     send({ sid: tab, type: 'agent-lock', locked: !!locked });
     return true;
   },
