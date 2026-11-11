@@ -987,3 +987,24 @@ test('shell: with the deciders off, a command they would approve in your place w
     assert.match(toolOut(bodies, 1), /hi-from-cmd/);
   });
 });
+
+// ---------- Approve all / Deny all (public/approve-all.js) ----------
+test('approve all: only cards of one kind and mode, never a risky one, and only two or more', async () => {
+  const { bulkGroups, bulkWords } = await import('../public/approve-all.js');
+  const card = (id, tool, extra = {}) => ({ id, tool, mode: 'strict', ...extra });
+  const r = bulkGroups([card('a', 'read_file'), card('b', 'read_file'), card('c', 'list_files'), card('d', 'read_file'), card('e', 'fetch_url'), card('f', 'fetch_url', { risk: 'danger' })]);
+  assert.deepEqual(r.groups.map((g) => [g.tool, g.ids]), [['read_file', ['a', 'b', 'd']]]);
+  assert.equal(r.alone, 3, 'list_files and fetch_url are alone; the risky fetch_url always needs its own click');
+  // Never swept in: risky, no "Allow always", buttons only, answered; another mode is another group.
+  const none = bulkGroups([card('a', 'shell', { risk: 'warn' }), card('b', 'shell', { noAlways: true }), card('c', 'shell'), card('d', 'mcp_setup', { buttonsOnly: true }), card('e', 'mcp_setup', { buttonsOnly: true }), card('f', 'shell', { answered: true })]);
+  assert.deepEqual(none.groups, []);
+  assert.equal(none.alone, 5);
+  const modes = bulkGroups([card('a', 'read_file'), card('b', 'read_file', { mode: 'yolo' })]);
+  assert.deepEqual(modes.groups, []);
+  // Paid cards add up their prices on the button.
+  const paid = bulkGroups([card('a', 'imagine', { est: 0.04 }), card('b', 'imagine', { est: 0.02 })]);
+  assert.equal(paid.groups[0].est.toFixed(2), '0.06');
+  assert.deepEqual(bulkWords(paid.groups[0], 'Make a picture'), { what: '2 waiting · Make a picture', yes: 'Approve all 2 · $0.060', no: 'Deny all 2' });
+  assert.deepEqual(bulkWords(r.groups[0], 'Read a file'), { what: '3 waiting · Read a file', yes: 'Allow all 3', no: 'Deny all 3' });
+  assert.deepEqual(bulkGroups(null), { groups: [], alone: 0 });
+});

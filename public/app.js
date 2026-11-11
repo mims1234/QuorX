@@ -12,6 +12,7 @@ import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
 import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
+import { bulkGroups, bulkWords } from './approve-all.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -5509,6 +5510,7 @@ function drawTimeline(c, m) {
   for (const card of all('.question[data-id]')) wireQuestion(card, m);
   const bcard = all('.budget-card[data-id]')[0]; if (bcard) wireBudget(bcard, c, m);
   restoreInputs(el, was);
+  drawBulkBar(m);
 }
 // The work above the answer, the answer's time, and the work that came after it, under the answer.
 function putTimeline(m) {
@@ -6311,6 +6313,45 @@ function approvalBadge(a, live) {
     detail: `<div class="tl-ap-detail ${state}">${who}${!c.free ? ` · ${esc(short(o?.model || c.model))}${c.detail ? ` · ${esc(c.detail)}` : ''}` : ''}${c.why ? `<div class="dim">Why: ${esc(c.why)}</div>` : ''}</div>`,
   };
 }
+// ---------- Approve all / Deny all: several cards of one kind waiting in one reply (public/approve-all.js) ----------
+// In Strict set to ask before every tool, one step can read four files at once and each read waits on its own card.
+// A bar above them answers those of one kind together: Allow all is "once" for each (no rule is saved), and a risky
+// card (red or amber), one without "Allow always" or one that takes only its own buttons is never included.
+function drawBulkBar(m) {
+  const el = m.el; if (!el) return;
+  for (const b of el.querySelectorAll('.ap-bulk')) b.remove();
+  const cards = [...el.querySelectorAll('.approval[data-id]:not(.question):not(.budget-card)')];
+  const { groups, alone } = bulkGroups(cards.map((x) => ({ id: x.dataset.id, tool: x.dataset.tool, mode: x.dataset.mode, risk: x.dataset.risk || '', noAlways: !!x.dataset.noAlways, buttonsOnly: !!x.dataset.buttonsOnly, answered: !!x.dataset.answered, est: Number(x.dataset.est) || 0 })));
+  if (!groups.length) return;
+  const cardOf = (id) => cards.find((x) => x.dataset.id === id);
+  const bar = document.createElement('div');
+  bar.className = 'ap-bulk';
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Answer these cards together');
+  bar.innerHTML = groups.map((g, i) => { const w = bulkWords(g, TOOL_NAME[g.tool] || g.tool, (v) => money(v, 3)); return `<div class="ap-bulk-row"><span class="ap-bulk-what">${esc(w.what)}</span><span class="ap-bulk-acts"><button type="button" class="primary ap-bulk-yes" data-g="${i}" title="Each of these runs once; no rule is saved">${esc(w.yes)}</button><button type="button" class="ap-bulk-no" data-g="${i}">${esc(w.no)}</button></span></div>`; }).join('')
+    + (alone ? `<div class="ap-bulk-note">${alone} more ${alone === 1 ? 'card needs its' : 'cards need their'} own answer below.</div>` : '');
+  cardOf(groups[0].ids[0])?.before(bar);
+  // Each card's own "once" answer (a command's Just this once, never its Allow every … rule), or its Deny.
+  const answerAll = (g, yes) => {
+    for (const id of g.ids) {
+      const card = cardOf(id);
+      if (!card?.isConnected || card.dataset.answered) continue;
+      const b = !yes ? $('.no', card) : card.classList.contains('shell-card') ? $('.once', card) || $('.yes:not([data-rule])', card) : $('.yes', card);
+      if (b && !b.disabled) b.click();
+    }
+    drawBulkBar(m);
+  };
+  for (const b of bar.querySelectorAll('.ap-bulk-yes')) b.onclick = () => answerAll(groups[b.dataset.g], true);
+  for (const b of bar.querySelectorAll('.ap-bulk-no')) b.onclick = () => answerAll(groups[b.dataset.g], false);
+}
+// "Full command" on a long command: the whole text, line breaks kept.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.sc-full'); if (!b) return;
+  const pre = b.previousElementSibling, open = pre?.classList.toggle('clipped') === false;
+  b.setAttribute('aria-expanded', String(open));
+  b.textContent = open ? 'Shorter ▴' : 'Full command ▾';
+});
+
 // ---------- a command waiting for you: what it is, what it touches, why it asks, and how wide a rule to save ----------
 const CMD_CLASS = { read: 'reads only', net: 'reads the web', write: 'writes in the project', build: 'runs project code', install: 'installs packages', external: 'leaves this computer',
   opaque: 'can’t be checked', delete: 'deletes', discard: 'throws away work', never: 'never allowed', unknown: 'no rule covers it' };
@@ -6367,9 +6408,11 @@ function shellCardHTML(a) {
   if (byProgram) covers.reverse();
   const risk = c.risk === 'danger' ? '<div class="sc-risk" data-risk="danger">⛔ This reads your keys or sign-ins. Only say yes if you asked for exactly this.</div>'
     : c.risk === 'warn' ? '<div class="sc-risk" data-risk="warn">⚠ This reaches past the project: a deploy, a push, a whole-computer install, or files outside the project.</div>' : '';
-  return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell"${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
+  // A long command is cut to a few lines, with "Full command" to read all of it (line breaks kept).
+  const longCmd = String(c.what || '').split('\n').length > 6 || String(c.what || '').length > 400;
+  return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell" data-mode="${esc(c.mode || '')}"${c.noAlways ? ' data-no-always="1"' : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
     <h4>⌨️ Run a command <small>(free${p.shell ? ` · ${esc(p.shell)}` : ''})</small></h4>${risk}
-    <pre class="sc-line">${esc(c.what)}</pre>
+    <pre class="sc-line${longCmd ? ' clipped' : ''}">${esc(c.what)}</pre>${longCmd ? '<button type="button" class="sc-full" aria-expanded="false">Full command ▾</button>' : ''}
     ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
@@ -6498,7 +6541,7 @@ function approvalHTML(a, live = true) {
   }
   // A card that acts in the user's own account (a lent tab: send, delete, buy…) is red, and says so.
   const danger = c.risk === 'danger' && waiting ? '<div class="sc-risk" data-risk="danger">⛔ This acts in your own account. Only say yes if you want exactly this.</div>' : '';
-  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}"${c.buttonsOnly ? ' data-buttons-only="1"' : ''}` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
+  return `<div class="approval ${o ? 'done' : ''} ${c.free ? 'free' : ''}" ${waiting ? `data-id="${esc(c.id)}" data-tool="${esc(c.tool)}" data-mode="${esc(c.mode || '')}"${c.noAlways ? ' data-no-always="1"' : ''}${c.free ? '' : ` data-est="${Number(c.est) || 0}"`}${c.buttonsOnly ? ' data-buttons-only="1"' : ''}` : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
     ${head}${model}${danger}
     ${c.mcp ? `<div class="mcp-ap"><div class="mcp-ap-head">${mcpMark({ name: c.mcp.server }, 'sm')}<span>Use <b>${esc(c.mcp.tool)}</b> on the MCP server <b>${esc(c.mcp.server)}</b></span>${c.mcp.changes ? '<span class="mcp-chg" title="The server doesn\'t mark this tool as read-only">CHANGES THINGS</span>' : ''}</div><pre>${esc(c.mcp.input)}</pre>${waiting ? `<small class="dim">${c.mcp.always ? `Asked because ${esc(c.mcp.server)} is set to Ask every time.` : 'Asked because this chat is Strict and the tool can change things.'} ⚙ Settings → MCP servers changes this.</small>` : ''}</div>`
       : c.items ? '' : `<div class="what">${c.free ? esc(c.what) : `“${esc(c.what)}”`}</div>`}
