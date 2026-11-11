@@ -248,7 +248,7 @@ export function zoneAt(r, px, py, edge = 0.25) {
  * Where a file opens: the group `from` when it isn't the chat's, else the group nearest it (by the centres of their
  * rectangles) that isn't. null when every group shows a chat (the caller adds one).
  */
-export function nearestGroup(lay, from, rs, skip = (g) => g.id === CHAT_GROUP) {
+export function nearestGroup(lay, from, rs, skip = (g) => isChatGroup(g.id)) {
   const all = groups(lay), f = findGroup(lay, from);
   if (f && !skip(f)) return f.id;
   const ok = all.filter((g) => !skip(g));
@@ -270,9 +270,10 @@ export function setWeights(lay, weights) {
  */
 export function serialise(lay, tabs = {}, closed = [], extra = {}) {
   const live = new Set(allTabs(lay)), has = (id) => typeof id === 'string' && !!findGroup(lay, id);
-  // extra: the group marked to follow the agent, and the maximised one.
+  // extra: the group marked to follow the agent, the maximised one, and groups pinned to a chat ({ gid: chatId }).
+  const pins = extra.pins && typeof extra.pins === 'object' ? Object.fromEntries(Object.entries(extra.pins).filter(([g, c]) => has(g) && typeof c === 'string' && c)) : {};
   return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}),
-    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}) });
+    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(Object.keys(pins).length ? { pins } : {}) });
 }
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
@@ -297,7 +298,8 @@ export function parse(text) {
   const live = new Set(allTabs(lay));
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
   const gid = (v) => (typeof v === 'string' && findGroup(lay, v) ? v : null);
-  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max) };
+  const pins = s.pins && typeof s.pins === 'object' ? Object.fromEntries(Object.entries(s.pins).filter(([g, c]) => gid(g) && typeof c === 'string' && c)) : {};
+  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), pins };
 }
 
 // ---------- open chats, and the tabs you closed ----------
@@ -402,12 +404,36 @@ export const paneTabs = (gid) => Object.values(PANE_KINDS).map((k) => tabId(k, g
 
 // ---------- today's screen: the chat on the left, the side pane's areas stacked on the right ----------
 export const CHAT_GROUP = 'chat';
+// A second chat on screen sits in a group of its own (at most two chats show at once).
+export const CHAT2_GROUP = 'chat2';
+export const MAX_CHATS = 2;
+export const isChatGroup = (id) => id === CHAT_GROUP || id === CHAT2_GROUP;
+/** The chat groups in screen order: [main, second?]. */
+export const chatGroups = (lay) => [CHAT_GROUP, CHAT2_GROUP].map((id) => findGroup(lay, id)).filter(Boolean);
+/**
+ * The second chat beside a group (zone left / right / top / bottom), or swapped into the second chat group when it is
+ * there already. Refused past MAX_GROUPS like any new group.
+ */
+export function placeChat2(lay, chatId, targetId = CHAT_GROUP, zone = 'right') {
+  const t = tabId('chat', chatId), g2 = findGroup(lay, CHAT2_GROUP);
+  if (g2) { const root = copy(lay.root), g = findGroup(root, CHAT2_GROUP); g.tabs = [t]; g.active = t; return { ok: true, layout: { ...lay, root }, groupId: CHAT2_GROUP }; }
+  return addGroup(lay, targetId, zone, [t], { id: CHAT2_GROUP, active: t });
+}
+/** The chat shown in the second chat group (null when there is none). */
+export const chat2Id = (lay) => { const a = findGroup(lay, CHAT2_GROUP)?.active; return a && kindOf(a) === 'chat' ? a.slice(5) : null; };
+/** Only these groups, the rest gone (their space to their neighbours): what shows when some are hidden. */
+export function keepGroups(lay, ids) {
+  const keep = new Set(ids);
+  const cut = (n) => (n.t === 'g' ? (keep.has(n.id) ? n : null) : { ...n, kids: n.kids.map(cut).filter(Boolean) });
+  const root = lay.root ? norm(cut(copy(lay.root))) : null;
+  return { ...lay, root, focus: findGroup(root, lay.focus) ? lay.focus : (groups(root)[0]?.id ?? null) };
+}
 /** The default: a chat group and one side group showing `pane` (Artifact unless told). */
 export function defaultLayout(pane = 'art') {
   return createLayout(split('row', [group(CHAT_GROUP, [tabId('chat', 'main')]), group('g1', paneTabs('g1'), tabId(PANE_KINDS[pane] || 'artifact', 'g1'))]), 'g1');
 }
 /** The side pane's groups, top to bottom: every group but the chat's, in reading order. */
-export const sideGroups = (lay) => groups(lay).filter((g) => g.id !== CHAT_GROUP);
+export const sideGroups = (lay) => groups(lay).filter((g) => !isChatGroup(g.id));
 /** Which pane tab a group shows ('art', 'browser', …). */
 export const groupPane = (g) => KIND_PANE[kindOf(g?.active)] || 'art';
 
