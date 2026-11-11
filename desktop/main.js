@@ -106,9 +106,10 @@ async function startServer() {
     if (!(await harnessAt(p))) { PORT = p; break; }
     if (await oursAt(p)) { PORT = p; return `http://localhost:${p}`; }
   }
-  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  // The harness's output: past 50 MB it starts afresh, the older part kept as server.1.log.
+  // The harness's output: past 50 MB it starts afresh, the older part kept as server.1.log. The harness is told where it
+  // is, so ⚙ About → Report a problem can put its end in the cleaned bundle.
   const logPath = path.join(app.getPath('userData'), 'server.log');
+  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', OH_DESKTOP_LOG: logPath, AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   try { if (fs.statSync(logPath).size > 50e6) fs.renameSync(logPath, path.join(app.getPath('userData'), 'server.1.log')); } catch { /* none yet */ }
   const logFile = fs.createWriteStream(logPath, { flags: 'a' });
   return new Promise((resolve, reject) => {

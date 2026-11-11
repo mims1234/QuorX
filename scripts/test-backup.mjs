@@ -9,7 +9,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
-import { zipBuffer, writeZip, fileSink, readZip, fileSource } from '../server/zip.js';
+import { zipBuffer, writeZip, fileSink, readZip, fileSource, bufferSource } from '../server/zip.js';
+import { scrub, buildBundle, saveBundle, secretValues } from '../server/diagbundle.js';
 import { mergeSettings } from '../public/backup.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -462,4 +463,67 @@ test('a backup made before streaming still imports, and a new one brings back th
     assert.equal(p.name, 'Old App');
     assert.equal(path.resolve(p.path), path.resolve(keep));
   } finally { await qb.stop(); }
+});
+
+// ---------- ⚙ About → Report a problem (server/diagbundle.js) ----------
+test('Report a problem: keys, tokens, emails, user names and paths are taken out; the rest stays readable', () => {
+  const raw = [
+    'POST https://openrouter.ai/api/v1/chat/completions key=sk-or-v1-abcdef0123456789abcdef',
+    'Authorization: Bearer abcDEF0123456789xyz.token',
+    'Open QuorX with this link once: http://localhost:5188/?k=R849Ye5y6OPeoDVlSq',
+    'github ghp_ABCDEFGHIJKLMNOPQRSTUVWX0123 and AIzaSyA1234567890abcdefghijklmnopqrstu',
+    'mail someone.name@example.org about it',
+    'wrote C:\\Users\\testuser\\Documents\\QuorX\\Scratch\\index.html and D:\\work\\app\\src',
+    'share \\\\server\\files\\report.txt, home /home/testuser/app/main.js',
+    '{"apiKey": "plain-secret-value-1", "password": "hunter2hunter2"}',
+    'testuser started a run on 192.168.1.20 (local 127.0.0.1)',
+    'the saved one MYSAVEDKEY0123456789 shows up raw',
+    'step 3: the build passed in 4.2 s',
+  ].join('\n');
+  const { text, found } = scrub(raw, { secrets: ['MYSAVEDKEY0123456789'], users: ['testuser'] });
+  for (const bad of ['sk-or-v1-abcdef', 'abcDEF0123456789xyz', 'R849Ye5y6OPeoDVlSq', 'ghp_ABCD', 'AIzaSyA', 'someone.name@example.org', 'testuser', 'Documents', 'D:\\work', '\\\\server', '/home/', 'plain-secret-value-1', 'hunter2hunter2', '192.168.1.20', 'MYSAVEDKEY']) assert.ok(!text.includes(bad), `${bad} is gone:\n${text}`);
+  assert.match(text, /<path>\\index\.html/, 'a file name stays');
+  assert.match(text, /\?k=<token>/);
+  assert.match(text, /Bearer <token>/);
+  assert.match(text, /"apiKey": "<token>"/);
+  assert.match(text, /127\.0\.0\.1/, 'localhost stays');
+  assert.match(text, /step 3: the build passed in 4\.2 s/, 'ordinary lines are untouched');
+  assert.ok(found.key >= 3 && found.email === 1 && found.path >= 4 && found.secret === 1 && found.ip === 1, JSON.stringify(found));
+});
+
+test('Report a problem: the bundle reads the end of each log, names the data folder, removes saved secrets by value, and saves a zip without overwriting', () => {
+  const home = tempDir('qx-diag-home-'), out = tempDir('qx-diag-out-');
+  fs.mkdirSync(path.join(home, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'logs', 'harness.log'), `${'old line\n'.repeat(80000)}started in ${path.join(home, 'data')}\nERROR the last thing ${KEY}\n`);
+  fs.writeFileSync(path.join(home, 'logs', 'runs.jsonl'), '{"model":"x","cost":0.01}\n');
+  const keys = path.join(home, 'keys.json');
+  fs.writeFileSync(keys, JSON.stringify({ keys: [{ id: 'k1', label: 'main', key: 'vault-0123456789-abcdef' }] }));
+  fs.appendFileSync(path.join(home, 'logs', 'runs.jsonl'), '{"note":"used vault-0123456789-abcdef"}\n');
+  const b = buildBundle({ home, secretFiles: [keys], versions: { quorx: '9.9.9' }, env: {}, users: ['nobody-here'], now: new Date('2026-11-11T10:20:00Z') });
+  assert.equal(b.name, 'quorx-report-20261111-1020.zip');
+  const names = b.files.map((f) => f.name);
+  assert.deepEqual(names.slice(0, 2), ['README.txt', 'versions.txt']);
+  assert.ok(names.includes('logs/harness.log') && names.includes('logs/runs.jsonl'));
+  assert.ok(!names.includes('logs/audit.jsonl'), 'logs that do not exist are left out');
+  const h = b.files.find((f) => f.name === 'logs/harness.log');
+  assert.ok(h.cut && h.kept < h.size, 'only the end of a long log');
+  assert.match(h.text, /ERROR the last thing <key>/);
+  assert.match(h.text, /started in <QuorX data>/);
+  assert.ok(!b.files.some((f) => f.text.includes('vault-0123456789-abcdef')), 'a saved key is removed by its value');
+  assert.match(b.files.find((f) => f.name === 'versions.txt').text, /QuorX: 9\.9\.9/);
+  assert.throws(() => saveBundle(b, 'relative/folder'), /Pick a folder/);
+  assert.throws(() => saveBundle(b, path.join(out, 'missing')), /does not exist/);
+  const f1 = saveBundle(b, out), f2 = saveBundle(b, out);
+  assert.equal(path.basename(f1), 'quorx-report-20261111-1020.zip');
+  assert.equal(path.basename(f2), 'quorx-report-20261111-1020 (2).zip', 'never overwrites');
+  assert.deepEqual([...readZip(bufferSource(fs.readFileSync(f1))).keys()], names);
+});
+
+test('Report a problem: only secret-shaped values from the key files count, not every word in them', () => {
+  const dir = tempDir('qx-diag-sec-');
+  const f = path.join(dir, '.env');
+  fs.writeFileSync(f, 'OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef\nTITLE=My nice project name\nURL=https://example.com/a1b2c3d4e5f6\n');
+  const v = secretValues([f], { GITHUB_TOKEN: 'ghtoken0123456789', HOME_DIR: 'C:\\x' });
+  assert.ok(v.includes('sk-or-v1-0123456789abcdef') && v.includes('ghtoken0123456789'));
+  assert.ok(!v.some((x) => /nice project|example\.com/.test(x)));
 });

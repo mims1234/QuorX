@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
-import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
+import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown, SECRET_FILES } from './server/keys.js';
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
@@ -50,6 +50,7 @@ import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
 import { readAudit } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
+import { buildBundle, saveBundle } from './server/diagbundle.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs, closeChatChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
 import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair, extPush } from './server/extlink.js';
@@ -80,6 +81,7 @@ const PUBLIC = path.join(ROOT, 'public');
 const STARTED = Date.now();
 // The version shown in the sidebar and Settings (package.json; the desktop release script keeps it in step).
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '?'; } })();
+const diagBundles = new Map(); // ⚙ About → Report a problem: built bundles waiting to be saved, by id
 function codeChanged() {
   let latest = 0, file = '';
   for (const f of [path.join(ROOT, 'server.js'), ...fs.readdirSync(path.join(ROOT, 'server')).filter((x) => x.endsWith('.js')).map((x) => path.join(ROOT, 'server', x))]) {
@@ -1101,6 +1103,23 @@ const server = http.createServer(async (req, res) => {
         if (made) { try { fs.rmdirSync(dir); } catch { /* not empty or already gone */ } } // a refused folder isn't left behind
         return json(res, 200, { error: e.message });
       }
+    }
+    // ⚙ About → Report a problem: the cleaned log bundle (server/diagbundle.js). Preview builds it and keeps it for 15
+    // minutes; save writes that same bundle as a zip into the folder picked. Nothing is uploaded or sent.
+    if (url.pathname === '/api/diagnostics/preview' && req.method === 'POST') {
+      try {
+        const b = buildBundle({ home: HOME, desktopLog: process.env.OH_DESKTOP_LOG || '', versions: { quorx: VERSION, ...(process.env.OH_DESKTOP ? { desktop: VERSION } : {}) }, secretFiles: SECRET_FILES });
+        const id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        diagBundles.set(id, { b, at: Date.now() });
+        for (const [k, v] of diagBundles) if (Date.now() - v.at > 15 * 60e3) diagBundles.delete(k);
+        return json(res, 200, { id, name: b.name, found: b.found, files: b.files.map((f) => ({ name: f.name, size: f.size, kept: f.kept, cut: f.cut, found: f.found, preview: f.text.length > 24000 ? f.text.slice(-24000) : f.text, clipped: f.text.length > 24000 })) });
+      } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+    if (url.pathname === '/api/diagnostics/save' && req.method === 'POST') {
+      const q = JSON.parse(await readBody(req, 1e4) || '{}');
+      const held = diagBundles.get(String(q.id || ''));
+      if (!held) return json(res, 200, { error: 'That report is too old: build it again.' });
+      try { return json(res, 200, { file: saveBundle(held.b, q.folder) }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/pick-folder' && req.method === 'POST') {
       const ip = req.socket.remoteAddress || '';
