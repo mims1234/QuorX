@@ -38,14 +38,15 @@ async function realTab(sid) {
   tab.close = async () => { await close(); if (![...given.values()].some((g) => g.sid === sid)) desktopCall('tab.detach', { tab: sid }).catch(() => {}); };
   return tab;
 }
-async function session(sid, w, h, real = false) {
+// mobile: a phone or tablet size picked in the Browser tab's 📱 menu, laid out as a touch screen would be.
+async function session(sid, w, h, real = false, mobile = false) {
   let s = sessions.get(sid);
   if (!s && sid.startsWith('agent-')) return null; // only the agent opens its tab
   if (!s) { s = { tab: real ? await realTab(sid) : await openTab({ own: true }), at: Date.now(), w: 1280, h: 800, real }; sessions.set(sid, s); }
   s.at = Date.now();
   if (s.locked || s.tab.desktop) { s.w = s.tab.size?.width || s.w; s.h = s.tab.size?.height || s.h; return s; } // never resize under the agent, or a real tab the app sizes
   const nw = w ? clampSize(w, 360, 1600, 1280) : s.w, nh = h ? clampSize(h, 300, 1400, 800) : s.h;
-  if (nw !== s.w || nh !== s.h || !s.sized) { s.w = nw; s.h = nh; s.sized = true; await s.tab.viewport(s.w, s.h).catch(() => {}); }
+  if (nw !== s.w || nh !== s.h || !s.sized || !!s.mobile !== mobile) { s.w = nw; s.h = nh; s.mobile = mobile; s.sized = true; await s.tab.viewport(s.w, s.h, mobile).catch(() => {}); }
   return s;
 }
 async function state(s, peek = false) {
@@ -60,14 +61,14 @@ export async function userBrowse(sid, op, a = {}) {
   const real = !!a.real;
   // Your real tab is only looked at here (💬 comment mode): read, scroll and point, never click or type.
   if (real && !['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
-  const s = await session(sid, a.w, a.h, real);
+  const s = await session(sid, a.w, a.h, real, !!a.mobile);
   if (!s) return { none: true };
   if (!s.real) return step(sid, s, op, a);
   if (!['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
   // A real tab can be let go elsewhere (taken back from the agent detaches it): attach again once and retry.
   try { return await step(sid, s, op, a); } catch {
     sessions.delete(sid); s.tab.close().catch(() => {});
-    return step(sid, await session(sid, a.w, a.h, true), op, a);
+    return step(sid, await session(sid, a.w, a.h, true, !!a.mobile), op, a);
   }
 }
 async function step(sid, s, op, a) {
@@ -84,7 +85,7 @@ async function step(sid, s, op, a) {
   if (op === 'open') {
     const url = String(a.url || '');
     if (!/^https?:\/\//i.test(url)) throw new Error('only http and https addresses can be opened');
-    await t.open(url, { width: s.w, height: s.h, mobile: false }).catch(() => {}); // a slow page still shows what has loaded
+    await t.open(url, { width: s.w, height: s.h, mobile: !!s.mobile }).catch(() => {}); // a slow page still shows what has loaded
   } else if (op === 'click') {
     await t.click({ x: Math.max(0, Math.min(s.w, Number(a.x) || 0)), y: Math.max(0, Math.min(s.h, Number(a.y) || 0)) });
     await new Promise((r) => setTimeout(r, 500));
