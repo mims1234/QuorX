@@ -46,7 +46,7 @@ import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowSto
 import { startWork, endWork } from './server/workscreen.js';
 import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
-import { readAudit } from './server/audit.js';
+import { readAudit, letThrough } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs, closeChatChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
@@ -761,6 +761,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/audit' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       return json(res, 200, readAudit({ project: pid && validId(pid) ? pid : null, limit: Math.min(1000, Number(url.searchParams.get('limit')) || 200) }));
+    }
+    // ⚡ What YOLO let through: the commands and actions the deciders allowed without asking, for a chat or a project.
+    if (url.pathname === '/api/let-through' && req.method === 'GET') {
+      const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat');
+      return json(res, 200, letThrough({ project: pid && validId(pid) ? pid : null, chat: cid && validId(cid) ? cid : null, limit: Math.min(1000, Number(url.searchParams.get('limit')) || 300) }));
     }
     if (url.pathname === '/api/permissions/test' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 2e4));

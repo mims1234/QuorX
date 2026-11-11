@@ -881,6 +881,49 @@ test('shell: in YOLO a build goes to the deciders (or, with them off, to you), a
   }
 });
 
+// Let through in ⚡ YOLO: what the deciders allowed without asking (or what ran with them off) is listed per chat, with
+// what they said and the card it was; a no, and anything you allowed yourself, are not.
+test('let through in YOLO: allowed commands are listed per chat with the reason and the card; a no and Strict are not', { skip: !WIN }, async () => {
+  const { letThrough } = await import('../server/audit.js');
+  const chat = `chat-lt-${Date.now().toString(36)}`;
+  const run = (settings, onEvent) => agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], { chatId: chat, prep: buildJs, onEvent, settings: { safety: { yoloLevel: 'careful' }, ...settings } });
+  let card = null;
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async () => {
+    const { events } = await run({ approval: 'yolo' });
+    card = of(events, 'approval').find((e) => e.mode === 'yolo');
+  });
+  let rows = letThrough({ chat });
+  assert.equal(rows.length, 1, JSON.stringify(rows));
+  assert.deepEqual([rows[0].tool, rows[0].by, rows[0].card, rows[0].chat], ['shell', 'deciders', card.id, chat]);
+  assert.match(rows[0].what, /node build\.js/);
+  assert.ok(rows[0].reason && rows[0].votes >= 2 && rows[0].run && rows[0].at > Date.now() - 600e3, 'what they said, how many voted, the reply and when');
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), () => run({ approval: 'yolo', yoloWaitSecs: 1 }));
+  assert.equal(letThrough({ chat }).length, 1, 'a no is not let through');
+  await run({ approval: 'strict', strictAsk: 'every' }, (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); });
+  assert.equal(letThrough({ chat }).length, 1, 'what you allowed yourself is not either');
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), () => run({ approval: 'yolo', deciders: false, decidersOff: { commands: 'run' } }));
+  rows = letThrough({ chat });
+  assert.deepEqual(rows.map((r) => r.by), ['deciders off', 'deciders'], 'newest first; a command that ran with the deciders off is listed as no check');
+  assert.equal(letThrough({ chat: 'chat-lt-none' }).length, 0, 'another chat sees none of them');
+});
+
+test('let through in YOLO: an action the deciders allowed (not a command) is written to the log from its card', async () => {
+  const { tapLetThrough } = await import('../server/agent.js');
+  const { letThrough } = await import('../server/audit.js');
+  const chat = `chat-lt-act-${Date.now().toString(36)}`, seen = [];
+  const emit = tapLetThrough({ chatId: chat, runId: 'r-lt-1', projectId: null }, (o) => seen.push(o.t));
+  emit({ t: 'approval', id: 'a1', tool: 'schedule', mode: 'yolo', what: 'Create “Daily news” every day at 9:00' });
+  emit({ t: 'approval_done', id: 'a1', approve: true, by: 'deciders', reason: 'The user asked for a daily summary.', votes: [{ ok: true }, { ok: true }, { ok: false }] });
+  emit({ t: 'approval', id: 'a2', tool: 'image', mode: 'yolo', what: 'A picture' });
+  emit({ t: 'approval_done', id: 'a2', approve: false, by: 'deciders', reason: 'Not needed.' });
+  emit({ t: 'approval', id: 'a3', tool: 'image', mode: 'strict', what: 'Another picture' });
+  emit({ t: 'approval_done', id: 'a3', approve: true, by: 'user' });
+  assert.equal(seen.length, 6, 'every event still goes to the page');
+  const rows = letThrough({ chat });
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].tool, rows[0].what, rows[0].by, rows[0].card, rows[0].votes, rows[0].run], ['schedule', 'Create “Daily news” every day at 9:00', 'deciders', 'a1', 2, 'r-lt-1']);
+});
+
 // ffmpeg and ffprobe come as "Allow always, everywhere" rules: in a YOLO video chat every render, loudness pass and
 // contact sheet went to a vote that timed out and skipped it. They are ordinary rules: off or deleted, they stay so.
 test('rules: ffmpeg and ffprobe are built-in allow rules everywhere; turning one off or deleting it sticks', async () => {
