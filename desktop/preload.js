@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   hideAll: () => call('hideAll'),
   nav: (sid, op) => call('nav', sid, op),
   close: (sid) => call('close', sid),
+  find: (sid, op, text, opts) => call('find', sid, op, text, opts),
   snapshot: (sid) => call('snapshot', sid),
   sound: (op, arg) => call('sound', op, arg),
   tabs: (op, sid) => call('tabs', op, sid),

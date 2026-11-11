@@ -148,3 +148,82 @@ body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex
   .ws-main { height: 100%; }
   .wt-list { width: min(92vw, 360px); }
 }
+
+/* ---------- W2: the groups placed by rectangles (app.js, "the groups on screen") ----------
+   On a desktop the chat's box (.work) and every pane area are drawn absolutely, each at its group's rectangle (--gx,
+   --gy, --gw, --gh), so splitting, moving the chat or maximising never moves a box in the page (a moved frame reloads,
+   a terminal loses its screen). The pane itself is only a layer over the layout that lets clicks through to the chat. */
+main.layout.ws-free { position: relative; display: block !important; overflow: hidden; }
+main.layout.ws-free > #paneResizer { display: none !important; }
+main.layout.ws-free > section.work { position: absolute !important; left: var(--gx, 0) !important; top: var(--gy, 0) !important; width: var(--gw, 100%) !important; height: var(--gh, 100%) !important; max-width: none !important; min-width: 0 !important; grid-column: auto !important; margin: 0 !important; }
+main.layout.ws-free > aside#pane { position: absolute !important; inset: 0 !important; width: auto !important; height: auto !important; max-width: none !important; min-width: 0 !important; display: block; pointer-events: none; background: none !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; transform: none !important; grid-column: auto !important; }
+main.layout.ws-free > aside#pane > .pane-area { position: absolute !important; left: var(--gx, 0); top: var(--gy, 0); width: var(--gw, 100%); height: var(--gh, 100%); pointer-events: auto; min-height: 0 !important; background: var(--panel); border-left: 1px solid var(--line); overflow: hidden; }
+main.layout.ws-free > aside#pane > .pane-area[hidden] { display: none !important; }
+/* The group you use: an accent line along its strip (the chat's: along its header, while you are in it). */
+main.layout.ws-free > aside#pane.split > .pane-area.on > .pane-tabs { box-shadow: inset 0 2px 0 var(--accent); }
+main.layout.ws-free > aside#pane > .pane-area.maxed { border-left: 0; }
+/* The bars between groups. */
+.ws-bar { position: absolute; z-index: 8; background: var(--bg); touch-action: none; }
+.ws-bar[data-dir="row"] { cursor: col-resize; }
+.ws-bar[data-dir="col"] { cursor: row-resize; }
+.ws-bar::after { content: ''; position: absolute; border-radius: 2px; background: var(--line-strong); opacity: .7; }
+.ws-bar[data-dir="row"]::after { left: 2px; top: 50%; width: 2px; height: 36px; margin-top: -18px; }
+.ws-bar[data-dir="col"]::after { top: 2px; left: 50%; height: 2px; width: 36px; margin-left: -18px; }
+.ws-bar:hover::after, .ws-bar.drag::after, .ws-bar:focus-visible::after { background: var(--accent); opacity: 1; }
+.ws-bar:focus-visible { outline: none; background: color-mix(in srgb, var(--accent) 18%, var(--bg)); }
+
+/* ---------- a group's strip: file tabs, the follow mark, ⤢ and ⋯ ---------- */
+#pane .pane-tabs .pa-files { display: inline-flex; align-items: stretch; min-width: 72px; flex: 0 1 auto; overflow: hidden; }
+#pane .pane-tabs .pa-files:empty { display: none; }
+#pane .pane-tabs .pa-ftab { display: inline-flex; align-items: center; gap: 5px; min-width: 40px; flex: 0 1 auto; max-width: 170px; height: 34px; padding: 0 4px 0 9px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); font: 12.5px var(--font-ui); cursor: pointer; }
+#pane .pane-tabs .pa-ftab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ftab.on { min-width: 72px; flex-shrink: 0; color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ftab.preview .ft-name { font-style: italic; }
+#pane .pane-tabs .pa-ftab .ft-ico { flex: none; font-size: 12px; }
+#pane .pane-tabs .pa-ftab .ft-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane .pane-tabs .pa-ftab .ft-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--dim); font-size: 14px; line-height: 1; opacity: 0; }
+#pane .pane-tabs .pa-ftab:hover .ft-x, #pane .pane-tabs .pa-ftab.on .ft-x, #pane .pane-tabs .pa-ftab:focus-visible .ft-x { opacity: 1; }
+#pane .pane-tabs .pa-ftab .ft-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+/* The group that follows the agent: a small violet tag, not a button. */
+#pane .pane-tabs .pa-follow { align-self: center; flex: none; padding: 1px 6px; margin-right: 2px; border-radius: 4px; border: 1px solid color-mix(in srgb, var(--violet, #a78bfa) 45%, transparent); color: var(--violet, #a78bfa); font: 600 10.5px var(--mono, monospace); white-space: nowrap; cursor: default; }
+#pane .pane-tabs .pa-follow.off { opacity: .45; }
+#pane .pane-tabs .pa-follow[hidden] { display: none; }
+#pane .pane-tabs .pt-spacer { cursor: default; }
+#pane .pane-tabs [data-pa="max"][aria-pressed="true"] { color: var(--accent); }
+/* The Artifact tab's list of files from the chat, when there are no plans. */
+.pf-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
+.pf-list b { font-size: 12px; color: var(--muted); }
+.chat-head .ch-btn.ch-move { cursor: grab; }
+@media (max-width: 900px) { .chat-head .ch-btn.desk-only { display: none !important; } }
+
+/* ---------- dropping a tab: five zones per group, an outline where it would go ---------- */
+.ws-drop { position: absolute; inset: 0; z-index: 45; background: color-mix(in srgb, var(--bg) 30%, transparent); }
+.ws-drop-hint { position: absolute; display: none; box-sizing: border-box; padding: 6px; pointer-events: none; transition: left .08s, top .08s, width .08s, height .08s; }
+.ws-drop.hot .ws-drop-hint { display: block; }
+.ws-drop-hint[hidden] { display: none !important; }
+.ws-drop-hint::before { content: ''; position: absolute; inset: 6px; border: 2px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.ws-drop-hint > span { position: relative; display: inline-block; margin: 10px; padding: 3px 8px; border-radius: 5px; background: var(--accent); color: var(--on-accent, #fff); font: 600 12px var(--font-ui); }
+.ws-drop-hint.no::before { border-style: dashed; border-color: var(--warn, #e0a030); background: color-mix(in srgb, var(--warn, #e0a030) 10%, transparent); }
+.ws-drop-hint.no > span { background: var(--warn, #e0a030); color: #1b1300; }
+
+/* ---------- a phone: one group at a time, and a row to switch ---------- */
+.ws-phone-sw { display: flex; gap: 4px; flex: none; padding: 6px 8px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--panel); }
+.ws-phone-sw button { flex: none; height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 12px var(--font-ui); }
+.ws-phone-sw button.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ---------- find in the focused tab (Ctrl+F): a small bar at the top right of the group ---------- */
+.find-bar { position: absolute; top: 40px; right: 12px; z-index: 50; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / .28); }
+.layout > .work > .find-bar { top: 10px; right: 16px; }
+.find-bar .fb-q { width: 200px; height: 26px; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); font: 12.5px var(--font-ui); }
+.find-bar .fb-q:focus { outline: none; border-color: var(--accent); }
+.find-bar.none .fb-q { border-color: var(--warn, #e0a030); }
+.find-bar .fb-n { min-width: 64px; color: var(--muted); font: 11.5px var(--mono, monospace); text-align: center; white-space: nowrap; }
+.find-bar button { width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.find-bar button:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+::highlight(qx-find) { background: rgba(250, 204, 21, .38); color: inherit; }
+::highlight(qx-find-now) { background: #f59e0b; color: #111; }
+/* In a narrow group the strip scrolls; ⋯, ⤢ and the follow mark stay pinned at its right end. */
+#pane .pane-tabs > [data-pa="more"] { position: sticky; right: 0; z-index: 3; background: var(--panel); }
+#pane .pane-tabs > [data-pa="max"] { position: sticky; right: 26px; z-index: 3; background: var(--panel); }
+#pane .pane-tabs > .pa-follow { position: sticky; right: 54px; z-index: 3; background: var(--panel); box-shadow: -8px 0 8px -4px var(--panel); }
+#pane .pane-tabs > .pa-follow[hidden] + [data-pa="max"] { box-shadow: -8px 0 8px -4px var(--panel); }
