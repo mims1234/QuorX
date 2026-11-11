@@ -19,11 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-<<<<<<< HEAD
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, setRunLimitBack, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, nextStepsFor, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
-=======
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, sideQuestion, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
->>>>>>> origin/qx/btw
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, setRunLimitBack, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, nextStepsFor, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT, sideQuestion } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -246,11 +242,9 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ...r, id });
       } catch (e) { return json(res, 200, { error: e.message, nothing: !!e.nothing }); }
     }
-<<<<<<< HEAD
     // Suggested next steps under a finished reply: one short helper-model call, asked for by the page only when the
     // setting is on.
     if (url.pathname === '/api/next-steps' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 4e4) || '{}'); try { return json(res, 200, await nextStepsFor({ request: b.request, reply: b.reply, model: b.model, chatModel: b.chatModel })); } catch (e) { return json(res, 400, { error: e.message }); } }
-=======
     // /btw: a side question on the chat so far, with no tools, never added to the chat. Its cost goes to the ledger and
     // the chat's spend like a review's.
     const btm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/btw$/i);
@@ -266,7 +260,6 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ...r, id });
       } catch (e) { return json(res, 200, { error: e.message }); }
     }
->>>>>>> origin/qx/btw
     // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
     const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);
     if (trm && req.method === 'GET') { const t = getTrace(trm[1], trm[2]); return t ? json(res, 200, t) : json(res, 404, { error: 'no such steps' }); }
