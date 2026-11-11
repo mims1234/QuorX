@@ -3340,3 +3340,6 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 #rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
 #rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }
+/* ⚙ About → Desktop app → the summon key: its ✓ box and key box side by side, and why Windows refused a key. */
+.sm-ctl { display: inline-flex; gap: 10px; align-items: center; }
+.sm-err { display: block; margin-top: 6px; font-size: 12px; color: var(--warn); }

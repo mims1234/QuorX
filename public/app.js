@@ -10461,7 +10461,7 @@ function wireSettings() {
     setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
   };
   // The mic key: press the keys you want while the box has the focus.
-  for (const k of main.querySelectorAll('.st-keycap')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
+  for (const k of main.querySelectorAll('.st-keycap[data-bind]')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
     for (const x of seg.querySelectorAll('.st-seg-btn')) { x.classList.toggle('active', x === b); x.setAttribute('aria-checked', String(x === b)); }
     setPath(S, seg.dataset.bind, b.dataset.v); ST.changed.add(seg.dataset.bind); seg.closest('.st-row')?.classList.add('changed'); mark();
@@ -14376,6 +14376,7 @@ if (DESK) {
   if (window.ohDesktop.sound) setSound('get');
   window.ohDesktop.on((ev) => {
     const c = focused();
+    if (ev.type === 'summon') { onSummon(); return; }
     if (ev.type === 'audio') { const s = (G.sound ||= { volume: 100, tabs: {} }); (s.tabs ||= {})[ev.sid] = { ...s.tabs[ev.sid], audible: ev.audible }; sndRefresh(); return; }
     if (ev.type === 'popup') { const sid = String(ev.sid || ''); newBTab(sid.startsWith('agent-') ? chatProject(sid.slice(6)) : bTabProject(sid) ?? c?.projectId, ev.url); if (c) { G.view = { id: G.view.id, src: false, files: false, browser: true }; syncLayout(); renderPane(); } return; }
     if (ev.type === 'download') { deskDownload(ev); return; }
@@ -14502,7 +14503,7 @@ function deskAgentEvent(ev) {
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.
 async function drawDesktopSettings() {
   const box = $('#stDesktop'); if (!box || !DESK) return;
-  const [info, login, onClose] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask')]);
+  const [info, login, onClose, summon] = await Promise.all([window.ohDesktop.info().catch(() => ({})), window.ohDesktop.loginItem().catch(() => false), window.ohDesktop.closeAction?.().catch(() => 'ask'), window.ohDesktop.summon?.().catch(() => null)]);
   if (!box.isConnected) return;
   const canQuit = typeof window.ohDesktop.quit === 'function';
   const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
@@ -14511,11 +14512,13 @@ async function drawDesktopSettings() {
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
     // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
     + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
+    + (summon ? stRow('Bring QuorX forward from anywhere', 'A key that works in every app: QuorX comes to the front with the cursor in the message box. Off at first, since another app may already use the key. Click the key box, then press the keys you want.', summonControl(summon), { id: 'stRowSummon' }) : '')
     + stRow('Updates', '', `<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
     + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
     + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
   if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
+  if (summon) wireSummon(box);
   for (const b of box.querySelectorAll('#stDeskClose .st-seg-btn')) b.onclick = async () => {
     const v = await window.ohDesktop.closeAction(b.dataset.v).catch(() => null);
     if (v) for (const x of box.querySelectorAll('#stDeskClose .st-seg-btn')) { x.classList.toggle('active', x.dataset.v === v); x.setAttribute('aria-checked', String(x.dataset.v === v)); }
@@ -14529,6 +14532,38 @@ async function drawDesktopSettings() {
   $('#stDeskCheck').onclick = () => (info.store ? storeUpdate() : window.ohDesktop.update('check'));
   drawUpdate(st);
 }
+// ---------- the summon key (desktop app) ----------
+// One system-wide key (Ctrl+Shift+Space unless you pick another) brings QuorX forward from any app with the cursor
+// in the message box (desktop/summon.js registers it). A ✓ box turns it on; the key box records a new key. When
+// Windows refuses the key (another app has it), it stays off and the row says why.
+function summonControl(s) {
+  return `<span class="sm-ctl"><label class="sq-check"><input type="checkbox" id="stSummonOn"${s.on ? ' checked' : ''}><span>On</span></label><input type="text" class="st-input st-keycap sm-key" id="stSummonKey" value="${esc(s.key || 'Ctrl+Shift+Space')}" readonly aria-label="Summon key: click, then press the keys"></span><span class="sm-err" role="status"${s.error ? '' : ' hidden'}>${esc(s.error || '')}</span>`;
+}
+function wireSummon(box) {
+  const on = $('#stSummonOn', box), key = $('#stSummonKey', box), err = $('.sm-err', box);
+  const apply = async (want) => {
+    const r = await window.ohDesktop.summon(want).catch((e) => ({ on: false, ok: false, error: e.message }));
+    on.checked = !!r.on; key.value = r.key || key.value;
+    err.textContent = r.error || ''; err.hidden = !r.error;
+  };
+  on.onchange = () => apply({ on: on.checked, key: key.value });
+  // Its own recorder (the page's other key boxes save with Settings; this one applies at once, like Start at login).
+  key.onkeydown = (e) => {
+    if (e.key === 'Tab') return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape') { key.blur(); return; }
+    const v = keyCombo(e); if (!v) return;
+    key.value = v;
+    if (on.checked) apply({ on: true, key: v }); else window.ohDesktop.summon({ on: false, key: v }).catch(() => {});
+  };
+}
+// The key was pressed: the window is already in front; the cursor goes to the message box of the chat on screen.
+function onSummon() {
+  const c = micTarget(), ta = c ? $('.input', c.el.root) : null;
+  if (!ta) return;
+  ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch { /* not a text box */ }
+}
+
 // ---------- updates (desktop app): "⬆ Update" in the top bar, progress, "Restart to update" ----------
 // The Store copy: open its Store page. The Store can't replace a QuorX that is still running, and ✕ may only hide it in
 // the tray (the update then fails with 0x80073D02), so when a newer version is out, offer to quit QuorX now.
