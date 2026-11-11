@@ -3256,3 +3256,17 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 .rec.mk { position: relative; display: inline-flex; flex: none; width: 15px; height: 15px; vertical-align: -3px; font-size: 0; line-height: 0; cursor: help; }
 .mk-ava { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 4px; font: 700 9px/1 var(--mono); color: hsl(var(--h) 80% 82%); background: hsl(var(--h) 40% 24%); }
 .rec.mk.rec-r::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 1.5px var(--panel); }
+/* Needs you (app.js needsYou): chats waiting on you, in amber, apart from the green count of what runs; in the Running
+   list, their section sits on top with the answer buttons right on each row. */
+.sb-nav-sched .need { color: var(--amber); display: inline-flex; align-items: center; gap: 4px; }
+.sb-nav-sched .need::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+.sb-rail-btn.nav-running .rl-need { position: absolute; bottom: 3px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 4px; background: var(--amber); color: var(--amber-ink, #1a1000);
+  font: 700 9.5px/14px var(--mono); font-style: normal; text-align: center; }
+.sb-rail-btn.nav-running .rl-need[hidden] { display: none; }
+.tr-dot.wait { background: var(--amber); box-shadow: 0 0 5px var(--amber-glow, var(--amber)); }
+#rlBody .rl-sec[data-sec="need"] { border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-sec[data-sec="need"] > h4 { color: var(--amber); }
+#rlBody .rl-sec[data-sec="need"] .run-n { background: var(--amber-dim); color: var(--amber); }
+#rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }
