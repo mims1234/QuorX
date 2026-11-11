@@ -4031,6 +4031,7 @@ function drawContextMeter(c) {
   slot.innerHTML = `<button type="button" class="cmp-ctx-btn" data-tone="${u.tone}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}" aria-label="${esc(tip)}">${ctxRingSVG(u)}<span class="ctx-lbl">${esc(ctxLabel(u))}</span></button><div class="ctx-pop" role="dialog" aria-label="Context" ${open ? '' : 'hidden'}></div>`;
   const btn = $('.cmp-ctx-btn', slot), pop = $('.ctx-pop', slot);
   if (open) drawContextPop(c, pop, u);
+  if (focused() === c) wsStatusDraw(); // the status bar shows the same figure
   const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
   const outside = (e) => { if (!slot.contains(e.target)) close(); };
   const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
@@ -7718,7 +7719,7 @@ function wtWire() {
   $('#wsFwd').onclick = () => wsStep(1);
   // Phones: the rail as a menu (with what needs you first, when something does).
   $('#wtPanels').onclick = (e) => { const need = needsYou(); popMenu(Object.assign(e, { anchor: e.currentTarget }), [
-    ...(need.length ? [[`⏸ ${need.length} need${need.length === 1 ? 's' : ''} you: ${clip(need[0].title, 24)}`, () => showChat(need[0].id)], null] : []),
+    ...(need.length ? [[`⏸ ${need.length} need${need.length === 1 ? 's' : ''} you: ${clip(need[0].title, 24)}`, () => showChat(need[0].c.id)], null] : []),
     ['Chats', () => setMView('chats')], [`Running · ${replying().length + runTotal()}`, () => openRunningAll()], ['Servers', () => wrServers()], ['Files', () => wrFiles()],
     null, ['Reopen closed tab', () => wsReopen(), { disabled: !WT.closed.length }]]); };
 }
@@ -7811,11 +7812,10 @@ async function wrFiles() { const c = await wrChat(); if (c) setPaneTab('files');
 // panel; "🖥 N servers" this project's servers; the context left is the chat on screen's. Read from what the page
 // already has: each chat's waiting state, the Running list, the servers overview.
 const runTotal = () => { const d = RUNV.data; return d ? d.items.length + (RUNV.tabs?.length || 0) + d.control.length : 0; };
-const needsYou = () => [...G.open.values()].filter((c) => c.running && c.waiting);
 const replying = () => [...G.open.values()].filter((c) => c.running);
-// The Running panel's first part: the chats with a reply going (needing you first), each a click away.
+// The Running panel, under Needs you (needsYou, the Running list's own): the other chats with a reply going.
 function wsChatsWorking() {
-  const list = replying().sort((a, z) => (z.waiting ? 1 : 0) - (a.waiting ? 1 : 0));
+  const list = replying().filter((c) => !c.waiting);
   if (!list.length) return '';
   const pname = (c) => G.projects.find((p) => p.id === projOf(c));
   return `<section class="run-group rl-sec wp-chats"><h4>Chats working <span class="run-n">${list.length}</span><small>replies going now</small></h4>${list.map((c) => {
@@ -7823,31 +7823,33 @@ function wsChatsWorking() {
     return `<button type="button" class="wp-chat st-${st}" data-chat="${esc(c.id)}" title="Open this chat"><i class="wt-dot"></i><span class="wt-name">${esc(c.title)}</span>${p ? `<span class="rl-proj" style="${projStyle(p)}">${esc(clip(p.name, 18))}</span>` : ''}<small>${esc(say)}</small></button>`;
   }).join('')}</section>`;
 }
-// Slots for parts that land with other changes. The context meter (composer footer) fills wsContextLeft with
-// { pct, text, title } for a chat; the Running list's "Needs you" section fills wsNeedsYouPanel with its HTML for the
-// Running panel. Until then they show nothing.
-function wsContextLeft(_c) { return null; }
-function wsNeedsYouPanel() { return ''; }
+// The context left in the chat on screen: the composer meter's own numbers and colours (contextUse), once known.
+function wsContextLeft(c) {
+  const u = contextUse(c); if (!u.known) return null;
+  return { pct: u.pct, tone: u.tone, text: ctxLabel(u), title: u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens). Click for details and Compact.` : `${ctxK(u.used)} tokens used. Click for details and Compact.` };
+}
 function wsStatusDraw() {
   const bar = $('#wsStatus'); if (!bar) return;
   const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = (pid && G.srvUp?.[pid]) || 0, ctx = c ? wsContextLeft(c) : null;
-  const sig = JSON.stringify([need.map((x) => x.id), work, procs, srv, pid, ctx, c?.id]);
+  const sig = JSON.stringify([need.map((x) => [x.c.id, x.kind]), work, procs, srv, pid, ctx, c?.id]);
   if (bar.dataset.sig === sig) return;
   bar.dataset.sig = sig;
-  bar.innerHTML = `${need.length ? `<button type="button" class="wsb-need" data-sb="need" title="${esc(need.map((x) => `${x.title}: ${x.waiting === 'answer' ? 'a question' : x.waiting === 'budget' ? 'its budget' : 'an approval'}`).join('\n'))}\nClick to go to ${need.length > 1 ? 'each in turn' : 'it'}">⏸ ${need.length} need${need.length === 1 ? 's' : ''} you</button>` : ''}
+  bar.innerHTML = `${need.length ? `<button type="button" class="wsb-need" data-sb="need" title="${esc(need.map((x) => `${x.title}: ${x.kind === 'answer' ? 'a question' : x.kind === 'budget' ? 'its budget' : 'an approval'}`).join('\n'))}\nClick to go to ${need.length > 1 ? 'each in turn' : 'it'}">⏸ ${need.length} need${need.length === 1 ? 's' : ''} you</button>` : ''}
     <button type="button" data-sb="run" class="${work ? 'wsb-live' : ''}" title="Running now, in every project: ${work} chat${work === 1 ? '' : 's'} replying, and ${procs} server${procs === 1 ? '' : 's'}, command${procs === 1 ? '' : 's'}, browser tab${procs === 1 ? '' : 's'} or Chrome / computer use">▶ ${n} running</button>
     <button type="button" data-sb="srv" title="This project's servers that are up: run, stop and edit them">🖥 ${srv} server${srv === 1 ? '' : 's'}</button>
     <span class="wsb-grow"></span>
-    ${ctx ? `<button type="button" data-sb="ctx" class="wsb-ctx" title="${esc(ctx.title || 'Context left in the chat on screen')}">◔ ${esc(ctx.text || `${ctx.pct}% left`)}</button>` : ''}`;
+    ${ctx ? `<button type="button" data-sb="ctx" class="wsb-ctx" data-tone="${ctx.tone}" title="${esc(ctx.title || 'Context left in the chat on screen')}">◔ ${esc(ctx.text || `${ctx.pct}% left`)}</button>` : ''}`;
 }
 function wsStatusWire() {
   $('#wsStatus').onclick = (e) => {
     const b = e.target.closest('[data-sb]'); if (!b) return;
     if (b.dataset.sb === 'need') {
       const list = needsYou(); if (!list.length) return;
-      const i = list.findIndex((x) => x.id === G.panes[0]);
-      showChat(list[(i + 1) % list.length].id);
+      const i = list.findIndex((x) => x.c.id === G.panes[0]);
+      showChat(list[(i + 1) % list.length].c.id);
     }
+    // The context figure opens the composer's own meter (its details and Compact).
+    if (b.dataset.sb === 'ctx') $('.cmp-ctx-btn', focused()?.el?.root || document)?.click();
     if (b.dataset.sb === 'run') wrRunning(true);
     if (b.dataset.sb === 'srv') wrServers();
   };

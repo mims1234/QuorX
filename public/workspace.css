@@ -121,6 +121,17 @@ body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex
 .ws-status .wsb-need:hover { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 20%, transparent); }
 .ws-status .wsb-grow { flex: 1; }
 .ws-status .wsb-live { color: var(--st-run); }
+/* The context figure in the composer meter's colours: running low turns amber, then red. */
+.ws-status .wsb-ctx[data-tone="amber"] { color: var(--amber); }
+.ws-status .wsb-ctx[data-tone="red"] { color: var(--bad, var(--st-error)); }
+/* Needs you rows in the rail's Running panel look as they do in the Running window. */
+#wpBody .rl-sec[hidden], #wpBody .rl-row[hidden] { display: none; }
+#wpBody .rl-sec h4 { align-items: center; }
+#wpBody .rl-none { padding: 6px 2px; font-size: 12.5px; color: var(--muted); }
+#wpBody .st-segmented { display: inline-flex; flex-wrap: wrap; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-inset); border: 1px solid var(--border-inset, var(--line)); }
+#wpBody .st-seg-btn { height: 24px; padding: 0 8px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+#wpBody .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+#wpBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
 
 /* ---------- phones: one view at a time (phone.css); the strip becomes a switcher, the rail a ☰ menu ---------- */
 @media (max-width: 900px) {
