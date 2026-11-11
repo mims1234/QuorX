@@ -41,7 +41,7 @@ import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
-import { runningIn, runningAll, stopRunning, stopAllIn, busyNow } from './server/running.js';
+import { runningIn, runningAll, stopRunning, stopAllIn, busyNow, addUsage, killRunning } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
@@ -879,7 +879,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/running' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, runningIn(pid)); } catch (e) { return json(res, 200, { error: e.message, items: [], elsewhere: [] }); }
+      try { const r = runningIn(pid); if (url.searchParams.get('usage')) await addUsage(r.items); return json(res, 200, r); } catch (e) { return json(res, 200, { error: e.message, items: [], elsewhere: [] }); }
     }
     if ((url.pathname === '/api/running/stop' || url.pathname === '/api/running/stop-all') && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4));
@@ -888,9 +888,16 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return json(res, 200, { error: e.message }); }
     }
 
+    // Kill: a row whose Stop left processes behind (or hangs) is ended by force.
+    if (url.pathname === '/api/running/kill' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: true, ...(await killRunning(b.projectId, String(b.id || ''))) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+
     // ---- the sidebar's Running list: what runs in every project, and the chats driving your Chrome or your desktop ----
     if (url.pathname === '/api/running/all' && req.method === 'GET') {
-      try { return json(res, 200, { items: runningAll(listProjects().map((p) => p.id)), control: controlNow() }); }
+      try { const items = runningAll(listProjects().map((p) => p.id)); if (url.searchParams.get('usage')) await addUsage(items); return json(res, 200, { items, control: controlNow() }); }
       catch (e) { return json(res, 200, { error: e.message, items: [], control: [] }); }
     }
     // Stop: the chat's reply ends (its Chrome or desktop use with it). Take back: a lent Chrome tab is yours again.

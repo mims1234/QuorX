@@ -146,3 +146,13 @@
 .ap-bulk button { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface, transparent); color: var(--text); font: 600 12.5px var(--font-ui, inherit); cursor: pointer; }
 .ap-bulk button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
 .ap-bulk-note { font-size: 12px; color: var(--muted); }
+
+/* CPU and memory on a running row (useHTML in app.js): plain numbers in the row's top line, not a tag or a button.
+   Heavy use turns amber. Kill (only after a Stop left processes, or hangs) is filled red so it differs from Stop. */
+.run-use-slot { flex: none; display: inline-flex; }
+.run-use-slot:empty { display: none; }
+.run-use { display: inline-flex; align-items: baseline; gap: 8px; font: 11.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: default; }
+.run-use .use-cpu { min-width: 6.5ch; text-align: right; }
+.run-use.hot { color: var(--warn); }
+.run-acts .run-kill { color: #fff; background: var(--bad); border: 1px solid var(--bad); font-weight: 600; }
+.run-acts .run-kill:hover:not(:disabled) { filter: brightness(1.1); }

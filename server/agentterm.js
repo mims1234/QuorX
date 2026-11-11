@@ -125,4 +125,6 @@ export async function termStop(id) {
   if (!s.exited) release(s.term);
   return r;
 }
+/** An agent terminal's process (its Windows job and pid), for the Running list's CPU and memory and its Kill. */
+export const termProc = (id) => { const s = SESS.get(id); return s && !s.exited ? { qxJob: s.job || null, pid: s.term?.pid || 0 } : null; };
 export const listTerms = (projectId) => [...SESS.values()].filter((s) => !projectId || s.projectId === projectId).map(view);
