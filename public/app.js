@@ -8053,7 +8053,7 @@ function paneVisible() {
   if (!isPhone()) return !G.paneHidden; // always there on a desktop: drag the divider to resize, ⤢ to make it full width
   // ◧ always wins: hidden means hidden, even with the explorer or a trace open (they come back with it).
   if (c.paneHidden === true) return false;
-  if (G.view.files || G.view.trace || G.view.term || G.view.run || G.view.browser) return true;
+  if (G.view.files || G.view.trace || G.view.term || G.view.run || G.view.browser || G.view.pulls) return true;
   if (c.paneHidden === false) return true; // shown with ◧, even with nothing built yet
   const mode = G.settings.ui?.paneMode || 'auto';
   if (mode === 'never' && c.paneHidden !== false) return false;
@@ -8222,7 +8222,7 @@ function paneView(c, tab, id = G.view?.id ?? null) {
     const lastRun = [...c.agent.messages].reverse().find((m) => m.role === 'assistant' && m.runId);
     G.traceRun = G.traceRun && c.agent.messages.some((m) => m.runId === G.traceRun) ? G.traceRun : lastRun?.runId || null;
   }
-  return { id, src: false, files: tab === 'files', term: tab === 'term', run: false, browser: tab === 'browser', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
+  return { id, src: false, files: tab === 'files', term: tab === 'term', run: false, browser: tab === 'browser', pulls: tab === 'pulls', trace: tab === 'trace' ? (G.traceRun || '(none)') : null };
 }
 // Area 0 is the pane's own markup, wrapped once; new areas are copies of it as it was before anything was drawn.
 function paneAreasInit() {
@@ -9063,6 +9063,7 @@ function renderPaneNow() {
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   if (!PA.list.some((a) => a.st.view?.term)) closeTermStream();
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
+  if (G.view.pulls) { setUrlBar(null); return renderPulls(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
     setUrlBar(null);
@@ -14057,7 +14058,7 @@ async function drawEmbedPick() {
 }
 
 // ---------- the pane as a small browser: tabs, an address bar, and the agent's own browser ----------
-const paneTab = () => (G.view.term ? 'term' : G.view.files ? 'files' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
+const paneTab = () => (G.view.term ? 'term' : G.view.files ? 'files' : G.view.pulls ? 'pulls' : G.view.trace ? 'trace' : G.view.browser ? 'browser' : 'art');
 const absUrl = (u) => (!u || u.startsWith('data:') ? '' : u.startsWith('/') ? location.origin + u : u);
 function artifactUrl(c, a) {
   if (a.kind === 'html' || a.kind === 'md') return `/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}`;
@@ -14087,11 +14088,81 @@ function renderPaneTabs(c) {
   const ag = c && G.agentTab?.[c.id];
   const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || (c && projTabs(c.projectId).length) ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
+  // Pull requests: only for a project whose folder has a GitHub repo (its remote).
+  const pt = $('[data-tab="pulls"]', box); if (pt) pt.hidden = !(c && G.projects.find((p) => p.id === c.projectId)?.github) && t !== 'pulls';
+}
+// ---------- the Pull requests tab ----------
+// The project's GitHub pull requests, read through the GitHub command line (server/pulls.js): this chat's branch
+// first, then the others, each with what blocks it ("Nothing blocking" when nothing does), its checks (failing first)
+// and its review. A failing check's "Fix in chat" puts the check's name and the end of its log in the box of the chat
+// that made the branch (else this one), as a chip for the next message. Read only: merging stays on GitHub.
+const PR_STATES = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed'], ['all', 'All']];
+const prState = () => { try { const v = localStorage.getItem('oh-pr-state'); return PR_STATES.some(([k]) => k === v) ? v : 'open'; } catch { return 'open'; } };
+const PR_ICO = { failing: '✕', pending: '◌', passed: '✓', skipped: '–' };
+async function renderPulls(c) {
+  const body = $('#paneBody'); if (!body) return;
+  const seq = (renderPulls.seq = (renderPulls.seq || 0) + 1);
+  const st = prState();
+  if (!body.querySelector('.prp')) body.innerHTML = '<div class="prp"><div class="prp-wait" role="status">Reading pull requests…</div></div>';
+  const r = await getJ(`/api/pulls?project=${encodeURIComponent(c.projectId)}&chat=${encodeURIComponent(c.id)}&state=${st}`);
+  if (seq !== renderPulls.seq || !G.view.pulls || focused() !== c) return;
+  const box = $('.prp', body) || body;
+  const head = (extra = '') => `<div class="prp-head"><b class="prp-repo">${r.repo ? `${GH_ICO} ${esc(r.repo)}` : 'Pull requests'}</b>${r.branch ? `<span class="wt-branch-tag" title="${c.wt ? 'This chat\'s own branch' : 'The project folder\'s current branch'}">⎇ ${esc(r.branch)}</span>` : ''}<span class="prp-sp"></span>${extra}<button type="button" class="prp-btn prp-refresh" title="Read them again">↻</button></div>`;
+  const wireHead = () => { const b = $('.prp-refresh', box); if (b) b.onclick = () => renderPulls(c); };
+  if (r.error && !r.gh) { box.innerHTML = `${head()}<p class="prp-note">${esc(r.error)}</p>`; return wireHead(); }
+  if (!r.repo) { box.innerHTML = `${head()}<p class="prp-note">This project has no GitHub repository (no remote on github.com), so there are no pull requests to show.</p>`; return wireHead(); }
+  if (!r.gh?.installed || !r.gh?.signedIn) {
+    box.innerHTML = `${head()}<div class="prp-setup"><b>${r.gh?.installed ? 'Sign in to the GitHub CLI' : 'Install the GitHub CLI'}</b><p>${r.gh?.installed ? 'QuorX reads pull requests through the GitHub CLI. Sign in once: run <code>gh auth login</code> in a terminal, then press ↻.' : 'QuorX reads pull requests, checks and reviews through the GitHub CLI (gh). Install it from <a href="https://cli.github.com/" rel="noopener noreferrer" data-cl="1">cli.github.com</a> (or <code>winget install GitHub.cli</code>), run <code>gh auth login</code>, then press ↻.'}</p>${r.gh?.installed ? '<button type="button" class="prp-btn prp-term">Open a terminal</button>' : ''}</div>`;
+    const tb = $('.prp-term', box); if (tb) tb.onclick = () => openTerminal(c, null, 'term');
+    return wireHead();
+  }
+  const seg = `<span class="st-segmented prp-seg" role="radiogroup" aria-label="Which pull requests">${PR_STATES.map(([k, l]) => `<button type="button" class="st-seg-btn ${k === st ? 'active' : ''}" role="radio" aria-checked="${k === st}" data-prs="${k}">${l}</button>`).join('')}</span>`;
+  const mine = r.prs.filter((p) => p.mine), rest = r.prs.filter((p) => !p.mine);
+  const card = (p) => {
+    const s = p.sum, sumText = s.total ? [s.failing && `<span class="prp-ck failing">✕ ${s.failing} failing</span>`, s.pending && `<span class="prp-ck pending">◌ ${s.pending} running</span>`, s.passed && `<span class="prp-ck passed">✓ ${s.passed} passed</span>`].filter(Boolean).join('') : '<span class="prp-ck none">no checks</span>';
+    // A card shows its checks when you opened it; this chat's own PR with a failing check starts open.
+    const open = (G.prOpen ||= new Map()).has(p.number) ? G.prOpen.get(p.number) : !!(p.mine && s.failing);
+    return `<article class="prp-card ${p.state}" data-pr="${p.number}" data-lf-text="${esc(`#${p.number} ${p.title} ${p.head} ${p.author || ''}`.toLowerCase())}" data-lf-seg="${p.mine ? 'This chat' : 'Others'}">
+      <div class="prp-top"><a class="prp-num ${p.state}" href="${esc(p.url)}" rel="noopener noreferrer" data-cl="1" title="Open on GitHub">#${p.number}</a><b class="prp-title">${esc(p.title)}</b>${p.draft ? '<span class="prp-tag draft">draft</span>' : ''}${p.state !== 'open' ? `<span class="prp-tag ${p.state}">${p.state}</span>` : ''}</div>
+      <div class="prp-meta"><code class="prp-ref">${esc(p.base)} ← ${esc(p.head)}</code>${p.author ? `<span>by ${esc(p.author)}</span>` : ''}${p.review ? `<span class="prp-rev ${p.review.replace(/\s/g, '-')}">${p.review === 'approved' ? '✓ ' : p.review === 'changes requested' ? '✕ ' : ''}${esc(p.review)}</span>` : ''}${p.comments ? `<span title="Comments">💬 ${p.comments}</span>` : ''}</div>
+      ${p.state === 'open' ? `<div class="prp-block ${p.blockers.length ? 'has' : 'none'}">${p.blockers.length ? `Blocking: ${esc(p.blockers.join(' · '))}` : '✓ Nothing blocking'}</div>` : ''}
+      <button type="button" class="prp-sum" aria-expanded="${open}" ${s.total ? '' : 'disabled'}>${sumText}${s.total ? `<span class="prp-chev">${open ? '▾' : '▸'}</span>` : ''}</button>
+      ${open && s.total ? `<ul class="prp-checks">${p.checks.map((k, i) => `<li class="prp-check ${k.state}"><span class="prp-ci" aria-label="${k.state}">${PR_ICO[k.state]}</span><span class="prp-cn" title="${esc(k.workflow ? `${k.workflow} / ${k.name}` : k.name)}">${k.workflow ? `<small>${esc(k.workflow)} /</small> ` : ''}${esc(k.name)}</span>${k.url ? `<a class="prp-link" href="${esc(k.url)}" rel="noopener noreferrer" data-cl="1">Details</a>` : ''}${k.state === 'failing' ? `<button type="button" class="prp-fix" data-fix="${p.number}:${i}" title="Put this check's name and the end of its log in the chat's message box">↪ Fix in chat</button>` : ''}</li>`).join('')}</ul>` : ''}
+    </article>`;
+  };
+  const section = (title, list) => (list.length ? `<h4 class="prp-h">${title} <small>${list.length}</small></h4>${list.map(card).join('')}` : '');
+  box.innerHTML = `${head(seg)}${r.error ? `<p class="prp-note bad">${esc(r.error)}</p>` : ''}${r.prs.length > 6 ? '<div class="prp-filter"></div>' : ''}
+    ${r.prs.length ? section('This chat\'s branch', mine) + section(mine.length ? 'Other pull requests' : 'Pull requests', rest) : `<p class="prp-note">No ${st === 'all' ? '' : `${st} `}pull requests${r.branch ? `. When one is opened from ${esc(r.branch)}, it shows here first` : ''}.</p>`}`;
+  wireHead();
+  for (const b of box.querySelectorAll('[data-prs]')) b.onclick = () => { try { localStorage.setItem('oh-pr-state', b.dataset.prs); } catch { /* storage off */ } renderPulls(c); };
+  for (const b of box.querySelectorAll('.prp-sum')) b.onclick = () => { (G.prOpen ||= new Map()).set(Number(b.closest('[data-pr]').dataset.pr), b.getAttribute('aria-expanded') !== 'true'); renderPulls(c); };
+  for (const b of box.querySelectorAll('.prp-fix')) b.onclick = () => { const [n, i] = b.dataset.fix.split(':').map(Number); const p = r.prs.find((x) => x.number === n); if (p) fixCheckInChat(c, r, p, p.checks[i], b); };
+  const ff = $('.prp-filter', box); if (ff) listFilter(ff, { key: 'pulls', rows: () => box.querySelectorAll('.prp-card'), placeholder: 'Find a pull request, branch or author', label: 'Whose' });
+}
+// The chat that made a PR's branch (its worktree's branch), else the chat on screen.
+function chatOfBranch(branch) { for (const ch of G.open.values()) if (ch.wt?.branch === branch) return ch; return null; }
+async function fixCheckInChat(c, r, p, k, btn) {
+  if (!k) return;
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Reading the log…';
+  const lg = await getJ(`/api/pulls/log?project=${encodeURIComponent(c.projectId)}&run=${encodeURIComponent(k.runId || '')}&job=${encodeURIComponent(k.jobId || '')}`);
+  btn.disabled = false; btn.textContent = label;
+  const to = chatOfBranch(p.head) || c;
+  const name = k.workflow ? `${k.workflow} / ${k.name}` : k.name;
+  const text = `Pull request #${p.number} "${p.title}" (${p.base} ← ${p.head}): the check "${name}" is failing.\n${k.url ? `Details: ${k.url}\n` : ''}${lg.tail ? `\nThe end of its log:\n${lg.tail}` : `\n(The log could not be read: ${lg.error || 'no log'}.)`}`;
+  // Through the composer's context chips (the same path as sending terminal output to the chat).
+  to.ctx.push({ type: 'term', id: `check-${p.number}-${Date.now().toString(36)}`, title: `Failing check: ${clip(name, 50)} (#${p.number})`, text: text.slice(-20000) });
+  if (to !== focused()) await showChat(to.id);
+  renderAttachments(to);
+  const ta = to.el && $('.input', to.el.root);
+  if (ta && !ta.value.trim()) { ta.value = `Fix the failing check "${name}" on pull request #${p.number}.`; ta.dispatchEvent(new Event('input', { bubbles: true })); }
+  ta?.focus();
+  flashTip(btn, to === c ? 'Added to your next message' : `Added to the message box of "${clip(to.title, 30)}"`);
 }
 // The address bar: the served address of what is open, editable to look at any address yourself.
 function setUrlBar(url, { art = false } = {}) {
   const tab = paneTab(), wrap = $('#paneUrlWrap'), f = $('#paneUrl');
-  wrap.hidden = tab === 'term' || tab === 'files' || tab === 'trace' || tab === 'run';
+  wrap.hidden = tab === 'term' || tab === 'files' || tab === 'trace' || tab === 'run' || tab === 'pulls';
   $('#artSelect').hidden = !art;
   wrap.classList.toggle('art-mode', !!art);
   const full = absUrl(url);
