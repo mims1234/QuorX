@@ -3342,3 +3342,7 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 .sb-older-btn:hover { color: var(--text); background: var(--accent-dim); }
 .sb-chat.sb-older { opacity: .82; }
 .sb-project.folded .sb-older-btn { display: none; }
+
+/* ⚙ About → Desktop app → the summon key: its ✓ box and key box side by side, and why Windows refused a key. */
+.sm-ctl { display: inline-flex; gap: 10px; align-items: center; }
+.sm-err { display: block; margin-top: 6px; font-size: 12px; color: var(--warn); }

@@ -39,6 +39,7 @@ All calls return a promise.
 | `loginItem` | Start QuorX with Windows: read it, or set it | nothing · `true \| false` | `true \| false` |
 | `closeAction` | What closing the window does: keep running in the tray, quit, or ask | nothing · `'tray' \| 'quit' \| 'ask'` | the choice |
 | `keepAwake` | Keep the PC awake while a reply or a command runs: read it, or set it | nothing · `true \| false` | `{ on, held }` (held: keeping it awake now) |
+| `summon` | The system-wide key that brings QuorX forward with the message box ready (off by default): read it, or set it; a key another app holds is refused and stays off | nothing · `{ on, key }` (key as the page writes it, e.g. `'Ctrl+Shift+Space'`) | `{ on, key, ok, error? }` |
 | `quit` | Quits the app | | `true` |
 | `update` | The app's own updates | `'state'` · `'check'` · `'download'` · `'install'` · `'setUrl'`, url · `'store'` | the update state |
 | `info` | Version, packaged or not, dev build, store, data folder, address, whether it runs the server | | `{ version, packaged, dev, store, home, origin, ownsServer }` |
@@ -61,6 +62,7 @@ Sent on the `oh-desktop` channel; each has a `type`.
 
 | Event | When |
 |---|---|
+| `summon` | The summon key was pressed: the window is in front, and the page puts the cursor in the message box |
 | `state` | A tab's address, title, loading state or back/forward changed (`sid`, `url`, `title`, `loading`, `canBack`, `canForward`) |
 | `error` | A tab's page failed to load (`sid`, `url`, `message`) |
 | `favicon` | A tab's icon changed (`sid`, `icon`) |
@@ -89,7 +91,7 @@ A replacement shell needs, roughly in order of effort:
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
-3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `quit`, `openExternal`,
+3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `summon`, `quit`, `openExternal`,
    `showFile`, `openHome`).
 4. **App updates and storage** (`update`, `storage`, `info`, `restartHarness`).
 5. **Readout** (`perf`): optional; the page shows its own numbers without it.

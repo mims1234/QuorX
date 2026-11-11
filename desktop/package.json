@@ -36,6 +36,7 @@
       "storage.js",
       "tab-sleep.js",
       "keep-awake.js",
+      "summon.js",
       "assets/**/*",
       "package.json"
     ],

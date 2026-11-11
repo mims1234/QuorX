@@ -17,6 +17,7 @@ const { createStorage, cleanAtStart } = require('./storage.js');
 const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
 const { quitDialog } = require('./quit-prompt.js');
 const { POLL_MS: AWAKE_POLL_MS, keepAwakeOn, wantAwake, createAwake } = require('./keep-awake.js');
+const { SUMMON_DEFAULT, applySummon } = require('./summon.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -657,6 +658,7 @@ handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)))
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
 handle('quit', () => { setImmediate(confirmQuit); return true; });
 handle('keepAwake', (on) => { if (on !== undefined) { writeConfig({ ...readConfig(), keepAwake: !!on }); awakeTick(); } return { on: keepAwakeOn(readConfig()), held: awake.held }; });
+handle('summon', (v) => (v === undefined ? (summonState || { on: false, key: readConfig().summon?.key || SUMMON_DEFAULT, ok: true }) : setSummon(v)));
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // The performance readout (⚙ Settings → Appearance → Under the hood) and the perf UI test: every process QuorX runs
@@ -842,6 +844,20 @@ const PHONE = 19.5 / 9;
 // While computer use runs, its stop shortcut works whichever window is in front: a system hotkey, besides the
 // screen glow's own keyboard watch (which Windows can drop, and which an app run as administrator doesn't reach).
 const STOP_KEYS = 'Control+Alt+Backspace';
+// The summon key (desktop/summon.js): saved in the desktop config as { on, key }, off until you turn it on.
+let summonState = null;
+function summonFire() {
+  if (!win || win.isDestroyed()) createWindow();
+  showWindow();
+  send({ type: 'summon' }); // the page puts the cursor in the message box
+}
+function setSummon(want) {
+  const cfg = readConfig().summon || {};
+  const next = { on: want?.on ?? cfg.on ?? false, key: String(want?.key || cfg.key || SUMMON_DEFAULT) };
+  summonState = applySummon(globalShortcut, next, summonState, summonFire);
+  writeConfig({ ...readConfig(), summon: { on: summonState.on, key: summonState.key } });
+  return summonState;
+}
 function stopShortcut(on) {
   try {
     if (on && !globalShortcut.isRegistered(STOP_KEYS)) globalShortcut.register(STOP_KEYS, () => postReply({ signal: 'stop' }));
@@ -1049,6 +1065,7 @@ app.whenReady().then(async () => {
   createTray();
   linkLoop();
   setInterval(awakeTick, AWAKE_POLL_MS);
+  if (readConfig().summon?.on) setSummon({}); // the summon key you turned on (taken since: it stays off, Settings says so)
   setInterval(sleepTick, Math.min(10e3, Math.max(1000, (SLEEP_OPTS.after ?? 10e3) / 2)));
   // Installed update downloads go a little after start (⚙ Settings → Storage → Automatic cleanup).
   if (readConfig().storage?.updateCleanup !== false) setTimeout(() => getStorage().clear([{ id: 'desk:updates' }]).catch(() => {}), 30000);
