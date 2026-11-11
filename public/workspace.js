@@ -593,3 +593,72 @@ export function openTarget(kind, { lay, rects = {}, from = null, follow = null, 
   if (kind === 'side' || kind === 'changes') return near(chatGroup);
   return near(from);
 }
+
+// ---------- pop-out windows (desktop app) ----------
+// A pane group, one tab or a chat can go to a window of its own. What goes there is a group record
+// { gid, tabs, active, near, zone }: its tabs (a group always has the five pane tabs, plus any files), the tab it
+// shows, and where it sat (beside group near, on side zone) so docking back puts it there again. Records are plain
+// JSON, kept per project, so a main window that reloads can still dock them back.
+const isFile = (t) => kindOf(t) === 'viewer';
+/** Where a group sits, to come back to: the neighbour before it (it comes back after), else the one after. */
+function spotOf(lay, gid) {
+  const g = findGroup(lay, gid), p = g && parentOf(lay, g);
+  if (!p) return { near: CHAT_GROUP, zone: 'right' };
+  const i = p.kids.indexOf(g), row = p.dir === 'row';
+  if (i > 0) return { near: groups(p.kids[i - 1]).at(-1).id, zone: row ? 'right' : 'bottom' };
+  return { near: groups(p.kids[i + 1])[0].id, zone: row ? 'left' : 'top' };
+}
+/** A whole pane group out of the layout (the last pane group stays). */
+export function popGroup(lay, gid) {
+  const g = findGroup(lay, gid);
+  if (!g || isChatGroup(gid)) return { ok: false, reason: 'target', layout: lay };
+  if (sideGroups(lay).length < 2) return { ok: false, reason: 'last', layout: lay };
+  const spot = spotOf(lay, gid);
+  return { ok: true, layout: removeGroup(lay, gid), rec: { gid, tabs: [...g.tabs], active: g.active, ...spot } };
+}
+/**
+ * One tab out, into a new group of its own (gid: its id). A file tab leaves its group; a pane tab (Browser, Terminal…)
+ * stays in its group too, as every group has the five, and the window shows its own.
+ */
+export function popTab(lay, tab, gid) {
+  const from = groupOf(lay, tab);
+  if (!from || !gid || findGroup(lay, gid)) return { ok: false, reason: 'target', layout: lay };
+  const kind = kindOf(tab), file = isFile(tab);
+  const tabs = [...paneTabs(gid), ...(file ? [tab] : [])], active = file ? tab : tabId(kind, gid);
+  return { ok: true, layout: file ? removeTab(lay, tab) : lay, rec: { gid, tabs, active, near: from.id, zone: 'right' } };
+}
+/**
+ * A popped group back in: beside where it was (or the first pane group, or the chat) with its own id when that is free;
+ * at the cap its files join the nearest group instead (pane tabs are in every group already). Gives { layout, gid,
+ * merged }: gid is the group that holds them now.
+ */
+export function dockBack(lay, rec) {
+  const id = findGroup(lay, rec.gid) ? `g${lay.next}` : rec.gid;
+  const files = (rec.tabs || []).filter(isFile).filter((t) => !allTabs(lay).includes(t));
+  const near = findGroup(lay, rec.near) ? rec.near : sideGroups(lay)[0]?.id || CHAT_GROUP;
+  const zone = ZONES.has(rec.zone) && rec.zone !== 'center' ? rec.zone : 'right';
+  if (groups(lay).length < MAX_GROUPS) {
+    const pane = KIND_PANE[kindOf(rec.active)], active = isFile(rec.active) && files.includes(rec.active) ? rec.active : tabId(PANE_KINDS[pane] || 'artifact', id);
+    const r = addGroup(lay, near, zone, [...paneTabs(id), ...files], { id, active });
+    if (r.ok) return { layout: { ...r.layout, next: Math.max(r.layout.next, lay.next + (id === rec.gid ? 0 : 1)) }, gid: id, merged: false };
+  }
+  const into = isChatGroup(near) ? nearestGroup(lay, near, {}) : near;
+  if (!into) return { layout: lay, gid: null, merged: true };
+  let l = lay;
+  for (const t of files) l = placeTab(l, t, into, 'center').layout;
+  return { layout: { ...l, focus: lay.focus }, gid: into, merged: true };
+}
+/** Which remembered window box a record uses: per kind of thing (a chat, or the pane tab its group shows). */
+export const popKey = (rec) => (rec?.chat && !rec.gid ? 'chat' : `group:${isFile(rec?.active) ? 'file' : KIND_PANE[kindOf(rec?.active)] || 'art'}`);
+/** The boxes remembered for a project's windows: the newest per key, a few keys at most. */
+export function rememberBox(boxes, key, box) {
+  const ok = box && [box.x, box.y, box.width, box.height].every(Number.isFinite) && box.width >= 200 && box.height >= 150;
+  const out = Object.fromEntries(Object.entries(boxes && typeof boxes === 'object' ? boxes : {}).filter(([k]) => k !== key).slice(-11));
+  if (ok) out[key] = { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) };
+  return out;
+}
+/** Only well-formed popped records (what a project keeps across a main window reload). */
+export function cleanPopped(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((x) => x && typeof x.id === 'string' && (typeof x.chat === 'string' || (x.rec && typeof x.rec.gid === 'string' && Array.isArray(x.rec.tabs)))).slice(-8).map((x) => JSON.parse(JSON.stringify(x)));
+}

@@ -434,3 +434,60 @@ test('workspace W4: where things open: one rule set, never in a chat group', () 
   for (const k of ['server', 'steps', 'file', 'page', 'side', 'changes']) assert.ok(!W.isChatGroup(W.openTarget(k, { lay, rects, from: 'chat', shows, chat: 'a' })), k);
   assert.equal(W.openTarget('file', { lay: W.createLayout(W.group('chat', ['chat:a'])) }), null);
 });
+
+test('workspace W5: pop-out windows: what goes there, docking back where it was, remembered boxes on a screen that is there', async () => {
+  { // workspace W5: a whole group out and back in the same place; the last pane group stays
+    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout; // chat | g1 over g2
+    const r = W.popGroup(lay, 'g2');
+    assert.equal(r.ok, true);
+    assert.deepEqual(W.groups(r.layout).map((g) => g.id), ['chat', 'g1']);
+    assert.deepEqual([r.rec.near, r.rec.zone, r.rec.active], ['g1', 'bottom', 'terminal:g2']);
+    const d = W.dockBack(r.layout, r.rec);
+    assert.equal(d.gid, 'g2');
+    assert.equal(shape(d.layout.root).replace(/\[[^\]]*\]/g, ''), 'row(chat col(g1 g2))');
+    assert.equal(W.findGroup(d.layout, 'g2').active, 'terminal:g2');
+    assert.equal(W.popGroup(W.defaultLayout(), 'g1').reason, 'last');
+    assert.equal(W.popGroup(lay, 'chat').ok, false, 'a chat pops out on its own, not as a pane group');
+  }
+  { // workspace W5: one tab out: a file leaves its group; a pane tab gets a group of its own in the window
+    let lay = W.placeTab(W.defaultLayout(), 'viewer:a', 'g1', 'center').layout;
+    const f = W.popTab(lay, 'viewer:a', 'g7');
+    assert.ok(!W.allTabs(f.layout).includes('viewer:a'));
+    assert.deepEqual([f.rec.active, f.rec.near, f.rec.tabs.length], ['viewer:a', 'g1', 6]);
+    const b = W.popTab(lay, 'browser:g1', 'g7');
+    assert.equal(b.layout, lay, 'every group keeps its five pane tabs');
+    assert.equal(b.rec.active, 'browser:g7');
+    // Docked back: the file comes back beside where it came from, shown.
+    const d = W.dockBack(f.layout, { ...f.rec, tabs: [...f.rec.tabs, 'viewer:b'] });
+    assert.equal(W.findGroup(d.layout, d.gid).active, 'viewer:a');
+    assert.ok(W.findGroup(d.layout, d.gid).tabs.includes('viewer:b'), 'a file opened in the window comes back too');
+  }
+  { // workspace W5: at the cap, docking back puts the files in the nearest group: nothing is lost
+    const full = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout; // 4 groups
+    const d = W.dockBack(full, { gid: 'g9', tabs: [...W.paneTabs('g9'), 'viewer:x'], active: 'viewer:x', near: 'g2', zone: 'right' });
+    assert.equal(d.merged, true);
+    assert.equal(W.groups(d.layout).length, 4);
+    assert.ok(W.findGroup(d.layout, 'g2').tabs.includes('viewer:x'));
+    // A gid taken meanwhile: a fresh one.
+    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout;
+    assert.notEqual(W.dockBack(lay, { gid: 'g1', tabs: W.paneTabs('g1'), active: 'browser:g1', near: 'g1', zone: 'right' }).gid, 'g1');
+  }
+  { // workspace W5: remembered boxes per kind of window; records are checked
+    assert.equal(W.popKey({ gid: 'g2', active: 'terminal:g2' }), 'group:term');
+    assert.equal(W.popKey({ gid: 'g2', active: 'viewer:a' }), 'group:file');
+    assert.equal(W.popKey({ chat: 'c1' }), 'chat');
+    let boxes = W.rememberBox({}, 'chat', { x: 10.4, y: 20, width: 800, height: 600 });
+    assert.deepEqual(boxes, { chat: { x: 10, y: 20, width: 800, height: 600 } });
+    assert.deepEqual(W.rememberBox(boxes, 'chat', { x: 1, y: 1, width: 50, height: 50 }), {}, 'a box too small to use is not kept');
+    assert.deepEqual(W.cleanPopped([{ id: 'p1', chat: 'c1' }, { id: 'p2', rec: { gid: 'g2', tabs: [] } }, { nope: 1 }, null]).map((x) => x.id), ['p1', 'p2']);
+  }
+  { // workspace W5: a window box stays on a screen that is there (a monitor unplugged since moves it back)
+    const { createRequire } = await import('node:module');
+    const { fitBox } = createRequire(import.meta.url)('../desktop/popbox.js');
+    const screens = [{ x: 0, y: 0, width: 1920, height: 1040 }, { x: 1920, y: 0, width: 1280, height: 1000 }];
+    assert.deepEqual(fitBox({ x: 2000, y: 100, width: 700, height: 500 }, screens), { x: 2000, y: 100, width: 700, height: 500 }, 'on the second screen, as it was');
+    assert.deepEqual(fitBox({ x: 4000, y: 100, width: 700, height: 500 }, screens), { x: 2500, y: 100, width: 700, height: 500 }, 'past every screen: back on the nearest');
+    assert.deepEqual(fitBox({ x: 1900, y: 0, width: 3000, height: 900 }, screens), { x: 1920, y: 0, width: 1280, height: 900 }, 'on the screen it is mostly on, never bigger than it');
+    assert.deepEqual(fitBox(null, screens), { x: 580, y: 240, width: 760, height: 560 }, 'no box: in the middle of the first screen');
+  }
+});
