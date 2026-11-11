@@ -158,6 +158,104 @@ export function setActive(lay, groupId, tabId) {
   return finish(lay, root, groupId);
 }
 export function setFocus(lay, groupId) { return findGroup(lay, groupId) ? { ...lay, focus: groupId } : lay; }
+/**
+ * Moves a whole group beside another (zone left / right / top / bottom), keeping its id, tabs and shown tab: the chat
+ * moves this way. It never adds a group, so the cap doesn't stop it. Refused onto itself or with nothing else to sit by.
+ */
+export function moveGroup(lay, groupId, targetId, zone) {
+  const g = findGroup(lay, groupId);
+  if (!g || groupId === targetId || !findGroup(lay, targetId) || !ZONES.has(zone) || zone === 'center') return { ok: false, reason: 'target', layout: lay };
+  const l = removeGroup(lay, groupId);
+  if (l === lay) return { ok: false, reason: 'target', layout: lay };
+  const r = addGroup({ ...l, next: lay.next - 1 }, targetId, zone, g.tabs, { active: g.active, id: g.id });
+  return r.ok ? { ok: true, layout: { ...r.layout, next: lay.next, focus: lay.focus }, groupId } : { ok: false, reason: r.reason, layout: lay };
+}
+/** Moves a whole group to one side of everything (the chat on the right of the window, say). */
+export function moveGroupToEdge(lay, groupId, zone) {
+  const g = findGroup(lay, groupId);
+  if (!g || !ZONES.has(zone) || zone === 'center' || groups(lay).length < 2) return { ok: false, reason: 'target', layout: lay };
+  const l = removeGroup(lay, groupId), rest = { ...copy(l.root), w: 1 };
+  const dir = zone === 'left' || zone === 'right' ? 'row' : 'col', before = zone === 'left' || zone === 'top';
+  // The moved group keeps a share like the one it had of its old split (about half the window, at most).
+  const share = Math.min(1, Math.max(0.25, g.w)), ng = group(g.id, g.tabs, g.active, share);
+  const root = split(dir, before ? [ng, rest] : [rest, ng]);
+  return { ok: true, layout: finish(l, root, lay.focus), groupId };
+}
+/** A tab swapped for another in place (a preview tab reused by the next file): same group, same spot. */
+export function replaceTab(lay, oldId, newId) {
+  const root = copy(lay.root), g = groupOf(root, oldId);
+  if (!g || groupOf(root, newId)) return lay;
+  g.tabs[g.tabs.indexOf(oldId)] = newId;
+  if (g.active === oldId) g.active = newId;
+  return { ...lay, root };
+}
+
+// ---------- placing the groups on screen ----------
+// Every group is placed by a rectangle worked out from the tree, so the page can position each one absolutely and never
+// move a group's box in the page: a moved frame reloads, and a terminal loses its screen. Between the children of a
+// split sits a bar `gap` wide that resizes the two either side of it.
+/** The node a path of child indexes leads to (the root for []). */
+export function nodeAt(x, path) {
+  let n = rootOf(x);
+  for (const i of path || []) { if (!n || n.t !== 's') return null; n = n.kids[i]; }
+  return n || null;
+}
+/**
+ * Rectangles for every group in box { x, y, w, h }: { groups: { [id]: { x, y, w, h } }, bars: [{ path, i, dir, x, y, w, h }] }.
+ * A bar sits between kids i and i+1 of the split at path; dir is that split's direction ('row': a bar you drag sideways).
+ */
+export function rects(x, box, gap = 6) {
+  const out = { groups: {}, bars: [] };
+  const walk = (n, b, path) => {
+    if (!n) return;
+    if (n.t === 'g') { out.groups[n.id] = { ...b }; return; }
+    const row = n.dir === 'row', size = row ? b.w : b.h, free = Math.max(0, size - gap * (n.kids.length - 1));
+    const sum = n.kids.reduce((s, k) => s + k.w, 0) || 1;
+    let at = row ? b.x : b.y;
+    n.kids.forEach((k, i) => {
+      const len = i === n.kids.length - 1 ? (row ? b.x + b.w : b.y + b.h) - at : Math.round((free * k.w) / sum);
+      walk(k, row ? { x: at, y: b.y, w: len, h: b.h } : { x: b.x, y: at, w: b.w, h: len }, [...path, i]);
+      at += len;
+      if (i < n.kids.length - 1) { out.bars.push({ path, i, dir: n.dir, ...(row ? { x: at, y: b.y, w: gap, h: b.h } : { x: b.x, y: at, w: b.w, h: gap }) }); at += gap; }
+    });
+  };
+  walk(rootOf(x), { x: box.x || 0, y: box.y || 0, w: box.w, h: box.h }, []);
+  return out;
+}
+/** The shares of two neighbours in the split at path, as their sizes a and b (pixels, any unit): the rest keep theirs. */
+export function resizePair(lay, path, i, a, b) {
+  const root = copy(lay.root), n = nodeAt(root, path);
+  if (!n || n.t !== 's' || !n.kids[i + 1] || a <= 0 || b <= 0) return lay;
+  const both = n.kids[i].w + n.kids[i + 1].w;
+  n.kids[i].w = w3((both * a) / (a + b)); n.kids[i + 1].w = w3(both - n.kids[i].w);
+  return { ...lay, root };
+}
+/** Every child of the split at path gets the same share (a double-click on its bar). */
+export function evenShares(lay, path) {
+  const root = copy(lay.root), n = nodeAt(root, path);
+  if (!n || n.t !== 's') return lay;
+  for (const k of n.kids) k.w = 1;
+  return { ...lay, root };
+}
+/** Which side of a box a point is on, for dropping a tab: the outer quarter on each side is an edge, the rest the middle. */
+export function zoneAt(r, px, py, edge = 0.25) {
+  const fx = (px - r.x) / (r.w || 1), fy = (py - r.y) / (r.h || 1);
+  const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+  const [side, v] = Object.entries(d).sort((p, q) => p[1] - q[1])[0];
+  return v < edge ? side : 'center';
+}
+/**
+ * Where a file opens: the group `from` when it isn't the chat's, else the group nearest it (by the centres of their
+ * rectangles) that isn't. null when every group shows a chat (the caller adds one).
+ */
+export function nearestGroup(lay, from, rs, skip = (g) => g.id === CHAT_GROUP) {
+  const all = groups(lay), f = findGroup(lay, from);
+  if (f && !skip(f)) return f.id;
+  const ok = all.filter((g) => !skip(g));
+  if (!ok.length) return null;
+  const c = (r) => (r ? [r.x + r.w / 2, r.y + r.h / 2] : [0, 0]), [fx, fy] = c(rs?.[from]);
+  return ok.map((g) => { const [x, y] = c(rs?.[g.id]); return [g.id, Math.hypot(x - fx, y - fy)]; }).sort((a, b) => a[1] - b[1])[0][0];
+}
 /** Sets the shares of a split's children (or of one group's siblings): weights by group id, any positive numbers. */
 export function setWeights(lay, weights) {
   const root = copy(lay.root);
@@ -170,10 +268,15 @@ export function setWeights(lay, weights) {
  * The layout as plain JSON for localStorage, version 1. `tabs` is the state each tab saves ({ [tabId]: { kind, ... } }),
  * kept only for tabs in the tree.
  */
-export function serialise(lay, tabs = {}, closed = []) {
-  const live = new Set(allTabs(lay));
-  return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}) });
+export function serialise(lay, tabs = {}, closed = [], extra = {}) {
+  const live = new Set(allTabs(lay)), has = (id) => typeof id === 'string' && !!findGroup(lay, id);
+  // extra: the group marked to follow the agent, the maximised one, and reading positions ({ key: pixels }).
+  const scroll = extra.scroll && typeof extra.scroll === 'object' ? Object.fromEntries(Object.entries(extra.scroll).filter(([, v]) => Number.isFinite(v) && v > 0).slice(-SCROLL_CAP)) : null;
+  return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}),
+    ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(scroll && Object.keys(scroll).length ? { scroll } : {}) });
 }
+/** How many reading positions a project keeps (the newest). */
+export const SCROLL_CAP = 60;
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
   let s = text;
@@ -196,7 +299,9 @@ export function parse(text) {
   const lay = createLayout(root, s.focus);
   const live = new Set(allTabs(lay));
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
-  return { layout: lay, tabs, closed: cleanClosed(s.closed) };
+  const gid = (v) => (typeof v === 'string' && findGroup(lay, v) ? v : null);
+  const scroll = s.scroll && typeof s.scroll === 'object' ? Object.fromEntries(Object.entries(s.scroll).filter(([k, v]) => typeof k === 'string' && Number.isFinite(v) && v > 0).slice(-SCROLL_CAP)) : {};
+  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), scroll };
 }
 
 // ---------- open chats, and the tabs you closed ----------
@@ -274,7 +379,11 @@ export const TAB_KINDS = {
     save: (st) => (st.termLay?.panes ? { tf: st.termLay.panes.map((p) => p.filter) } : st.termTf ? { tf: st.termTf } : {}),
     load: (j) => (Array.isArray(j?.tf) ? { termTf: j.tf.map(String).slice(0, 6) } : {}) },
   files: { name: 'Files', icon: '📁', owner: 'project', pane: 'files', keys: [], save: () => ({}), load: () => ({}) },
-  viewer: { name: 'File', icon: '🖼', owner: 'chat', pane: 'art', keys: [], save: (st) => pick(st, ['src', 'name', 'kind']), load: (j) => pick(j, ['src', 'name', 'kind']) },
+  // A file, picture, video, PDF or document open as a tab of its own (f: what the viewer needs; chat: the chat it came
+  // from; preview: the next file opened replaces it, until it is kept).
+  viewer: { name: 'File', icon: '🖼', owner: 'chat', pane: 'art', keys: [],
+    save: (st) => (st.f && typeof st.f === 'object' ? { f: JSON.parse(JSON.stringify(st.f)), ...(st.chat ? { chat: String(st.chat) } : {}), ...(st.preview ? { preview: true } : {}) } : {}),
+    load: (j) => (j?.f && typeof j.f === 'object' && (j.f.src || j.f.kind) ? { f: j.f, chat: j.chat ? String(j.chat) : null, preview: !!j.preview } : {}) },
   page: { name: 'Page', icon: '📃', owner: 'chat', pane: 'art', keys: [], save: (st) => pick(st, ['url']), load: (j) => pick(j, ['url']) },
   running: { name: 'Running', icon: '▶', owner: null, pane: 'run', keys: [], save: () => ({}), load: () => ({}) },
   servers: { name: 'Servers', icon: '🖥', owner: 'project', pane: null, keys: [], save: () => ({}), load: () => ({}) },

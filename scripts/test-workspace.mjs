@@ -267,3 +267,75 @@ test('workspace closed tabs: a stack of the last 50 per project, the newest firs
   assert.deepEqual(r.list, [{ kind: 'file', chat: 'a', f: { id: 'file:x' } }]);
   assert.deepEqual(W.popClosed([]), { entry: null, list: [] });
 });
+
+test('workspace W2: groups placed by rectangles; bars resize neighbours; the chat moves as a whole group', () => {
+  { // workspace W2: rectangles split the box by shares, with a bar between neighbours
+    const lay = W.createLayout(W.split('row', [W.group('chat', ['chat:a'], null, 3), W.split('col', [W.group('g1', ['x']), W.group('g2', ['y'])], 1)]));
+    const r = W.rects(lay, { x: 0, y: 0, w: 806, h: 406 }, 6);
+    assert.deepEqual(r.groups.chat, { x: 0, y: 0, w: 600, h: 406 });
+    assert.deepEqual(r.groups.g1, { x: 606, y: 0, w: 200, h: 200 });
+    assert.deepEqual(r.groups.g2, { x: 606, y: 206, w: 200, h: 200 });
+    assert.equal(r.bars.length, 2);
+    assert.deepEqual(r.bars[0], { path: [], i: 0, dir: 'row', x: 600, y: 0, w: 6, h: 406 });
+    assert.deepEqual(r.bars[1], { path: [1], i: 0, dir: 'col', x: 606, y: 200, w: 200, h: 6 });
+    assert.deepEqual(W.rects(W.createLayout(W.group('g1', ['x'])), { w: 10, h: 10 }).groups.g1, { x: 0, y: 0, w: 10, h: 10 });
+    // A bar dragged: only its two neighbours change; a double-click shares the split evenly.
+    const l2 = W.resizePair(lay, [], 0, 300, 500);
+    assert.equal(W.nodeAt(l2, [0]).w, 1.5);
+    assert.equal(W.nodeAt(l2, [1]).w, 2.5);
+    assert.equal(W.nodeAt(lay, [0]).w, 3, 'the old layout is untouched');
+    assert.deepEqual(W.nodeAt(W.evenShares(l2, []), []).kids.map((k) => k.w), [1, 1]);
+    assert.equal(W.resizePair(lay, [0], 0, 1, 1), lay, 'a group has no kids to resize');
+    assert.equal(W.nodeAt(lay, [5]), null);
+  }
+  { // workspace W2: the edge a point is nearest decides the drop zone; the middle is the middle
+    const r = { x: 0, y: 0, w: 100, h: 100 };
+    assert.equal(W.zoneAt(r, 10, 50), 'left');
+    assert.equal(W.zoneAt(r, 95, 40), 'right');
+    assert.equal(W.zoneAt(r, 50, 5), 'top');
+    assert.equal(W.zoneAt(r, 40, 90), 'bottom');
+    assert.equal(W.zoneAt(r, 50, 50), 'center');
+  }
+  { // workspace W2: the chat group moves beside another group, or to one side of everything, keeping its tabs
+    let lay = W.defaultLayout();
+    lay = W.addGroup(lay, 'g1', 'bottom', ['t2'], { id: 'g2' }).layout;
+    const r = W.moveGroup(lay, 'chat', 'g2', 'right');
+    assert.equal(r.ok, true);
+    assert.equal(shape(r.layout.root).replace(/\[[^\]]*\]/g, ''), 'col(g1 row(g2 chat))');
+    assert.deepEqual(W.findGroup(r.layout, 'chat').tabs, ['chat:main']);
+    assert.equal(r.layout.next, lay.next, 'no new group was made');
+    assert.equal(W.moveGroup(lay, 'chat', 'chat', 'left').ok, false);
+    assert.equal(W.moveGroup(lay, 'chat', 'g1', 'center').ok, false);
+    const e = W.moveGroupToEdge(lay, 'chat', 'right');
+    assert.equal(shape(e.layout.root).replace(/\[[^\]]*\]/g, ''), 'row(col(g1 g2) chat)');
+    assert.equal(shape(W.moveGroupToEdge(lay, 'chat', 'top').layout.root).replace(/\[[^\]]*\]/g, ''), 'col(chat g1 g2)');
+    // At the cap the chat still moves: it never adds a group.
+    let full = W.addGroup(W.addGroup(lay, 'g2', 'right', ['t3']).layout, 'chat', 'top', ['t4']).layout;
+    assert.equal(W.groups(full).length, W.MAX_GROUPS);
+    assert.equal(W.moveGroup(full, 'chat', 'g1', 'left').ok, true);
+  }
+  { // workspace W2: a preview tab is swapped in place; files open in the nearest group that isn't the chat
+    let lay = W.createLayout(W.split('row', [W.group('chat', ['chat:a']), W.group('g1', ['artifact:g1', 'viewer:v1'], 'viewer:v1'), W.group('g2', ['files:g2'])]));
+    lay = W.replaceTab(lay, 'viewer:v1', 'viewer:v2');
+    assert.deepEqual(W.findGroup(lay, 'g1').tabs, ['artifact:g1', 'viewer:v2']);
+    assert.equal(W.findGroup(lay, 'g1').active, 'viewer:v2');
+    assert.equal(W.replaceTab(lay, 'viewer:v2', 'files:g2'), lay, 'a tab already in the tree is not doubled');
+    const rs = { chat: { x: 0, y: 0, w: 100, h: 100 }, g1: { x: 400, y: 0, w: 100, h: 100 }, g2: { x: 110, y: 0, w: 100, h: 100 } };
+    assert.equal(W.nearestGroup(lay, 'chat', rs), 'g2');
+    assert.equal(W.nearestGroup(lay, 'g1', rs), 'g1');
+    assert.equal(W.nearestGroup(W.createLayout(W.group('chat', ['chat:a'])), 'chat', {}), null);
+  }
+  { // workspace W2: the follow mark, the maximised group and reading positions are saved with the layout
+    const lay = W.defaultLayout();
+    const text = W.serialise(lay, {}, [], { follow: 'g1', max: 'nope', scroll: { 'steps:g1': 420, bad: -3, 'x': 'no' } });
+    const back = W.parse(text);
+    assert.equal(back.follow, 'g1');
+    assert.equal(back.max, null, 'a group that is not there is not kept');
+    assert.deepEqual(back.scroll, { 'steps:g1': 420 });
+    assert.deepEqual(W.parse(W.serialise(lay)).scroll, {});
+    // A file tab saves the file, its chat and whether it is still a preview.
+    const v = W.tabKind('viewer');
+    assert.deepEqual(v.load(v.save({ f: { id: 'file:a.png', src: '/f/a.png', kind: 'image' }, chat: 'c1', preview: true })), { f: { id: 'file:a.png', src: '/f/a.png', kind: 'image' }, chat: 'c1', preview: true });
+    assert.deepEqual(v.load({ f: { name: 'x' } }), {});
+  }
+});
