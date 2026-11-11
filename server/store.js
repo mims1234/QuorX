@@ -340,12 +340,36 @@ export function projectChatStats() {
  * and every project's counts. A project's older chats, and search, come a page at a time (chatPage).
  */
 export function sidebarChats({ per = 30, ids = [] } = {}) {
-  const want = new Set(ids), n = new Map(), out = [];
+  const pins = chatPins(), want = new Set([...ids, ...Object.keys(pins)]), n = new Map(), out = [];
   for (const c of listChats()) {
     const k = c.projectId || 'scratch', i = n.get(k) || 0;
-    if (want.has(c.id) || (c.messages > 0 && i < per)) { out.push(c); if (c.messages > 0) n.set(k, i + 1); }
+    if (want.has(c.id) || (c.messages > 0 && i < per)) { out.push(pins[c.id] ? { ...c, pinned: pins[c.id] } : c); if (c.messages > 0) n.set(k, i + 1); }
   }
   return { chats: out, stats: projectChatStats(), total: listChats().length };
+}
+// ---------- pinned chats ----------
+// Pinned chats sit at the top of their project in the sidebar. Kept in their own small file (data/chat-pins.json,
+// { chatId: when pinned }) so pinning never rewrites a chat, and a chat saved from another tab can't drop its pin.
+// A deleted chat's pin is just ignored, and dropped at the next change.
+const PINS = path.join(HOME, 'data', 'chat-pins.json');
+let PIN_CACHE = null;
+export function chatPins() {
+  if (PIN_CACHE) return PIN_CACHE;
+  try { const v = JSON.parse(fs.readFileSync(PINS, 'utf8')); PIN_CACHE = v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { PIN_CACHE = {}; }
+  return PIN_CACHE;
+}
+/** Pins (on) or unpins a chat; returns every pin. */
+export function setChatPin(id, on) {
+  if (!validId(id)) throw new Error('bad chat id');
+  const known = new Set(listChats().map((c) => c.id));
+  const next = Object.fromEntries(Object.entries(chatPins()).filter(([k]) => k !== id && known.has(k)));
+  if (on) next[id] = Date.now();
+  fs.mkdirSync(path.dirname(PINS), { recursive: true });
+  const tmp = `${PINS}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next));
+  fs.renameSync(tmp, PINS);
+  PIN_CACHE = next;
+  return next;
 }
 /** One page of chats, newest first: in a project, or matching words in the title or preview across all projects. */
 export function chatPage({ project = '', q = '', offset = 0, limit = 50 } = {}) {
@@ -359,6 +383,13 @@ function indexWrite(id, doc, text) {
   const f = `${id}.json`;
   try { SUMMARIES.set(f, entryOf(keyOf(fs.statSync(path.join(DIR, f))), doc, text)); changed(); } catch { dirty.add(f); }
 }
+/** A chat file's size:mtime stamp from the index (null: not in it), so chat search knows when its copy is stale. */
+export function chatFileKey(id) {
+  summaries();
+  return SUMMARIES.get(`${id}.json`)?.key ?? null;
+}
+/** The chats folder, for chat search to read files on its own schedule. */
+export const CHATS_DIR = DIR;
 /** What a chat allows on its own, from the index ({ cmdRules, allowed, allowedMeta, apps, folders }, or null). */
 export function chatPerms(id) {
   summaries();

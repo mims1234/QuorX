@@ -56,6 +56,7 @@ import { PIXEL_FX_TOOL, SKILL_FILES as PIXELFX_SKILL_FILES, asksForPixelFx, isPi
 import { projectDesign } from './design.js';
 import { folderIdFor, spaceInfo } from './worktrees.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints , snapBeforeAsync, commandChangesAsync } from './workspace.js';
+import { addPage, listPages, isPreviewEntry, migrateProject, ensureServeScript } from './pages.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { pageOp } from './pageops.js';
 import { readNotes, addNotes } from './appnotes.js';
@@ -561,7 +562,7 @@ export function answerSecret(runId, id, answer) {
 // ---------- prompts ----------
 const BASE_RULES = (artifacts, artifactsOn = true) => `You are an agent working inside a web harness. The user sees your chat replies${artifactsOn ? ', and an artifact pane where your artifacts open' : ''}.
 ${artifactsOn ? `
-Artifacts are for planning and reading only: plans, specs, research notes, reports, comparisons, diagrams and charts. Write them as Markdown, or as a self-contained HTML page when they need visuals (inline CSS and JS, no build step; scripts may load from cdnjs.cloudflare.com or cdn.jsdelivr.net). Use write_artifact to create one or to replace it entirely, read_artifact to see its current source, and edit_artifact for targeted changes (exact find and replace; prefer it for small changes). What the user asks you to build (a site, app, game, tool, dashboard) is never an artifact: build it as files in the project folder and run it with preview_site (a static site) or start_server (anything with a server), so it opens in the user's Browser tab and is listed under their servers. Only when you have no project folder tools is a self-contained HTML artifact the fallback for something to use. Answer plain questions in chat.
+Artifacts are for planning and reading only: plans, specs, research notes, reports, comparisons, diagrams and charts. Write them as Markdown, or as a self-contained HTML page when they need visuals (inline CSS and JS, no build step; scripts may load from cdnjs.cloudflare.com or cdn.jsdelivr.net). Use write_artifact to create one or to replace it entirely, read_artifact to see its current source, and edit_artifact for targeted changes (exact find and replace; prefer it for small changes). What the user asks you to build (a site, app, game, tool, dashboard) is never an artifact: build it as files in the project folder and run it with preview_site (a static site, shown as a page) or start_server (anything with a server), so it opens in the user's Browser tab and is listed in their servers button. Only when you have no project folder tools is a self-contained HTML artifact the fallback for something to use. Answer plain questions in chat.
 ` : `
 The user has switched artifacts off: answer in chat only.
 `}
@@ -579,7 +580,7 @@ Paid media tools you may use: ${cats.map((c) => `${MEDIA[c].tool} (${MEDIA[c].no
 When the work needs several paid pieces (a trailer or short film: stills, clips, a voice-over, music), call media_plan first with every paid call you intend; it is approved once as a whole, and later calls that match it (same kind and model, within its count and price) run without another check.`;
 
 const CODE_RULES = `
-Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). For a static site (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: it runs the harness's small static server (.quorx/serve.mjs) as the launch entry "site", so it behaves like any other server. Never write your own static file server (serve.mjs, http.server scripts and the like): preview_site already does that, with no caching. Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Such a script does the work itself: never write a script whose job is to run other programs (a wrapper that takes a command and runs it, or calls spawn, exec, subprocess or Start-Process). Run each command directly with shell instead: QuorX reads a script before it runs, and one that runs other programs always asks the user and can't run in the background. Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server. In your reply, name the files and folders you made or changed by their paths in backticks (\`site/index.html\`, relative to the project folder; a full path such as \`D:\\Work\\notes.txt\` for anything outside it): the user clicks a path to see it in File Explorer.
+Project folder: you have your own folder on the user's machine for multi-file projects (apps, sites, scripts, games with assets). Use list_files, read_file, write_file and edit_file (exact find and replace). shell runs a command line in that folder (any language or toolchain: installs, builds, tests, git); QuorX checks each command first and some ask the user, so run what the task needs and say why in your reply when a command is unusual. To delete files or folders use delete_file (it can be undone), not the shell. start_server starts a long-running dev server that opens in the user's Browser tab and is saved to the project's launch file (the user runs and stops it from the servers button): the server MUST listen on the port given in the PORT environment variable, or take {PORT} as an argument (for example: python -m http.server {PORT}). There are two kinds of server. Project servers (the launch file) are only what runs the project itself: the dev server, the API, the game. Pages are everything you show the user along the way: previews, mockups, design options, quick checks of a static page. For a static page (HTML, CSS, JS and assets, no server code), write index.html and its files, then call preview_site: QuorX's own pages server shows it (always on, no process to start, reloads when its files change), listed under Pages and never written to the launch file. When the static site is the project itself (what the user asked you to build and will keep running), also save it as a project server with launch_config: command node, args .quorx/serve.mjs and the page (QuorX's small static server, with no caching). Never write your own static file server (serve.mjs, http.server scripts and the like). Only an app with real server code (an API, a backend) gets its own server file, in the project itself, run with start_server. The launch file is .quorx/launch.json (read it with read_file); a page on a running server opens with browser target app:<server name>/<path>, a page with site:<path>. Arguments can't contain quotes, brackets, $, %, ;, & or pipes: for anything more than a plain command, write a script file and run it (for example node check.mjs). Such a script does the work itself: never write a script whose job is to run other programs (a wrapper that takes a command and runs it, or calls spawn, exec, subprocess or Start-Process). Run each command directly with shell instead: QuorX reads a script before it runs, and one that runs other programs always asks the user and can't run in the background. Files longer than about 300 lines: write the first part with write_file, then add the rest with append_file in parts of about 300 lines; one huge call can be cut off. Never draft code in your thinking: thinking is not saved and is never shown to the tools, so plan briefly (the idea, the files, the main parts), then write the code straight into write_file / append_file calls. Use write_artifact for quick single-file pages; use the project folder when there are several files, dependencies or a server. In your reply, name the files and folders you made or changed by their paths in backticks (\`site/index.html\`, relative to the project folder; a full path such as \`D:\\Work\\notes.txt\` for anything outside it): the user clicks a path to see it in File Explorer.
 Stay inside the project folder: never read, list or scan anything outside it (the user's home or other folders, the harness's own files and data, environment variables), and never call the harness's own server or its /api routes from your scripts. If something you need isn't in the folder or in your tool results, ask the user instead of searching for it.
 read_file returns numbered lines (the numbers are not part of the file); a long file comes in windows, so continue with offset. edit_file can apply several edits to one file at once with edits (all or none). After every write or edit the harness checks the file (Node parses JS, Python parses .py, plus JSON, CSS, and HTML scripts and links) and reports problems in the result: fix them before moving on.
 Secrets: .env and key files show names only (NAME=•••• (set, N characters)), and their values are removed from every tool result. Commands and servers you start get the project's .env as environment variables, so use a secret by its name (process.env.NAME, os.environ["NAME"]). When one is missing, ask for it with request_secret; never ask the user to paste a key into the chat.`;
@@ -744,8 +745,8 @@ const CODE_TOOLS = [
     steps: { type: 'array', maxItems: 40, items: { type: 'object' }, description: 'Several desktop actions in a row, each like this tool\'s own arguments (app, job and window come from the call, or the step before, unless a step names its own; open may be the first step). Stops at the first error.' } } } } },
   { type: 'function', function: { name: 'start_server', description: 'Start (or restart) a long-running dev server in your project folder. It gets a free port in the PORT environment variable and as {PORT} in arguments, and opens in the user\'s Browser tab. Its command is saved to the project\'s launch file, so the user can start and stop it later; give only the name to rerun a saved one.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string', description: 'Short name, e.g. "web"' }, command: { type: 'string', description: 'Leave out to rerun the saved launch config with this name' }, args: { type: 'array', items: { type: 'string' } } } } } },
   { type: 'function', function: { name: 'stop_server', description: 'Stop a dev server you started.', parameters: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } },
-  { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): the servers the user can start and stop from the chat header. list shows them; save creates one or updates one you made in this reply; replacing or renaming an existing entry needs old_name and asks the user first; remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
-  { type: 'function', function: { name: 'preview_site', description: 'Run a static site from your project folder (an HTML file and the files it loads) on a small local server, saved to the launch file as "site" (or the name you give), and open it in the user\'s Browser tab. An entry that already runs something else is never replaced: without a name the site gets its own entry named after its page.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, name: { type: 'string', description: 'Launch entry name, default "site" (or "site-<page>" when "site" runs another page)' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
+  { type: 'function', function: { name: 'launch_config', description: 'The project’s saved launch configs (.quorx/launch.json): its project servers, only what runs the project itself (the dev server, the API, the game), which the user starts and stops from the chat header. Previews and mockups are pages (preview_site), never saved here; a static site that is the project itself is saved with command node and args [".quorx/serve.mjs", "<page>"]. list shows them; save creates one or updates one you made in this reply; replacing or renaming an existing entry needs old_name and asks the user first; remove deletes one (a running server keeps running: stop_server ends it). Use this, not write_file, for that file. Saving does not start anything: start_server with the name does.', parameters: { type: 'object', required: ['action'], properties: { action: { type: 'string', enum: ['list', 'save', 'remove'] }, name: { type: 'string', description: 'Short name, e.g. "web" (save, remove)' }, command: { type: 'string', description: 'The program, e.g. npm, node, python, cargo (save)' }, args: { type: 'array', items: { type: 'string' }, description: 'Its arguments; {PORT} becomes the server’s port (save)' }, port: { type: 'integer', description: 'A fixed port, only if the app needs one; otherwise it gets a free one (save)' }, old_name: { type: 'string', description: 'The config’s current name when renaming it (save)' } } } } },
+  { type: 'function', function: { name: 'preview_site', description: 'Show a static page from your project folder (an HTML file and the files it loads) as a page: QuorX\'s own pages server serves it (always on, nothing to start), it opens in the user\'s Browser tab and is listed under Pages, and it reloads when its files change. For previews, mockups, design options and quick checks. It is never saved to the launch file; when the static site is the project itself, also save it with launch_config.', parameters: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, path: { type: 'string', description: 'Entry HTML file, default index.html' } } } } },
 ];
 // Tools for project memory, skills, templates and housekeeping (only with a project folder).
 const TEMPLATE_LIST = listTemplates();
@@ -1064,6 +1065,27 @@ const DEFER_OPT = /\b(you (decide|pick|choose)|surprise me|your (call|choice)|up
 const PARTIAL = 'If the rest of this file (append_file) or the files it links to are still to come, carry on; otherwise fix this now.';
 // Long chat messages keep their start and their end (the end carries what was done and checked).
 const clipKeepEnd = (s, n) => { s = String(s ?? ''); return s.length > n ? `${s.slice(0, Math.round(n * 0.6))}\n…\n${s.slice(-Math.round(n * 0.4))}` : s; };
+
+// ---------- long chats: older turns become one summary ----------
+// The same summary is written when a reply starts on a long chat and when you press Compact by the context meter
+// (compactChat): one prompt, one rule for what is kept (the last COMPACT_KEEP turns, word for word).
+export const COMPACT_KEEP = 8;
+// The page's turns as the model sees them. The harness's record of what an earlier reply did ("[What I did: …]") is
+// taken out into `records` (it goes in the system prompt instead), and long turns keep their start and end.
+function historyTurns(list, records = []) {
+  return (list || []).map((m) => {
+    let content = String(m.content ?? '');
+    if (m.role === 'assistant') content = content.replace(/\n\n\[((?:What I did|Checks)[\s\S]*?)\]\s*$/, (_, rec) => { records.push(rec); return ''; });
+    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: clipKeepEnd(content, 4000), at: m.at };
+  });
+}
+// `call(body, signal)` answers with { message, usage, model }. → { summary, usage, model }.
+export async function summariseTurns({ model, old, summary }, call, signal) {
+  const sum = await call({ model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
+    { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
+    { role: 'user', content: `${summary ? `Earlier summary:\n${summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal);
+  return { summary: String(sum.message?.content || '').trim(), usage: sum.usage || {}, model: sum.model || model };
+}
 const sleep = (ms, signal) => new Promise((resolve, reject) => { const t = setTimeout(resolve, ms); signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true }); });
 
 async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
@@ -1145,6 +1167,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const wtree = folderId && folderId !== projectId ? spaceInfo(folderId) : null;
   const root = folderId ? workspaceDir(folderId) : null;
   if (root) ensureAgentDir(root);
+  // Old static previews in the launch file move to Pages once (server/pages.js), before this reply reads that file;
+  // so an entry saved later on purpose (the static site is the project) stays a project server.
+  if (root && !req.bench) migrateProject(projectId);
+  const projectPages = () => { try { return root ? listPages(folderId).pages : []; } catch { return []; } };
   // Undo lasts for the newest replies only; older checkpoints go before this reply makes its own.
   if (root && !req.bench) { try { pruneCheckpoints(root, { keep: S.undoKeep ?? 10, days: S.undoDays ?? 7 }); } catch { /* best effort */ } }
   const spaceLimit = Math.max(10, Number(req.settings?.agentSpaceMB) || 500) * 1e6;
@@ -1293,24 +1319,17 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // taken out of the reply here and given to the model as a harness record in the system prompt: left
   // in the agent's own words, models copy its format and write "[What I did: …]" instead of calling tools.
   const records = [];
-  let history = (req.history || []).map((m) => {
-    let content = String(m.content ?? '');
-    if (m.role === 'assistant') content = content.replace(/\n\n\[((?:What I did|Checks)[\s\S]*?)\]\s*$/, (_, rec) => { records.push(rec); return ''; });
-    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: clipKeepEnd(content, 4000), at: m.at };
-  });
+  let history = historyTurns(req.history, records);
   // Earlier turns are summarised once they pass a size that follows the model's window, unless the user set one.
   const historyAt = req.settings?.compactAt != null ? Math.max(8000, Number(req.settings.compactAt) || 24000)
     : contextBudget((await limitsP)?.context || (await getCatalogue()).find((m) => m.id === setup.model)?.ctx)?.history ?? 24000;
   if (!resumed && S.compact !== false && history.reduce((n, m) => n + m.content.length, 0) > historyAt && history.length > 10) {
-    const keep = history.slice(-8), old = history.slice(0, -8);
+    const keep = history.slice(-COMPACT_KEEP), old = history.slice(0, -COMPACT_KEEP);
     try {
       // A chat on an app on this PC summarises there too; when that fails, OpenRouter's fallback model does it.
-      const sum = await chatAny({ model: setup.model, max_tokens: 900, temperature: 0.2, ...REASONING.off, messages: [
-        { role: 'system', content: 'Summarise this conversation between a user and an AI agent for the agent to continue it. Keep: the goal, decisions, what was built (files, servers, artifacts), open problems and the user\'s preferences. Under 350 words, plain bullet points.' },
-        { role: 'user', content: `${req.summary ? `Earlier summary:\n${req.summary}\n\n` : ''}${old.map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`).join('\n\n').slice(-60000)}` }] }, signal,
-      sourceChatOpts());
-      account(sum.usage, sum.model || setup.model, 'summary');
-      req.summary = String(sum.message.content || '').trim();
+      const sum = await summariseTurns({ model: setup.model, old, summary: req.summary }, (b, sg) => chatAny(b, sg, sourceChatOpts()), signal);
+      account(sum.usage, sum.model, 'summary');
+      req.summary = sum.summary;
       history = keep;
       emit({ t: 'compacted', summary: req.summary, cutoffAt: keep[0]?.at || Date.now(), at: 0 });
     } catch (e) { if (signal.aborted) throw e; history = history.slice(-30); }
@@ -1351,7 +1370,8 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // Rules first (the same in every reply), then this project's state, then its memory: providers cache the start of a
   // prompt, so the stable part is cheap on every step and in every reply.
   const projectNote = () => (root ? `\n${chainsNote}\nProject "${project.name}" (${root}). ${wtree ? `This chat has its own git worktree of the project: the folder above, on the branch ${wtree.branch} (made from ${wtree.base}). Other chats work in their own copies and don't see your changes until they are merged, so commit your work on this branch when a step is done (git add, git commit); never switch branches or remove the worktree.` : 'Other chats may have worked here before you: read files before changing them.'}${fileList.length ? `\nFiles in the project folder now: ${compactPaths(fileList)}.` : ' The folder is empty.'}${listServers(folderId).filter((x) => x.status === 'running').length ? `
-Dev servers running in this project: ${listServers(folderId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(folderId).length ? `
+Dev servers running in this project: ${listServers(folderId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${projectPages().length ? `
+Pages in this project (on QuorX's pages server, always on; open one with browser target site:<path>): ${projectPages().slice(0, 8).map((p) => `${p.entry}${p.title && p.title !== p.entry ? ` ("${clip(p.title, 40)}")` : ''}`).join(', ')}${projectPages().length > 8 ? ` and ${projectPages().length - 8} more` : ''}.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(folderId).length ? `
 Saved launch configs (start one with start_server and just its name): ${launchConfigs(folderId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '');
   let systemFor = (decideOn) => BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES : '') + (goal ? PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) : '') + (helpersOn ? helperRules(helperRoles) : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '')
     + projectNote() + memory + (decideOn ? `\n${DECIDE_RULES}` : '');
@@ -1758,7 +1778,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     const served = r.servedBy || (fb && r.model && r.model.startsWith(fb) && !r.model.startsWith(setup.model) ? fb : setup.model);
     if (served !== setup.model && !r.servedBy) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
     account(r.usage, served, 'writer');
-    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
+    // What this call sent and got back, for the context meter: tokens in, and the cache's share where the source says.
+    const ctxIn = Number(r.usage.prompt_tokens) || 0, { read: ctxRead, write: ctxWrite } = cacheTokens(r.usage);
+    emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, ...(ctxIn ? { tokensIn: ctxIn, ...(ctxRead != null ? { cacheRead: ctxRead, cacheWrite: ctxWrite || 0 } : {}) } : {}), cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
       ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(planValue(r.usage.plan_cost) ? { planCost: planValue(r.usage.plan_cost) } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
@@ -2725,7 +2747,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (dir === '.') { const refs = linked(e); return changed.some((f) => f === e || refs.has(f)); }
       return changed.some((f) => f === e || f.startsWith(`${dir}/`));
     };
-    for (const lc of launchConfigs(folderId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
+    for (const lc of launchConfigs(folderId)) if (isPreviewEntry(lc) && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
+    // Pages of the project (preview_site) whose files changed are checked like the sites above.
+    for (const p of projectPages()) if (ofSite(p.entry)) { const t = `site:${p.entry}`; if (!targets.includes(t)) targets.push(t); }
     for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${folderId}/`) && ofSite(a.url.slice(`/ws/${folderId}/`.length))) { const t = `site:${a.url.slice(`/ws/${folderId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
     // Video Mode: the films are what was built (the site server plays them), first in line; the storyboard sheet is
     // the plan, not the build.
@@ -3349,7 +3373,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'read_file') return `Read ${args.path}${args.offset ? ` from line ${args.offset}` : ''}`;
     if (name === 'list_files') return 'List the project files';
     if (name === 'request_secret') return `Ask you for ${clip(args.name, 60)} (it goes into .env, not to the model)`;
-    if (name === 'preview_site') return `Run ${args.path || 'index.html'} as the site "${args.name || 'site'}" (node .quorx/serve.mjs)`;
+    if (name === 'preview_site') return `Show ${args.path || 'index.html'} as a page`;
     if (name === 'stop_server') return `Stop server "${args.name}"`;
     if (name === 'launch_config') {
       if (args.action === 'remove') return `Remove the saved launch config "${args.name}"`;
@@ -4186,6 +4210,8 @@ ${r.text || '(no text found)'}`;
             if (!ans.approve) return `The user kept their launch entry "${old.name}" as it is${ans.reason ? `: "${ans.reason}"` : ''}. Save yours under another name.`;
           }
           const c = saveLaunchConfig(folderId, { ...next, oldName: args.old_name });
+          // The static site is the project: its project server runs QuorX's small static server, so that file is there.
+          if (isPreviewEntry(c)) ensureServeScript(root);
           own.add(c.name.toLowerCase());
           notes.push(`saved launch config ${c.name}`);
           return `Saved:\n${show(c)}\nStart it with start_server and the name "${c.name}".`;
@@ -4201,31 +4227,18 @@ ${r.text || '(no text found)'}`;
       return list.length ? `Saved launch configs:\n${list.map(show).join('\n')}` : 'No saved launch configs yet.';
     }
     if (name === 'preview_site') {
-      const entry = String(args.path || 'index.html').replace(/^[/\\]+/, '');
+      const entry = String(args.path || 'index.html').replace(/^[/\\]+/, '').replaceAll('\\', '/');
       readFile(root, entry, 10);
-      // A launch entry already serving another page (or running something else) is left alone: without a name the
-      // site gets its own entry named after its page ("site-receipts" for receipts/index.html); a name the agent
-      // gives that is taken is refused.
-      const configs = launchConfigs(folderId), own = (run.ownConfigs ??= new Set());
-      const entryOf = (n) => configs.find((x) => x.name.toLowerCase() === n.toLowerCase());
-      const fits = (n) => { const x = entryOf(n); return !x || own.has(n.toLowerCase()) || (x.args?.[0] === '.quorx/serve.mjs' && String(x.args?.[1] || '').replaceAll('\\', '/') === entry.replaceAll('\\', '/')); };
-      let sname = String(args.name || '').trim();
-      if (sname && !fits(sname)) return `Error: the launch entry "${sname}" already runs something else. Pick another name for this site.`;
-      if (!sname) {
-        const base = entry.replaceAll('\\', '/').replace(/\/?index\.html?$/i, '').replace(/\.html?$/i, '');
-        const stem = base ? `site-${base.split('/').pop().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'page'}` : 'site';
-        sname = [stem, ...Array.from({ length: 20 }, (_, i) => `${stem}-${i + 2}`)].find(fits) || `${stem}-${Date.now().toString(36)}`;
-      }
-      own.add(sname.toLowerCase());
-      // The harness's small static server goes in .quorx (git-ignored), refreshed each time.
-      fs.mkdirSync(path.join(root, '.quorx'), { recursive: true });
-      fs.copyFileSync(new URL('./serve-static.mjs', import.meta.url), path.join(root, '.quorx', 'serve.mjs'));
-      const saved = configs.find((x) => x.name.toLowerCase() === sname.toLowerCase());
-      const r = await (deps.startServer || startServer)({ projectId: folderId, name: sname, cmd: 'node', args: ['.quorx/serve.mjs', entry], port: saved?.port || undefined });
-      emit({ t: 'server', name: sname, url: r.url, status: r.status, entry, at: at() });
-      notes.push(`ran site ${entry} as server ${sname} on ${r.url}`);
+      // A preview is a page, not a project server: QuorX's own pages address serves it (always on, nothing to start),
+      // and it is listed under Pages in 🖥, never written to the launch file. When the static site is the project
+      // itself, the agent saves it with launch_config (or the user picks "Keep as project server").
+      const pg = addPage(folderId, { entry, title: args.title });
+      const url = `http://localhost:${runtime.pagePort || runtime.port}${pg.url}`;
+      emit({ t: 'server', page: true, name: String(args.title || entry), url, path: pg.url, status: 'running', entry, at: at() });
+      notes.push(`showed page ${entry} at ${url}`);
       touched.sites.add(entry);
-      const opened = `Site "${sname}" (${entry}) is ${r.status} at ${r.url}; it opened in the user's Browser tab and is saved in the launch file, so the user can run it again from the servers button. Edits show on reload.`;
+      const kept = launchConfigs(folderId).find((x) => isPreviewEntry(x) && String(x.args?.[1] || '').replaceAll('\\', '/') === entry);
+      const opened = `Page "${args.title || entry}" (${entry}) is on QuorX's pages server at ${url}; it opened in the user's Browser tab and is listed under Pages in the servers button. It reloads when its files change. Check it with browser target site:${entry}.${kept ? ` It is also the project server "${kept.name}".` : ' This is a preview, not a project server: if this static site is the project itself (what the user asked you to build and will keep using), also save it with launch_config (command node, args .quorx/serve.mjs and the page).'}`;
       const C = checkSettings(S);
       if (!checksLive || !browserOn || (!C.shots && !C.click)) return opened;
       let found;
@@ -6260,6 +6273,29 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       return { error: clip(e.message, 100) };
     }
   }
+}
+
+// ---------- Compact, by the context meter: the long-chat summary, asked for now ----------
+// Reads the chat as saved (the page saves it first), summarises the turns since the last summary except the last
+// COMPACT_KEEP with the chat's own model, the way a reply on a long chat would, and hands the summary back. The page
+// applies it (summary + summaryAt) and saves, so a reply running elsewhere never has its chat rewritten under it.
+// `call` replaces the model call in tests.
+export async function compactChat(chatId, { settings = {} } = {}, call) {
+  const doc = getChat(String(chatId));
+  if (!doc) throw new Error('No such chat.');
+  const a = doc.agent || {}, model = a.setup?.model || DEFAULTS.chatModel;
+  // The turns a reply would send (runChat in the page): since the last summary, stopped replies with what they said.
+  const turns = (a.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.error || (m.error === 'Stopped.' && String(m.content || '').trim())) && (!a.summaryAt || (m.at || 0) >= a.summaryAt))
+    .map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content || ''}${m.note || ''}` : String(m.content || '') }));
+  const history = historyTurns(turns);
+  if (history.length <= COMPACT_KEEP) throw Object.assign(new Error(`Nothing to compact yet: the last ${COMPACT_KEEP} messages are always kept as they are.`), { nothing: true });
+  const keep = history.slice(-COMPACT_KEEP), old = history.slice(0, -COMPACT_KEEP);
+  const S = { ...DEFAULTS, ...Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null && v !== '')) };
+  call ||= (b, sg) => chatAny(b, sg, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, S, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
+  const r = await summariseTurns({ model, old, summary: a.summary }, call);
+  if (!r.summary) throw new Error('The model sent back an empty summary; nothing was changed.');
+  const chars = (list) => list.reduce((n, m) => n + m.content.length, 0);
+  return { summary: r.summary, cutoffAt: keep[0]?.at || Date.now(), turns: old.length, kept: keep.length, oldChars: chars(old) + String(a.summary || '').length, model: r.model, cost: Number(r.usage?.cost) || 0 };
 }
 
 // ---------- the handover brief (the out-of-steps card's "Fresh chat") ----------

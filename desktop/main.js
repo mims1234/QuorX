@@ -141,6 +141,15 @@ function createWindow() {
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
   win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
+  // The mouse's side buttons (Windows sends them to the window): back / forward in a real browser tab when the pointer
+  // or the keyboard focus is in one, else back / forward through the workspace (the page steps its own history).
+  win.on('app-command', (_e, cmd) => {
+    if (cmd !== 'browser-backward' && cmd !== 'browser-forward') return;
+    const dir = cmd === 'browser-backward' ? 'back' : 'forward';
+    const t = tabUnderPointer() || [...tabs.values()].find((x) => x.shown && !x.view.webContents.isDestroyed() && x.view.webContents.isFocused());
+    if (t) { const h = t.view.webContents.navigationHistory; if (dir === 'back' ? h.canGoBack() : h.canGoForward()) h[dir === 'back' ? 'goBack' : 'goForward'](); return; }
+    send({ type: 'ws-nav', dir });
+  });
   // Right-click, as in a browser: on a misspelled word, the spelling suggestions and Add to dictionary; in a text box,
   // undo, cut, copy, paste and select all; on selected text, copy. (A part of the page with its own menu keeps it.)
   win.webContents.on('context-menu', (_e, p) => {
@@ -264,6 +273,17 @@ function browseSession() {
 }
 function uniquePath(p) { if (!fs.existsSync(p)) return p; const { dir, name, ext } = path.parse(p); for (let i = 1; ; i++) { const q = path.join(dir, `${name} (${i})${ext}`); if (!fs.existsSync(q)) return q; } }
 function send(ev) { if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev); }
+// The real browser tab the mouse is over, if any (views are placed in the window's content coordinates).
+function tabUnderPointer() {
+  if (!win || win.isDestroyed()) return null;
+  const p = screen.getCursorScreenPoint(), c = win.getContentBounds(), x = p.x - c.x, y = p.y - c.y;
+  for (const t of tabs.values()) {
+    if (!t.shown || !t.viewRect) continue;
+    const [bx, by, bw, bh] = t.viewRect.split(',').map(Number);
+    if (x >= bx && x < bx + bw && y >= by && y < by + bh) return t;
+  }
+  return null;
+}
 function tabFor(sid) {
   let t = tabs.get(sid);
   if (t) return t;
@@ -364,7 +384,18 @@ function wireView(sid, view) {
   // Ctrl + / − / 0 and Ctrl+wheel zoom the page in this tab only (QuorX itself keeps its size). Not the agent's
   // own tab: its page size is set for what the agent measures and screenshots.
   const zoomTab = (dir) => { const t = tabs.get(sid); if (!t || t.agent) return; wc.setZoomFactor(nextZoom(wc.getZoomFactor(), dir)); send({ sid, type: 'zoom', factor: wc.getZoomFactor() }); };
-  wc.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); } });
+  // Alt+← / Alt+→ go back and forward in the page, as in a browser.
+  wc.on('before-input-event', (e, input) => {
+    const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); return; }
+    if (input.type === 'keyDown' && input.alt && !input.control && !input.meta && !input.shift && (input.key === 'ArrowLeft' || input.key === 'ArrowRight')) {
+      e.preventDefault(); const h = wc.navigationHistory;
+      if (input.key === 'ArrowLeft' && h.canGoBack()) h.goBack(); else if (input.key === 'ArrowRight' && h.canGoForward()) h.goForward();
+    }
+    // Ctrl+F: the page opens its find bar for this tab (it searches the page with find below).
+    if (input.type === 'keyDown' && (input.control || input.meta) && !input.alt && !input.shift && String(input.key).toLowerCase() === 'f') { e.preventDefault(); send({ sid, type: 'find-open' }); }
+  });
+  // Find in the page: how many matches, and which one is current.
+  wc.on('found-in-page', (_e, r) => send({ sid, type: 'find', at: r.activeMatchOrdinal || 0, of: r.matches || 0 }));
   wc.on('zoom-changed', (_e, dir) => zoomTab(dir));
   // A tab making sound gets a speaker on it in the pane.
   wc.on('audio-state-changed', (e) => send({ sid, type: 'audio', audible: !!e.audible }));
@@ -478,6 +509,14 @@ handle('nav', (sid, op) => {
   return true;
 });
 handle('close', (sid) => closeTab(sid));
+// Find in a real tab's page (the page's find bar): op 'find' with the text and { forward, findNext }, or 'stop'.
+handle('find', (sid, op, text, opts = {}) => {
+  const t = tabs.get(sid); if (!t || t.view.webContents.isDestroyed()) return false;
+  const wc = t.view.webContents;
+  if (op === 'stop' || !text) { wc.stopFindInPage('clearSelection'); return true; }
+  wc.findInPage(String(text).slice(0, 200), { forward: opts.forward !== false, findNext: !!opts.findNext, matchCase: false });
+  return true;
+});
 // The sidebar's Running list: every real tab (yours and each chat's agent tab) with its page and sound, and closing one.
 handle('tabs', (op, sid) => {
   if (op === 'close') return closeTab(String(sid || ''));
@@ -638,16 +677,27 @@ handle('zoom', (dir) => {
   return f;
 });
 handle('focusWindow', () => { showWindow(); return true; }); // a clicked notification brings the window back from the tray
+// The taskbar icon's badge: the count of chats that need you, drawn by the page (a small amber disc), none at 0.
+handle('badge', (n, png) => {
+  if (!win || win.isDestroyed() || process.platform !== 'win32') return false;
+  const k = Math.max(0, Number(n) || 0), img = k && /^data:image\/png;base64,/.test(String(png || '')) ? nativeImage.createFromDataURL(png) : null;
+  win.setOverlayIcon(img && !img.isEmpty() ? img : null, k ? `${k} chat${k === 1 ? '' : 's'} need${k === 1 ? 's' : ''} you` : '');
+  return true;
+});
 // Notifications from the app itself (not the page's own), so they carry QuorX's name and logo. Clicking one brings
-// the window back and opens that chat. Each is kept until it closes: one collected early loses its click.
-const notes = new Set();
+// the window back and opens that chat. Each is kept until it closes: one collected early loses its click. One per
+// chat at a time: a newer one for the same chat replaces the older, so a busy chat doesn't stack them up.
+const notes = new Set(), noteOf = new Map(); // chatId → its notification on screen
 handle('notify', (n = {}) => showNote(n));
 // Also sent by the harness itself over the link (scheduled chats), so it works while the window is hidden in the tray.
 function showNote(n = {}) {
   if (!Notification.isSupported()) return false;
   const x = new Notification({ title: String(n.title || 'QuorX').slice(0, 90), body: String(n.body || '').slice(0, 240), icon: iconImage(256), silent: !!n.silent });
+  const key = n.chatId ? String(n.chatId) : null, old = key && noteOf.get(key);
+  if (old) { notes.delete(old); try { old.close(); } catch { /* already gone */ } }
+  if (key) noteOf.set(key, x);
   notes.add(x);
-  const drop = () => notes.delete(x);
+  const drop = () => { notes.delete(x); if (key && noteOf.get(key) === x) noteOf.delete(key); };
   x.on('click', () => { drop(); showWindow(); send({ type: 'notify-click', chatId: n.chatId || null }); });
   x.on('close', drop); x.on('failed', drop);
   x.show();
@@ -937,7 +987,9 @@ async function linkLoop() {
 // the terminal), and the menu's would zoom the app a second time.
 function appMenu() {
   const t = process.platform === 'darwin' ? [{ role: 'appMenu' }] : [];
-  t.push({ role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' });
+  // The Window menu without Ctrl+W: in QuorX that closes the chat tab on screen (the page handles it), not the window.
+  const windowMenu = process.platform === 'darwin' ? { role: 'windowMenu' } : { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close', registerAccelerator: false }] };
+  t.push({ role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, windowMenu);
   return Menu.buildFromTemplate(t);
 }
 app.whenReady().then(async () => {

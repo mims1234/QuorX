@@ -267,6 +267,41 @@ dialog.pal[open] .pal-box { animation: pal-in var(--dur-menu, .2s) var(--ease-ou
 .pal-empty { padding: 18px 12px; color: var(--muted); font-size: 13px; }
 .pal-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--dim); }
 .pal-foot span { display: inline-flex; align-items: center; gap: 4px; }
+/* Search inside chats: Ctrl+K's Messages rows, the Search chats window (Ctrl+Shift+F), and the message it opens */
+.pal-item.pal-msg { grid-template-columns: 22px minmax(0, 1fr) minmax(0, 36%); }
+.pal-item.pal-more .pal-label { color: var(--accent); }
+.pal-label mark, .cs mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--text-bright, var(--text)); border-radius: 3px; padding: 0 1px; }
+dialog.pal.cs { width: min(820px, calc(100vw - 32px)); margin-top: 8vh; }
+.cs .pal-box { max-height: 80vh; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+.cs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.cs-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.cs-seg-btn, .cs .lf-seg .st-seg-btn { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.cs-seg-btn:hover:not(:disabled), .cs .lf-seg .st-seg-btn:hover { color: var(--text); }
+.cs-seg-btn.active, .cs .lf-seg .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+.cs-seg-btn:disabled { opacity: .45; cursor: default; }
+.cs-seg-btn:focus-visible, .cs .lf-seg .st-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cs-proj { font-size: 12px; color: var(--muted); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-dates { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.cs-dates input { height: 28px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12px var(--font-ui); color-scheme: light dark; }
+.cs-narrow { padding: 8px 14px 0; }
+.cs-narrow[hidden] { display: none; }
+.cs .lf-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.cs .lf-none { margin: 0; color: var(--muted); font-size: 12px; }
+.cs-list.busy { opacity: .7; }
+.cs-chat-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 10px 2px; font-size: 12.5px; min-width: 0; }
+.cs-chat-head b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cs-chat-proj { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.cs-count { margin-left: auto; font: 600 10.5px var(--mono); color: var(--dim); white-space: nowrap; }
+.pal-item.cs-hit { grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; padding-left: 18px; }
+.cs-hit .pal-label { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+.cs-extra { padding: 0 10px 4px 50px; font-size: 11.5px; color: var(--dim); }
+.cs-loadmore .pal-label { color: var(--accent); }
+/* The message a search opened: outlined, its words lit, for a few seconds */
+/* (an outline: message rows set box-shadow: none !important; inset, as the chat's scroll box clips outside it) */
+.msgs .msg.msg-hit { outline: 2px solid var(--accent); outline-offset: -2px; animation: msg-hit 3.2s var(--ease-out, ease) both; }
+@keyframes msg-hit { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+::highlight(qx-hit) { background-color: color-mix(in srgb, var(--accent) 40%, transparent); color: inherit; }
+@media (prefers-reduced-motion: reduce) { .msgs .msg.msg-hit { animation: none; } }
 /* Review changes (under a reply that changed files): files with + / − counts, a diff per file, Undo per file */
 .review-slot { margin-top: 10px; }
 .rv-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
@@ -1728,6 +1763,29 @@ html body .sidebar .sb-project.current .sb-pname { font-weight: 750 !important; 
 .srv-pop .srv-row[data-i] { grid-template-columns: minmax(0, 1fr) !important; grid-auto-flow: row !important; }
 .srv-pop .srv-row[data-i] > .srv-top, .srv-pop .srv-row[data-i] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
 .srv-pop .srv-link { display: inline-flex !important; align-items: center; height: 22px !important; }
+
+/* ---------- two kinds of server: green PROJECT (the launch file) and violet PAGE (QuorX's pages server) ---------- */
+.kind-tag { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 6px; border-radius: 4px; font: 800 9px var(--font-ui); letter-spacing: .08em; line-height: 1; }
+.kind-tag.project { color: var(--ok); background: var(--ok-dim); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
+.kind-tag.page { color: var(--violet, #a78bfa); background: var(--violet-dim, color-mix(in srgb, #a78bfa 14%, transparent)); border: 1px solid var(--violet-line, color-mix(in srgb, #a78bfa 45%, transparent)); }
+.srv-pop .srv-kind { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 4px; text-transform: none; letter-spacing: 0; font: 700 12px var(--font-ui); color: var(--text); }
+.srv-pop .srv-kind > span:not(.kind-tag) { flex: none; white-space: nowrap; }
+.srv-pop .srv-kind small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11px var(--font-ui); color: var(--dim); }
+.srv-pop .srv-kind small code { font: 10.5px var(--mono); }
+.srv-pop .srv-dot.page { background: var(--violet, #a78bfa); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet, #a78bfa) 18%, transparent); }
+.srv-pop .page-row { border-color: color-mix(in srgb, var(--violet, #a78bfa) 28%, var(--line)) !important; }
+.srv-pop .srv-row[data-p] { grid-template-columns: minmax(0, 1fr) !important; grid-auto-flow: row !important; }
+.srv-pop .srv-row[data-p] > .srv-top, .srv-pop .srv-row[data-p] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
+.srv-pop .srv-keep { flex: none; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); background: transparent; color: var(--ok); font: 650 11px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.srv-pop .srv-keep:hover:not(:disabled) { background: var(--ok-dim); border-color: var(--ok); }
+.srv-pop .srv-state.warn { color: var(--amber, #f59e0b); }
+.srv-pop .srv-pfilter { margin: 0 0 2px; }
+.urlbar .url-kind { margin-left: 2px; }
+.urlbar .url-kind[hidden] { display: none; }
+.pages-notice { --bn: var(--violet, #a78bfa); grid-template-columns: auto minmax(0, 1fr) auto auto auto; }
+.pages-notice .bn-raise { color: #fff; }
+.pages-notice .pn-undo { height: 28px; }
+@container (max-width: 520px) { .pages-notice > .pn-undo { grid-row: 2; grid-column: 3; } }
 
 /* ---------- what you sent: clickable pictures and files, and the large viewer ---------- */
 .msg .u-imgs img { cursor: zoom-in; }
@@ -3256,3 +3314,29 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 .rec.mk { position: relative; display: inline-flex; flex: none; width: 15px; height: 15px; vertical-align: -3px; font-size: 0; line-height: 0; cursor: help; }
 .mk-ava { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 4px; font: 700 9px/1 var(--mono); color: hsl(var(--h) 80% 82%); background: hsl(var(--h) 40% 24%); }
 .rec.mk.rec-r::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 1.5px var(--panel); }
+
+/* Pinned chats (a small pin before the title) and the "Older" row that idle chats fold into: a quiet text row with a
+   chevron, not dashed like Show more, so the two read as different things. */
+.sb-chat-pin { display: inline-flex; flex: none; width: 11px; height: 11px; margin-right: 5px; color: var(--accent); vertical-align: -1px; }
+.sb-chat-pin svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sb-older-btn { display: flex; align-items: center; gap: 5px; width: calc(100% - 14px); margin: 2px 0 4px 14px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); text-align: left; cursor: pointer; }
+.sb-older-btn svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
+.sb-older-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+.sb-older-btn small { margin-left: auto; font: 500 10.5px var(--mono); color: var(--dim); }
+.sb-older-btn:hover { color: var(--text); background: var(--accent-dim); }
+.sb-chat.sb-older { opacity: .82; }
+.sb-project.folded .sb-older-btn { display: none; }
+/* Needs you (app.js needsYou): chats waiting on you, in amber, apart from the green count of what runs; in the Running
+   list, their section sits on top with the answer buttons right on each row. */
+.sb-nav-sched .need { color: var(--amber); display: inline-flex; align-items: center; gap: 4px; }
+.sb-nav-sched .need::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+.sb-rail-btn.nav-running .rl-need { position: absolute; bottom: 3px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 4px; background: var(--amber); color: var(--amber-ink, #1a1000);
+  font: 700 9.5px/14px var(--mono); font-style: normal; text-align: center; }
+.sb-rail-btn.nav-running .rl-need[hidden] { display: none; }
+.tr-dot.wait { background: var(--amber); box-shadow: 0 0 5px var(--amber-glow, var(--amber)); }
+#rlBody .rl-sec[data-sec="need"] { border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-sec[data-sec="need"] > h4 { color: var(--amber); }
+#rlBody .rl-sec[data-sec="need"] .run-n { background: var(--amber-dim); color: var(--amber); }
+#rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }

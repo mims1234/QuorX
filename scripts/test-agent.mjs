@@ -510,6 +510,57 @@ test("records of earlier replies go to the system prompt, not into the agent's o
   assert.match(msgs[0].content, /recorded by the harness[\s\S]*- What I did: Read a\.js\. Checks passed\./);
 });
 
+// ---------- the context meter and Compact ----------
+test('each model call reports the tokens it sent, and the cache share where the source gives it', async () => {
+  const { events } = await run((body, i) => [
+    { ...reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), usage: { cost: 0.0001, prompt_tokens: 12000, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 9000, cache_write_tokens: 1000 } } },
+    { ...reply('Done.'), usage: { cost: 0.0001, completion_tokens: 20 } },
+  ][i]);
+  const calls = of(events, 'llm_done');
+  assert.deepEqual([calls[0].tokensIn, calls[0].tokensOut, calls[0].cacheRead, calls[0].cacheWrite], [12000, 300, 9000, 1000]);
+  // A source that sends no prompt count: nothing is made up.
+  assert.equal(calls[1].tokensIn, undefined); assert.equal(calls[1].cacheRead, undefined);
+});
+
+const longChat = (n) => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `${i % 2 ? 'Built part' : 'Please build part'} ${i} ${'x'.repeat(3000)}${i % 2 ? '\n\n[What I did: Wrote part.js. Checks passed.]' : ''}`, at: 1000 + i }));
+
+test('the context meter: % left of the window, amber at 25% or less, red at 8% or less, cache rows only when known', () => {
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf('// This chat\'s figures', i);
+  assert.ok(i >= 0 && j > i);
+  const contextNumbers = new Function(`${page.slice(i, j)}; return contextNumbers;`)();
+  const u = contextNumbers({ in: 150000, out: 6000, read: 90000, write: 10000, model: 'm' }, 200000);
+  assert.deepEqual([u.used, u.pct, u.tone, u.free, u.cacheRead, u.cacheWrite, u.fresh], [156000, 22, 'amber', 44000, 90000, 10000, 50000]);
+  assert.equal(contextNumbers({ in: 60000, out: 0 }, 200000).tone, 'ok');
+  assert.equal(contextNumbers({ in: 50000, out: 1000 }, 200000).cacheRead, null); // no cache figures from this source
+  const red = contextNumbers({ in: 185000, out: 1000 }, 200000);
+  assert.deepEqual([red.pct, red.tone], [7, 'red']);
+  // No window in the model list: tokens used, no % and no colour.
+  assert.deepEqual([contextNumbers({ in: 9000, out: 100 }, 0).pct, contextNumbers({ in: 9000, out: 100 }, 0).tone, contextNumbers({ in: 9000, out: 100 }, 0).used], [null, 'none', 9100]);
+  assert.equal(contextNumbers(null, 200000).known, false);
+});
+
+test('Compact by the context meter writes the same summary on demand, and says when there is nothing to compact', async () => {
+  const { saveChat: save } = await import('../server/store.js');
+  const { compactChat, COMPACT_KEEP } = await import('../server/agent.js');
+  const id = `cpt${Date.now()}`;
+  save(id, { id, title: 'Long one', projectId: 'scratch', agent: { setup: { model: 'z-ai/glm-test' }, summary: 'Earlier: the start.', messages: [...longChat(12), { role: 'usage', at: 2000 }], artifacts: {} } });
+  let asked = null;
+  const r = await compactChat(id, {}, async (body) => { asked = body; return { message: { content: '- summary now' }, usage: { cost: 0.0021 }, model: body.model }; });
+  assert.equal(asked.model, 'z-ai/glm-test'); // the chat's own model
+  assert.match(asked.messages[0].content, /^Summarise this conversation/);
+  assert.match(asked.messages[1].content, /^Earlier summary:\nEarlier: the start\./);
+  assert.doesNotMatch(asked.messages[1].content, /What I did/); // records stay out, as in a reply
+  assert.equal(r.summary, '- summary now');
+  assert.equal(r.turns, 12 - COMPACT_KEEP); assert.equal(r.kept, COMPACT_KEEP);
+  assert.equal(r.cutoffAt, 1000 + 12 - COMPACT_KEEP);
+  assert.equal(r.cost, 0.0021);
+  assert.ok(r.oldChars > 4 * 3000);
+  // After it, only the kept turns follow the summary: nothing more to compact.
+  save(id, { id, title: 'Long one', projectId: 'scratch', agent: { setup: { model: 'z-ai/glm-test' }, summary: r.summary, summaryAt: r.cutoffAt, messages: longChat(12), artifacts: {} } });
+  await assert.rejects(compactChat(id, {}, async () => assert.fail('no call')), (e) => e.nothing && /Nothing to compact yet/.test(e.message));
+});
+
 test('strict mode: parallel reads each ask, and "Always allow" on one answers the others', async () => {
   let runId, answered = false;
   const { events, bodies } = await run((body, i) => [
@@ -1492,7 +1543,7 @@ test('a planned build gets the longer step limit', async () => {
   assert.ok(of(events, 'note').some((e) => /from 4 to 10/.test(e.msg)));
 });
 
-test('preview_site runs the site from the launch file (.quorx/serve.mjs) and opens it as a server, not an artifact', async () => {
+test('preview_site shows the site as a page (the pages server, not the launch file) and opens it, not as an artifact', async () => {
   let b = 0;
   const { events, dir } = await run(() => [
     reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
@@ -1501,9 +1552,9 @@ test('preview_site runs the site from the launch file (.quorx/serve.mjs) and ope
   ][b++]);
   const sv = of(events, 'server');
   assert.equal(sv.length, 1);
-  assert.equal(sv[0].name, 'site');
+  assert.equal(sv[0].page, true);
   assert.equal(sv[0].entry, 'index.html');
-  assert.ok(fs.existsSync(path.join(dir, '.quorx', 'serve.mjs')), 'the static server script is in the project');
+  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'launch.json')), 'nothing saved to the launch file (more in test-pages.mjs)');
   assert.equal(of(events, 'artifact').length, 0, 'no artifact for a live site');
 });
 

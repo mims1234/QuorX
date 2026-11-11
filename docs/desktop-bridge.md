@@ -32,6 +32,7 @@ All calls return a promise.
 | `hideAll` | Hides every tab | | `true` |
 | `nav` | Back, forward, reload, stop or DevTools for a tab | `sid`, `'back' \| 'forward' \| 'reload' \| 'stop' \| 'devtools'` | `true`, or `false` for no such tab |
 | `close` | Closes a tab (or forgets a sleeping one) | `sid` | `true` if there was one |
+| `find` | Ctrl+F in a tab's page: finds the text (the next or previous match), or stops and clears the marks; the count arrives as a `find` event | `sid`, `'find'`, text, `{ forward, findNext }` · `sid`, `'stop'` | `true`, or `false` for no such tab |
 | `snapshot` | A picture of a tab on screen, to stand in while something covers it | `sid` | a PNG data URL, or `null` |
 | `sound` | Volume and mute for every tab, the agent's tabs, or one tab | `'set'`, `{ volume, muted, agentMuted }` · `'tab'`, `{ sid, muted }` · nothing to read | the sound settings |
 | `tabs` | The Running list: every tab with its page and sound, or close one | nothing to list · `'close'`, `sid` | `[{ sid, agent, chatId, url, title, audible, muted, shown, asleep? }]` |
@@ -44,11 +45,13 @@ All calls return a promise.
 | `storage` | Settings → Storage: measure, clear, and the app's own cleanup rules | `'measure'` · `'clear'`, `[parts]` · `'rules'`, `{ updateCleanup, agentCacheOnStart }` | per step |
 | `openHome` | Opens the data folder in File Explorer | | `true` |
 | `focusWindow` | Brings the window forward (a clicked notification) | | `true` |
-| `notify` | A Windows notification; clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `notify` | A Windows notification (a newer one for the same chat replaces the older); clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `badge` | The taskbar icon's badge: how many chats need you, drawn by the page | count, a PNG data URL (nothing at 0) | `true` |
 | `zoom` | QuorX's own zoom, remembered between starts | `'in' \| 'out' \| 'reset' \| 'get'` | the zoom factor |
 | `openExternal` | Opens a web address in your own browser | `url` (http or https only) | `true` |
 | `showFile` | Shows a downloaded file in File Explorer | a path inside Downloads | `true` |
 | `perf` | The performance readout: every process with memory and processor, each tab, lost 3D views | | `{ totalMb, appMb, gpuMb, tabsMb, cpu, gpuCpu, procs, tabs, webglLost }` |
+| `navButtons` | Always `true` (a value, not a call): the mouse's side buttons arrive as `ws-nav` events, so the page ignores its own | | `true` |
 | `on` | Listens to the shell's events (below) | `fn(event)` | a function that stops listening |
 
 ## Events
@@ -63,6 +66,8 @@ Sent on the `oh-desktop` channel; each has a `type`.
 | `popup` | A page asked for a new window; the page opens it as a tab (`sid`, `url`) |
 | `zoom` | A tab's own zoom changed (`sid`, `factor`) |
 | `audio` | A tab started or stopped making sound (`sid`, `audible`) |
+| `find` | How many matches `find` found in a tab's page, and which one is current (`sid`, `at`, `of`) |
+| `find-open` | Ctrl+F was pressed inside a tab: the page opens its find bar for that tab's group (`sid`) |
 | `download` | A tab's download started, moved on or ended (`sid`, `state`, `name`, `file`, `received`, `total`) |
 | `sleep` | A hidden tab went to sleep to save memory (`sid`); it wakes by itself when placed, shown or reloaded |
 | `wake` | A sleeping tab opened again (`sid`) |
@@ -72,13 +77,14 @@ Sent on the `oh-desktop` channel; each has a `type`.
 | `notify-click` | A notification was clicked, or the extension asked to open a chat (`chatId`) |
 | `zoom-key` | Ctrl + / − / 0 was pressed in the window; the page decides what it zooms (`dir`) |
 | `zoom-wheel` | Ctrl+wheel in the window (`dir`) |
+| `ws-nav` | The mouse's back or forward button, with the pointer and focus outside your browser tabs: the page steps back or forward through the workspace (`dir`: `back` or `forward`). Inside a tab the shell takes that page back or forward itself |
 | `update` | The update state changed (the same object `update('state')` returns) |
 
 ## For another shell
 
 A replacement shell needs, roughly in order of effort:
 
-1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`,
+1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `find`,
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.

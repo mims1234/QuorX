@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -38,8 +38,10 @@ import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, st
 import { ghStatus, listPulls, checkLog } from './server/pulls.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, knownFolder, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, knownFolder, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
+import { searchChats } from './server/chatsearch.js';
 import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -202,8 +204,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, sidebarChats({ per: Math.max(1, Math.min(200, Number(url.searchParams.get('per')) || 30)), ids }));
     }
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
+    // 📌 Pin or unpin a chat (the top of its project in the sidebar): { on }. Pins live apart from the chat files.
+    const pinm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/pin$/i);
+    if (pinm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); try { return json(res, 200, { pins: setChatPin(pinm[1], !!b.on) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
+    // Search inside chats (server/chatsearch.js): Ctrl+K's Messages group and the Search chats window.
+    if (url.pathname === '/api/search/chats' && req.method === 'GET') {
+      const s = url.searchParams, project = s.get('project') || '', role = s.get('role') || '';
+      if (project && !validId(project)) return json(res, 400, { error: 'bad project id' });
+      if (role && role !== 'user' && role !== 'agent') return json(res, 400, { error: 'role is user or agent' });
+      if ((s.get('q') || '').length > 200) return json(res, 400, { error: 'search for 200 characters at most' });
+      return json(res, 200, await searchChats({ q: s.get('q') || '', project, role, from: s.get('from'), to: s.get('to'), archived: s.get('archived') === '1', offset: s.get('offset'), limit: s.get('limit'), perChat: s.get('per') }));
+    }
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost', providerOf: providerOfModel }));
     // What each provider was paid (⚙ Settings → Providers): today, this month, all time, calls, models, 14 days.
     if (url.pathname === '/api/costs/providers' && req.method === 'GET') return json(res, 200, providerUsage({ providerOf: providerOfModel }));
@@ -214,6 +227,21 @@ const server = http.createServer(async (req, res) => {
     // A short brief of a whole chat (/fresh, and attaching a chat to another), cached until the chat changes.
     const brm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/brief$/i);
     if (brm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, await briefForChat(brm[1], { model: b.model })); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // Compact, by the context meter: older turns become a summary now, with the chat's own model. Its cost goes to the
+    // ledger (and the page adds it to the chat) like a review's.
+    const cpm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/compact$/i);
+    if (cpm && req.method === 'POST') {
+      if (!validId(cpm[1])) return json(res, 400, { error: 'bad chat id' });
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      const st = budgetState(cpm[1]);
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to compact it.' });
+      try {
+        const r = await compactChat(cpm[1], { settings: { sourceFallback: b.sourceFallback, fallbackModel: b.fallbackModel } });
+        const id = `cp-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'compact', project: getChat(cpm[1])?.projectId || 'scratch', chatId: cpm[1], model: r.model, stop: 'compact', cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message, nothing: !!e.nothing }); }
+    }
     // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
     const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);
     if (trm && req.method === 'GET') { const t = getTrace(trm[1], trm[2]); return t ? json(res, 200, t) : json(res, 404, { error: 'no such steps' }); }
@@ -588,7 +616,30 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/servers/overview' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid) }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [] }); }
+      // Pages first: the old previews leave the launch file (once) before the servers are read.
+      try { const pages = listPages(pid); return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid), pages: pages.pages, pagesNotice: pages.notice }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [], pages: [] }); }
+    }
+    // ---- pages (server/pages.js): previews and mockups on the pages address, apart from the project's servers ----
+    if (url.pathname === '/api/pages' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ...listPages(pid), pagePort: runtime.pagePort || null }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, pages: [] }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try {
+        if (b.action === 'undo') return json(res, 200, { ok: true, restored: undoMove(b.projectId) });
+        if (b.action === 'dismiss') return json(res, 200, { ok: dismissMove(b.projectId) });
+        if (b.action === 'keep') return json(res, 200, { ok: true, config: keepAsServer(b.projectId, b.entry, b.name) });
+        if (b.action === 'add') return json(res, 200, { ok: true, ...addPage(b.projectId, { entry: b.entry, title: b.title }) });
+        return json(res, 400, { error: 'action must be undo, dismiss, keep or add' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'DELETE') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: removePage(pid, url.searchParams.get('entry') || '') }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/servers/log' && req.method === 'GET') return json(res, 200, { log: serverLog(url.searchParams.get('key')) });
     if (url.pathname === '/api/servers/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopServerWait(b.key, 'you'); return json(res, 200, { ok: !!r, ...(r || {}) }); }
@@ -610,7 +661,9 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4));
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       try {
+        migrateProject(b.projectId, { create: true });
         const config = saveLaunchConfig(b.projectId, b);
+        if (isPreviewEntry(config)) ensureServeScript(workspaceDir(b.projectId));
         // A renamed server that isn't running leaves no row under its old name.
         if (b.oldName && b.oldName !== config.name && serverFor(b.projectId, b.oldName)?.status === 'stopped') await forgetServer(b.projectId, b.oldName, 'you');
         return json(res, 200, { ok: true, config });
@@ -1421,6 +1474,14 @@ if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 const pageServer = http.createServer((req, res) => {
   let p = '';
   try { p = new URL(req.url, 'http://x').pathname; } catch { /* below */ }
+  // A page of a project that links from the root (/style.css, /about.html), as it would on a server of its own: sent
+  // on to the same path in its project, which its address (Referer) names. Only its own project, as below.
+  const from = String(req.headers.referer || '').match(/^https?:\/\/[^/]+\/ws\/([a-z0-9-]+)\//i);
+  if (from && isLoopback(req) && ['GET', 'HEAD'].includes(req.method) && p.startsWith('/') && !/^\/(ws|art|preview|wsf|api)(\/|$)/.test(p)) {
+    let q = ''; try { q = new URL(req.url, 'http://x').search; } catch { /* none */ }
+    res.writeHead(307, { Location: `/ws/${from[1]}${p}${q}`, 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (!isLoopback(req) || !['GET', 'HEAD'].includes(req.method) || !/^\/(ws|art|preview\/page)\//.test(p)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not here'); }
   req.pageOrigin = true;
   server.emit('request', req, res);
