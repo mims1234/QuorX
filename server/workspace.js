@@ -1106,16 +1106,46 @@ export function undoFile(root, runId, rel, { force } = {}) {
   if (!m || !(rel in m.files)) throw new Error('This file is not in the reply\'s undo copy any more.');
   const p = safePath(root, rel);
   if (!force && m.after && fileHash(p) !== m.after[rel]) return { conflict: true };
-  // The version being replaced goes to .quorx/trash first, so undoing one file can itself be taken back by hand.
-  if (fs.existsSync(p)) trashFile(root, rel);
+  // The version being replaced goes to .quorx/trash first, so undoing one file can itself be taken back (redoFile).
+  const trash = fs.existsSync(p) ? trashFile(root, rel) : null;
   if (m.files[rel]) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.copyFileSync(path.join(dir, 'files', rel), p); }
   const result = m.files[rel] ? 'restored' : 'removed';
+  (m.redo ||= {})[rel] = { trash, existed: m.files[rel], after: m.after?.[rel] ?? null, put: m.files[rel] ? fileHash(p) : null };
   delete m.files[rel]; if (m.after) delete m.after[rel];
   (m.undoneFiles ||= []).push(rel);
   fs.writeFileSync(mp, JSON.stringify(m));
+  // Nothing left to undo: the copy is set aside (and listCheckpoints stops offering it), but kept for a Redo.
   const left = Object.keys(m.files).length;
   if (!left) fs.renameSync(dir, `${dir}-undone-${Date.now()}`);
   return { ok: true, result, left };
+}
+// Redo one file undone with undoFile: the reply's version comes back from .quorx/trash (or the file is removed again
+// when the reply had deleted it), and the file is back in the reply's undo copy. If the file changed after the undo,
+// the caller must pass force (the version it replaces goes to .quorx/trash).
+export function redoFile(root, runId, rel, { force } = {}) {
+  if (!/^[\w-]+$/.test(String(runId))) throw new Error('bad run id');
+  const base = ckptDir(root);
+  let dir = path.join(base, String(runId));
+  if (!fs.existsSync(path.join(dir, 'manifest.json'))) {
+    // Every file was undone, so the copy was set aside: the newest one set aside comes back.
+    const gone = fs.existsSync(base) ? fs.readdirSync(base).filter((n) => n.startsWith(`${runId}-undone-`)).sort() : [];
+    if (!gone.length) throw new Error('This reply\'s undo copy is no longer kept, so the file can\'t be redone.');
+    fs.renameSync(path.join(base, gone.at(-1)), dir);
+  }
+  const mp = path.join(dir, 'manifest.json'), m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+  const r = m.redo?.[rel];
+  if (!r) throw new Error('This file was not undone here, so there is nothing to redo.');
+  const p = safePath(root, rel);
+  if (!force && (r.put ? fileHash(p) !== r.put : fs.existsSync(p))) return { conflict: true };
+  if (r.trash && !fs.existsSync(path.join(root, r.trash))) throw new Error('The reply\'s version is no longer in .quorx/trash.');
+  if (fs.existsSync(p)) trashFile(root, rel);
+  if (r.trash) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.renameSync(path.join(root, r.trash), p); }
+  m.files[rel] = r.existed;
+  if (m.after && r.after != null) m.after[rel] = r.after;
+  m.undoneFiles = (m.undoneFiles || []).filter((x) => x !== rel);
+  delete m.redo[rel];
+  fs.writeFileSync(mp, JSON.stringify(m));
+  return { ok: true, result: r.trash ? 'redone' : 'removed', left: Object.keys(m.files).length };
 }
 
 // Copy a starter template into the project without overwriting anything.

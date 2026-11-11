@@ -205,3 +205,44 @@
 .msg.compacted .cp-cost { font: 500 11.5px var(--mono); color: var(--dim); }
 .msg.compacted .cp-sum summary { cursor: pointer; color: var(--dim); font-size: 12px; margin-top: 4px; }
 .msg.compacted .cp-body { white-space: pre-wrap; margin-top: 6px; color: var(--text); font-size: 12.5px; }
+
+/* files changed (app.js drawFilesChanged): a chip above the box for what the replies since your last message changed;
+   open, it lists each file with Undo / Redo, and Review all / Undo all beside the chip */
+.composer-v2 { position: relative; }
+.fc-slot { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; }
+.fc-slot[hidden] { display: none; }
+.fc-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fc-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
+  background: var(--panel-2); color: var(--text); font: 600 12.5px var(--font-ui); cursor: pointer; }
+.fc-chip:hover, .fc-chip[aria-expanded="true"] { background: var(--panel-3); border-color: var(--accent-border); }
+.fc-chip.done { color: var(--muted); font-weight: 500; }
+.fc-chip .rv-add, .fc-row .rv-add { color: var(--ok); font: 600 12px var(--mono); }
+.fc-chip .rv-rem, .fc-row .rv-rem { color: var(--bad); font: 600 12px var(--mono); }
+.fc-caret { color: var(--dim); font-size: 10px; }
+.fc-bar > button:not(.fc-chip), .fc-row button, .fc-confirm button, .fc-toast button { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.fc-bar > button.danger, .fc-confirm button.danger { color: var(--bad); border-color: var(--bad-border); }
+.fc-bar > button.danger:hover:not(:disabled), .fc-confirm button.danger:hover { background: var(--bad); color: #fff; }
+.fc-slot button:disabled { opacity: .5; cursor: not-allowed; }
+.fc-list { display: flex; flex-direction: column; max-height: min(240px, 34vh); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.fc-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 8px; border-bottom: 1px solid var(--line-subtle); }
+.fc-row:last-child { border-bottom: 0; }
+.fc-row .rv-st { flex: none; }
+.fc-row .rv-st.und { color: var(--dim); }
+.fc-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); color: var(--text); }
+.fc-row.undone .fc-path { color: var(--dim); text-decoration: line-through; }
+.fc-nums { flex: none; }
+.fc-undone, .fc-dim { font: 500 11.5px var(--font-ui); color: var(--dim); }
+.fc-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 10px; border: 1px solid var(--bad-border); border-radius: var(--radius-md);
+  background: var(--bad-dim); color: var(--text); font-size: 12.5px; }
+.fc-confirm.fc-ask { margin: 2px 6px 6px; border-color: var(--amber-line, var(--line)); background: var(--amber-dim); }
+.fc-sp { flex: 1 1 auto; }
+.fc-result { padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-2); font-size: 12.5px; color: var(--text); }
+.fc-result summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.fc-result ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+.fc-note { font-size: 12px; color: var(--muted); }
+.fc-toast { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); z-index: 80; display: inline-flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--panel); box-shadow: var(--shadow-pop);
+  font: 500 12.5px var(--font-ui); color: var(--text); white-space: nowrap; animation: popFade .15s ease-out; }
+.fc-toast .fc-tact { color: var(--accent); border-color: var(--accent-border); }
+.fc-toast .fc-tx { border: 0; background: none; color: var(--dim); padding: 0 4px; }

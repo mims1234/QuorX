@@ -1094,3 +1094,35 @@ test('approve all: only cards of one kind and mode, never a risky one, and only 
   assert.deepEqual(bulkWords(r.groups[0], 'Read a file'), { what: '3 waiting · Read a file', yes: 'Allow all 3', no: 'Deny all 3' });
   assert.deepEqual(bulkGroups(null), { groups: [], alone: 0 });
 });
+
+test('files changed: Undo one file, then Redo puts the reply\'s version back, for changed, added and deleted files', async () => {
+  const { checkpoint, sealCheckpoint, undoFile, redoFile, listCheckpoints } = await import('../server/workspace.js');
+  const dir = tmp('redo'), f = (n) => path.join(dir, n), read = (n) => fs.readFileSync(f(n), 'utf8');
+  fs.writeFileSync(f('a.txt'), 'before'); fs.writeFileSync(f('gone.txt'), 'old');
+  // A reply changes a.txt, adds new.txt and deletes gone.txt.
+  for (const n of ['a.txt', 'new.txt', 'gone.txt']) checkpoint(dir, 'run9', n);
+  fs.writeFileSync(f('a.txt'), 'after'); fs.writeFileSync(f('new.txt'), 'made'); fs.unlinkSync(f('gone.txt'));
+  sealCheckpoint(dir, 'run9');
+  // Changed file: undo, redo.
+  assert.equal(undoFile(dir, 'run9', 'a.txt').result, 'restored');
+  assert.equal(read('a.txt'), 'before');
+  assert.deepEqual(redoFile(dir, 'run9', 'a.txt'), { ok: true, result: 'redone', left: 3 });
+  assert.equal(read('a.txt'), 'after');
+  // It is in the undo copy again: it can be undone a second time.
+  assert.equal(undoFile(dir, 'run9', 'a.txt').result, 'restored');
+  assert.equal(redoFile(dir, 'run9', 'a.txt').result, 'redone');
+  // Deleted by the reply: undo brings it back, redo deletes it again.
+  undoFile(dir, 'run9', 'gone.txt'); assert.equal(read('gone.txt'), 'old');
+  assert.equal(redoFile(dir, 'run9', 'gone.txt').result, 'removed'); assert.equal(fs.existsSync(f('gone.txt')), false);
+  // Changed after the undo: redo asks first (force overwrites, the newer version goes to the trash).
+  undoFile(dir, 'run9', 'a.txt'); fs.writeFileSync(f('a.txt'), 'edited by you');
+  assert.deepEqual(redoFile(dir, 'run9', 'a.txt'), { conflict: true });
+  assert.equal(redoFile(dir, 'run9', 'a.txt', { force: true }).result, 'redone'); assert.equal(read('a.txt'), 'after');
+  // Every file undone: the copy is set aside, and a redo brings it back.
+  for (const n of ['a.txt', 'new.txt', 'gone.txt']) undoFile(dir, 'run9', n, { force: true });
+  assert.equal(listCheckpoints(dir).some((x) => x.runId === 'run9'), false);
+  assert.equal(fs.existsSync(f('new.txt')), false);
+  assert.equal(redoFile(dir, 'run9', 'new.txt').result, 'redone'); assert.equal(read('new.txt'), 'made');
+  assert.equal(listCheckpoints(dir).some((x) => x.runId === 'run9'), true);
+  assert.throws(() => redoFile(dir, 'run9', 'never.txt'), /nothing to redo/);
+});

@@ -3881,6 +3881,7 @@ function paneHTML(c) {
       <div class="msgs"></div>
       <div class="limit-bar" role="status" hidden></div>
       <form class="composer composer-v2">
+        <div class="fc-slot" hidden></div>
         <div class="composer-box">
         <div class="cmp-quick" role="toolbar" aria-label="Quick settings for this chat"></div>
         <div class="attachments cmp-attachments-tray"></div>
@@ -5019,6 +5020,7 @@ function syncRunState(c) {
   $('.stopBtn', c.el.root).hidden = !busy;
   c.el.root.classList.toggle('busy', busy);
   drawContextMeter(c); // Compact waits for the reply to end
+  drawFilesChanged(c); // what the replies since your last message changed
   renderChatHead(c);
 }
 
@@ -5955,6 +5957,139 @@ async function refreshUndoable(projectId) {
   for (const c of G.open.values()) if (c.projectId === projectId && c.el) for (const m of c.agent.messages) if (m.stats?.changed?.length && !m.undone) updateMsg(c, m);
 }
 const undoGone = (c, m) => { const set = G.undoable?.[c.projectId]; return !!set && !set.has(m.stats?.undoId || m.runId); };
+
+// ---------- files changed: a chip above the message box for what the replies since your last message changed ----------
+// It reads each reply's undo copy (the checkpoint the file tools and command snapshots fill: /api/review), so it shows
+// what the files are now against how they were before the reply. Open it for the list: Undo one file (a toast offers
+// Redo), Review all (a Changes tab beside the chat, one diff per file) and Undo all (asks inline first, then says what
+// was undone, skipped and why). Buttons that can't be used say why.
+// The replies since your last message that changed files (a reply still running joins once it ends).
+function fcReplies(c) {
+  const ms = c.agent.messages, last = ms.findLastIndex((m) => m.role === 'user');
+  return ms.slice(last + 1).filter((m) => m.role === 'assistant' && !m.live && m.stats?.changed?.length);
+}
+const fcRun = (m) => m.stats?.undoId || m.runId;
+async function drawFilesChanged(c, { fresh = false } = {}) {
+  const slot = c.el && $('.fc-slot', c.el.root);
+  if (!slot) return;
+  const st = (c._fc ||= { open: false, confirm: false, data: {}, result: null });
+  const reps = fcReplies(c);
+  if (!reps.length) { slot.hidden = true; slot.innerHTML = ''; Object.assign(st, { open: false, confirm: false, result: null }); return; }
+  // Each reply's list, fetched again when its undone files change (or when asked).
+  await Promise.all(reps.map(async (m) => {
+    const key = `${fcRun(m)}:${(m.undoneFiles || []).length}:${m.undone || ''}`;
+    if (!fresh && st.data[fcRun(m)]?.key === key) return;
+    const r = await getJ(`/api/review?project=${encodeURIComponent(c.projectId)}&run=${encodeURIComponent(fcRun(m))}`);
+    // Every file undone: the copy is set aside, but each file can still be redone.
+    st.data[fcRun(m)] = { key, ...(r?.error ? { error: r.error, files: [], undone: m.undoneFiles || [] } : r) };
+  }));
+  if (!slot.isConnected) return;
+  const rows = reps.flatMap((m) => {
+    const d = st.data[fcRun(m)] || { files: [], undone: [] };
+    return [...d.files.map((f) => ({ m, f, undone: false })), ...(d.undone || []).filter((p) => !d.files.some((f) => f.path === p)).map((p) => ({ m, f: { path: p }, undone: true }))];
+  });
+  const live = rows.filter((x) => !x.undone), A = live.reduce((n, x) => n + (x.f.added || 0), 0), D = live.reduce((n, x) => n + (x.f.removed || 0), 0);
+  const gone = reps.find((m) => undoGone(c, m)), err = reps.map((m) => st.data[fcRun(m)]?.error).find(Boolean);
+  // Why a button can't be used, or '' when it can.
+  const why = c.running ? 'Wait for the reply to finish (or stop it) to undo files' : gone ? 'This reply\'s undo copy is no longer kept' : '';
+  slot.hidden = false;
+  if (!live.length && !rows.length) { slot.innerHTML = err ? `<div class="fc-note">${esc(err)}</div>` : ''; slot.hidden = !err; return; }
+  const own = (p) => /^\.(quorx|agent)\//.test(p);
+  rows.sort((a, b) => own(a.f.path) - own(b.f.path) || a.undone - b.undone);
+  const n = live.length;
+  const chip = n ? `<button type="button" class="fc-chip" aria-expanded="${st.open}" title="What the ${reps.length > 1 ? `last ${reps.length} replies` : 'last reply'} changed since your last message">${n} file${n === 1 ? '' : 's'} changed <b class="rv-add">+${A}</b><b class="rv-rem">−${D}</b><span class="fc-caret" aria-hidden="true">${st.open ? '▴' : '▾'}</span></button>`
+    : `<button type="button" class="fc-chip done" aria-expanded="${st.open}">All changes undone<span class="fc-caret" aria-hidden="true">${st.open ? '▴' : '▾'}</span></button>`;
+  const acts = st.open ? `<button type="button" class="fc-review" title="Open a Changes tab beside the chat: one diff per file">Review all</button>${n ? `<button type="button" class="fc-all danger" ${why ? `disabled title="${esc(why)}"` : 'title="Put every file back as it was before the reply"'}>Undo all</button>` : ''}` : '';
+  const confirm = st.open && st.confirm && n ? `<div class="fc-confirm" role="alert">Undo ${n} file${n === 1 ? '' : 's'}? Each goes back to its copy from before the reply; the reply's versions move to .quorx/trash. Files changed again since then are skipped.<span class="fc-sp"></span><button type="button" class="danger fc-yes">Undo ${n}</button><button type="button" class="fc-no">Cancel</button></div>` : '';
+  const res = st.open && st.result ? `<div class="fc-result">${esc(st.result.line)}${st.result.details.length ? `<details><summary>Show details</summary><ul>${st.result.details.map((x) => `<li><code>${esc(x.path)}</code> ${esc(x.what)}</li>`).join('')}</ul></details>` : ''}</div>` : '';
+  const list = st.open ? `<div class="fc-list">${rows.map((x, i) => {
+    const [cls, letter, word] = x.undone ? ['und', '↶', 'Undone'] : RV_STATUS[x.f.status] || RV_STATUS.modified;
+    const since = x.f.changedSince ? '<span class="rv-since" title="Changed again after the reply (by a later reply or you)">changed since</span>' : '';
+    const nums = x.undone ? '<span class="fc-undone">undone</span>' : x.f.binary ? '<span class="fc-dim">binary</span>' : x.f.large ? '<span class="fc-dim">large</span>' : `<b class="rv-add">+${x.f.added || 0}</b> <b class="rv-rem">−${x.f.removed || 0}</b>`;
+    const btn = x.undone ? `<button type="button" class="fc-redo" data-i="${i}" ${why ? `disabled title="${esc(why)}"` : 'title="Put the reply\'s version back"'}>Redo</button>`
+      : `<button type="button" class="fc-undo" data-i="${i}" ${why ? `disabled title="${esc(why)}"` : `title="Put ${esc(x.f.path)} back as it was before the reply"`}>Undo</button>`;
+    return `<div class="fc-row ${x.undone ? 'undone' : ''}" data-i="${i}"><span class="rv-st ${cls}" title="${word}">${letter}</span><code class="fc-path" title="${esc(x.f.path)}">${esc(x.f.path)}</code>${since}<span class="fc-nums">${nums}</span>${btn}</div>`;
+  }).join('')}</div>` : '';
+  slot.innerHTML = `<div class="fc-bar">${chip}${acts}</div>${confirm}${res}${list}`;
+  // ----- wiring -----
+  $('.fc-chip', slot).onclick = () => { st.open = !st.open; if (!st.open) { st.confirm = false; st.result = null; } drawFilesChanged(c); };
+  const rv = $('.fc-review', slot); if (rv) rv.onclick = () => { for (const m of reps) openFileInPane(c, { id: `changes:${m.runId}:all`, kind: 'changes', run: m.runId, ref: 'all', name: PANE_CARDS.changes.name(m) }); };
+  const all = $('.fc-all', slot); if (all) all.onclick = () => { st.confirm = true; drawFilesChanged(c); $('.fc-no', slot)?.focus(); };
+  const no = $('.fc-no', slot); if (no) no.onclick = () => { st.confirm = false; drawFilesChanged(c); };
+  const yes = $('.fc-yes', slot); if (yes) yes.onclick = async () => {
+    yes.disabled = true; yes.textContent = 'Undoing…';
+    const details = []; let done = 0, skipped = 0, failed = 0;
+    for (const x of live) {
+      const r = await fcUndoOne(c, x.m, x.f.path, false);
+      if (r.ok) { done++; continue; }
+      if (r.conflict) { skipped++; details.push({ path: x.f.path, what: 'skipped: changed again after the reply' }); } else { failed++; details.push({ path: x.f.path, what: `failed: ${r.error}` }); }
+    }
+    st.confirm = false;
+    st.result = { line: [`Undid ${done} file${done === 1 ? '' : 's'}`, skipped ? `skipped ${skipped}` : '', failed ? `${failed} failed` : ''].filter(Boolean).join(' · '), details };
+    fcAfter(c);
+  };
+  for (const b of slot.querySelectorAll('.fc-undo')) b.onclick = async () => {
+    const x = rows[Number(b.dataset.i)], row = b.closest('.fc-row');
+    // A file changed again since the reply asks first, inline: undoing it throws those newer changes away.
+    if (x.f.changedSince && !row.dataset.ask) {
+      row.dataset.ask = '1';
+      row.insertAdjacentHTML('afterend', `<div class="fc-confirm fc-ask">${esc(x.f.path)} changed again after the reply. Undo it anyway? The newer version moves to .quorx/trash.<span class="fc-sp"></span><button type="button" class="danger fc-force">Undo anyway</button><button type="button" class="fc-keep">Keep it</button></div>`);
+      const ask = row.nextElementSibling;
+      $('.fc-keep', ask).onclick = () => { ask.remove(); delete row.dataset.ask; };
+      $('.fc-force', ask).onclick = () => fcUndoAndToast(c, x, true);
+      return;
+    }
+    b.disabled = true;
+    fcUndoAndToast(c, x, false);
+  };
+  for (const b of slot.querySelectorAll('.fc-redo')) b.onclick = async () => { b.disabled = true; await fcRedoOne(c, rows[Number(b.dataset.i)].m, rows[Number(b.dataset.i)].f.path, b); };
+}
+// The calls the reply's own Review changes card makes, with the same bookkeeping on the reply.
+async function fcUndoOne(c, m, rel, force) {
+  const r = await postJ('/api/review/undo', { projectId: c.projectId, runId: fcRun(m), path: rel, force });
+  if (r.ok) { (m.undoneFiles ||= []).push(rel); if (!r.left) m.undone = true; }
+  return r;
+}
+async function fcRedoOne(c, m, rel, from) {
+  let r = await postJ('/api/review/redo', { projectId: c.projectId, runId: fcRun(m), path: rel });
+  if (r.conflict) {
+    if (!await uiConfirm(`${rel} changed after it was undone.\n\nPut the reply's version back anyway? The newer version moves to .quorx/trash.`)) { if (from) from.disabled = false; return; }
+    r = await postJ('/api/review/redo', { projectId: c.projectId, runId: fcRun(m), path: rel, force: true });
+  }
+  if (r.error) { uiAlert(`Could not redo ${rel}: ${r.error}`); if (from) from.disabled = false; return; }
+  m.undoneFiles = (m.undoneFiles || []).filter((x) => x !== rel); m.undone = false;
+  fcAfter(c);
+  fcToast(c, `Put back the reply's ${baseName(rel)}`);
+}
+async function fcUndoAndToast(c, x, force) {
+  const r = await fcUndoOne(c, x.m, x.f.path, force);
+  if (r.conflict) { drawFilesChanged(c, { fresh: true }); return; }
+  if (r.error) { uiAlert(`Could not undo ${x.f.path}: ${r.error}`); drawFilesChanged(c, { fresh: true }); return; }
+  fcAfter(c);
+  fcToast(c, `Undid ${baseName(x.f.path)}`, { label: 'Redo', run: () => fcRedoOne(c, x.m, x.f.path) });
+}
+// After an undo or a redo: the reply's card, the chip, the preview and which replies can still be undone.
+function fcAfter(c) {
+  saveChat(c);
+  for (const m of fcReplies(c)) if (m.el) updateMsg(c, m);
+  drawFilesChanged(c, { fresh: true });
+  refreshUndoable(c.projectId);
+  // A Changes tab open on one of these replies lists the files as they are now.
+  for (const a of PA.list) inArea(a, () => { const f = WK.tabs.get(G.view.ftab)?.st.f; if (f?.kind === 'changes') renderPane(); });
+  const f = $('#paneBody iframe'); if (f && !f.srcdoc) f.src = f.src;
+}
+// A short note over the message box, with one action (Redo); it goes after 8 s or when the next one comes.
+function fcToast(c, text, act = null) {
+  const form = c.el && $('.composer', c.el.root); if (!form) return;
+  form.querySelector('.fc-toast')?.remove();
+  const t = document.createElement('div');
+  t.className = 'fc-toast'; t.setAttribute('role', 'status');
+  t.innerHTML = `<span>${esc(text)}</span>${act ? `<button type="button" class="fc-tact">${esc(act.label)}</button>` : ''}<button type="button" class="fc-tx" aria-label="Dismiss">✕</button>`;
+  form.prepend(t);
+  const gone = () => t.remove(), timer = setTimeout(gone, 8000);
+  $('.fc-tx', t).onclick = () => { clearTimeout(timer); gone(); };
+  if (act) $('.fc-tact', t).onclick = () => { clearTimeout(timer); gone(); act.run(); };
+}
 
 // 📂: the project's folder in the computer's own file manager (File Explorer on Windows).
 async function openFolder(projectId, path) {
@@ -7615,7 +7750,8 @@ const PANE_CARDS = {
     wire: (c, m, el) => { const q = $('.qbox[data-id]', el); if (q) wireQuestion(q, m); } },
   changes: { name: (m) => { const n = (m.stats?.changed?.length || 0) - (m.undoneFiles?.length || 0); return `Changes · ${n} file${n === 1 ? '' : 's'}`; },
     html: (c, m) => (m.stats?.changed?.length ? `<div class="review-slot pane-changes"><details class="rv-card" open><summary><span class="rv-title">Review changes</span><span class="rv-count">${(m.stats.changed.length - (m.undoneFiles?.length || 0))} files</span><span class="rv-tot"></span></summary><div class="rv-list"><div class="rv-wait">Loading…</div></div></details></div>` : ''),
-    wire: (c, m, el) => { const slot = $('.pane-changes', el); if (slot) loadReview(c, m, slot); } },
+    // From the files-changed chip's Review all (ref 'all'): every file's diff opens at once.
+    wire: (c, m, el, f) => { const slot = $('.pane-changes', el); if (slot) loadReview(c, m, slot).then(() => { if (f?.ref === 'all') for (const r of slot.querySelectorAll('.rv-row[aria-expanded="false"]')) r.click(); }); } },
   btw: { name: (x) => `Side question · ${clip(x.q, 40)}`, html: (c, x) => btwCardHTML(c, x), wire: (c, x, el) => wireBtwCard(c, x, el) },
   codereview: { name: (m) => `Code review${m.label ? ` · ${clip(m.label, 30)}` : ''}`,
     html: (c, m) => codeReviewHTML(m, true), wire: (c, m, el) => wireCodeReview(c, m, el) },
@@ -7652,7 +7788,7 @@ function drawPaneCard(c, f, body) {
     const m = paneMsg(c, f), html = (m && card.html(c, m, f)) || '<div class="empty">This is no longer in the chat.</div>';
     if (html === last) return m;
     last = html; box.innerHTML = html;
-    if (m) card.wire?.(c, m, box);
+    if (m) card.wire?.(c, m, box, f);
     return m;
   };
   const m = draw();
