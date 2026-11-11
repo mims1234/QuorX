@@ -194,3 +194,76 @@ test('workspace history: back and forward through what you brought to the front,
     assert.deepEqual([back.index, back.entries.length], [0, 2]);
   }
 });
+
+test('workspace history: stepping over places that can\'t be shown, and back to them once they can', () => {
+  const h = createHistory(), closed = new Set(['b']);
+  for (const id of ['a', 'b', 'c']) h.push({ kind: 'chat', id });
+  const ok = (e) => !closed.has(e.id);
+  assert.equal(h.canGo(-1, ok), true);
+  assert.deepEqual(h.back(ok), { kind: 'chat', id: 'a' }); // b's tab is closed: stepped over
+  assert.equal(h.canGo(-1, ok), false);
+  assert.equal(h.back(ok), null);
+  assert.equal(h.current.id, 'a');
+  closed.delete('b'); // b reopened: a stop again
+  assert.deepEqual(h.forward(ok), { kind: 'chat', id: 'b' });
+  assert.deepEqual(h.entries.map((e) => e.id), ['a', 'b', 'c']); // nothing was dropped
+  closed.add('c');
+  assert.equal(h.canGo(1, ok), false);
+  assert.equal(h.forward(ok), null);
+  assert.equal(h.current.id, 'b');
+});
+
+test('workspace chat tabs: kept in the chat group, opened after the one on screen, moved, cycled, closed', () => {
+  { // chat tabs: the chat group holds them, the one on screen active; none gives the placeholder back
+    let lay = W.withChatTabs(W.defaultLayout(), ['a', 'b', 'c'], 'b');
+    assert.deepEqual(W.chatTabIds(lay), ['a', 'b', 'c']);
+    assert.equal(W.findGroup(lay, W.CHAT_GROUP).active, 'chat:b');
+    lay = W.withChatTabs(lay, [], null);
+    assert.deepEqual(W.findGroup(lay, W.CHAT_GROUP).tabs, ['chat:main']);
+    assert.deepEqual(W.chatTabIds(lay), []);
+  }
+  { // chat tabs: saved with the layout and read back, with the closed stack
+    const lay = W.withChatTabs(W.defaultLayout(), ['a', 'b'], 'a');
+    const r = W.parse(W.serialise(lay, {}, [{ kind: 'chat', id: 'x' }, { kind: 'page', url: 'https://example.com/' }, { kind: 'bogus' }, null]));
+    assert.deepEqual(W.chatTabIds(r.layout), ['a', 'b']);
+    assert.deepEqual(r.closed, [{ kind: 'chat', id: 'x' }, { kind: 'page', url: 'https://example.com/' }]);
+    assert.deepEqual(W.parse(W.serialise(lay)).closed, []); // an older save has none
+  }
+  { // chat tabs: a chat opened from elsewhere goes after the one on screen; one already open stays put
+    assert.deepEqual(W.insertTab(['a', 'b', 'c'], 'x', 'a'), ['a', 'x', 'b', 'c']);
+    assert.deepEqual(W.insertTab(['a', 'b'], 'x', null), ['a', 'b', 'x']);
+    assert.deepEqual(W.insertTab(['a', 'b'], 'a', 'b'), ['a', 'b']);
+  }
+  { // chat tabs: drag to reorder (before a tab, or to the end)
+    assert.deepEqual(W.moveTab(['a', 'b', 'c', 'd'], 'd', 'b'), ['a', 'd', 'b', 'c']);
+    assert.deepEqual(W.moveTab(['a', 'b', 'c'], 'a', null), ['b', 'c', 'a']);
+    assert.deepEqual(W.moveTab(['a', 'b'], 'z', 'a'), ['a', 'b']);
+  }
+  { // chat tabs: Ctrl+Tab goes round; closing the one on screen hands over to the right, else the left
+    assert.equal(W.cycleTab(['a', 'b', 'c'], 'c', 1), 'a');
+    assert.equal(W.cycleTab(['a', 'b', 'c'], 'a', -1), 'c');
+    assert.equal(W.cycleTab(['a', 'b'], null, 1), 'a');
+    assert.equal(W.cycleTab([], 'a', 1), null);
+    assert.equal(W.afterClose(['a', 'b', 'c'], 'b'), 'c');
+    assert.equal(W.afterClose(['a', 'b', 'c'], 'c'), 'b');
+    assert.equal(W.afterClose(['a'], 'a'), null);
+  }
+});
+
+test('workspace closed tabs: a stack of the last 50 per project, the newest first back, repeats merged', () => {
+  let list = [];
+  for (let i = 0; i < 60; i++) list = W.pushClosed(list, { kind: 'chat', id: `c${i}` });
+  assert.equal(W.CLOSED_CAP, 50);
+  assert.equal(list.length, 50);
+  assert.equal(list[0].id, 'c10');
+  list = W.pushClosed(list, { kind: 'chat', id: 'c20' }); // closed again: one entry, now the newest
+  assert.equal(list.filter((e) => e.id === 'c20').length, 1);
+  assert.equal(list.at(-1).id, 'c20');
+  let r = W.popClosed(list);
+  assert.equal(r.entry.id, 'c20');
+  assert.equal(r.list.length, 49);
+  r = W.popClosed([{ kind: 'area', pane: 'browser' }, { kind: 'file', chat: 'a', f: { id: 'file:x' } }], (e) => e.kind === 'area');
+  assert.deepEqual(r.entry, { kind: 'area', pane: 'browser' });
+  assert.deepEqual(r.list, [{ kind: 'file', chat: 'a', f: { id: 'file:x' } }]);
+  assert.deepEqual(W.popClosed([]), { entry: null, list: [] });
+});
