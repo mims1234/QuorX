@@ -46,7 +46,7 @@ import { OTHER_NOTES_FILES, readOtherNotes, otherNotesPrompt } from './othernote
 import { editGuard } from './editguard.js';
 import { splitTools, loadToolsDef, RARE_TOOLS } from './lazytools.js';
 import { loadMemory, memoryPrompt, checkMemory, addMemory, itemsFor, REMEMBER_TOOL, RECALL_TOOL } from './memory.js';
-import { audit } from './audit.js';
+import { audit, LET_BY } from './audit.js';
 import { packagesOf, checkPackages } from './pkgguard.js';
 import { testChanges, TEST_FILE } from './testguard.js';
 import { debugStart, debugAttach, debugBreak, debugMove, debugState, debugEval, debugStop, stateText, debugLanguages, debugGateLine, debugPausedIn } from './debugger.js';
@@ -1054,6 +1054,7 @@ const logReview = (rec) => { rotateLog(REVIEW_LOG); fs.mkdir(path.dirname(REVIEW
 // `deps` replaces outside services in tests: { chatStream, catalogue, quiet } (quiet = no scorecard row).
 export async function runAgent(req, emit, signal, deps = {}) {
   const cleanups = [], spent = {};
+  emit = tapLetThrough(req, emit);
   try { return await runAgentInner(req, emit, signal, cleanups, deps, spent); }
   catch (e) {
     // A reply that fails or is stopped part-way has still paid for its calls: what it spent goes with the error,
@@ -1063,6 +1064,25 @@ export async function runAgent(req, emit, signal, deps = {}) {
     throw e;
   }
   finally { for (const f of cleanups) await f().catch?.(() => {}); }
+}
+
+// ⚡ YOLO: an action the deciders let through without asking you (a schedule change, paid media, a send in your
+// browser…) goes in the audit log, so "Let through in YOLO" lists it with the commands (which are written where they
+// are decided). Read from the reply's own events: the card says what it was, its answer who let it through.
+export function tapLetThrough(req, emit) {
+  const cards = new Map();
+  return (o) => {
+    if (o?.t === 'approval' && o.mode === 'yolo' && o.tool !== 'shell') cards.set(o.id, o);
+    else if (o?.t === 'approval_done' && cards.has(o.id)) {
+      const c = cards.get(o.id);
+      cards.delete(o.id);
+      if (o.approve === true && LET_BY.includes(o.by)) {
+        audit({ project: req.projectId || null, chat: req.chatId || null, run: req.runId || null, model: req.setup?.model, mode: 'yolo', kind: 'approved', tool: c.tool,
+          command: clip(String(c.what || c.tool || ''), 300), by: o.by, ...(o.reason ? { reason: clip(String(o.reason), 400) } : {}), card: o.id, ...(Array.isArray(o.votes) ? { votes: o.votes.filter((v) => v?.ok).length } : {}) });
+      }
+    }
+    return emit(o);
+  };
 }
 
 // Questions of taste, and answer options that hand the choice back.
@@ -4498,7 +4518,7 @@ ${r.text || '(no text found)'}`;
         const reason = 'The deciders are off in this chat, and ⚙ Approvals & safety runs such commands without a check.';
         emit({ t: 'approval', ...card, mode: 'yolo', at: at() });
         emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders off', reason, at: at() });
-        aud({ kind: 'approved', command: line, by: 'deciders off', reason });
+        aud({ kind: 'approved', command: line, by: 'deciders off', reason, card: card.id, step: run.stepNow ?? null });
         if (!hook) approvedLines.add(sameLine);
         return { ok: true, by: 'deciders off' };
       }
@@ -4523,7 +4543,7 @@ ${r.text || '(no text found)'}`;
       if (j.approve === true) {
         run.cmdBlockRow = 0;
         emit({ t: 'approval_done', id: card.id, approve: true, by: 'deciders', reason: j.reason, votes: j.votes, at: at() });
-        aud({ kind: 'approved', command: line, by: 'deciders', reason: j.reason });
+        aud({ kind: 'approved', command: line, by: 'deciders', reason: j.reason, card: card.id, step: run.stepNow ?? null, votes: (j.votes || []).filter((v) => v.ok).length });
         if (!hook) approvedLines.add(sameLine);
         return { ok: true, by: 'deciders' };
       }

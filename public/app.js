@@ -4211,7 +4211,7 @@ function renderComposerBar(c) {
     </div>`;
   bar.innerHTML = `
     <div class="cs-sec"><h5>Thinking</h5><div class="cs-row">${levelsHTML(s)}</div></div>
-    <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">${permHTML()}</div></div>
+    <div class="cs-sec"><h5>Permission</h5><div class="cs-row cs-perm">${permHTML()}<button type="button" class="cq-let linkish" title="The commands and actions ⚡ YOLO's deciders allowed in this chat without asking you">What ⚡ YOLO let through</button></div></div>
     <div class="cs-sec"><h5>Tools <small>· hover one for what it does</small></h5><div class="cs-row cs-tools">${quickToolsHTML(c)}</div></div>`;
   glob.innerHTML = '';
   const quick = $('.cmp-quick', c.el.root);
@@ -4223,7 +4223,7 @@ function renderComposerBar(c) {
   quick.innerHTML = `<div class="cq-head"><b>This chat</b><button type="button" class="cq-adv" aria-haspopup="dialog" title="All of this chat's settings: each tool's model, strength and price, Undo and Save" aria-label="Advanced settings for this chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Advanced</span></button><button type="button" class="cq-x" aria-label="Close" title="Close (Esc)">✕</button></div>`
     + sec('think', 'Thinking', levelsHTML(s, 'reason'))
     + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
-    + sec('safety', 'Mode', permHTML('cq-perm'))
+    + sec('safety', 'Mode', `${permHTML('cq-perm')}<button type="button" class="cq-let linkish" title="The commands and actions ⚡ YOLO's deciders allowed in this chat without asking you">What ⚡ YOLO let through</button>`)
     + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
     + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat')
     + sec('limit', 'At a usage limit', `<div class="seg cq-limit" role="group" aria-label="What this chat does when its provider runs out of usage"><button type="button" data-limit="app" class="${c.agent.limitMode === 'wait' ? '' : 'on'}" title="Do what ⚙ Settings → Providers says: switch to the provider's fallback model, or stop">App setting</button><button type="button" data-limit="wait" class="${c.agent.limitMode === 'wait' ? 'on' : ''}" title="When the reset is close, wait for it in this chat (nothing paid) instead of switching models">Wait it out here</button></div>`, 'this chat');
@@ -4233,6 +4233,8 @@ function renderComposerBar(c) {
     for (const x of quick.querySelectorAll('.cq-limit [data-limit]')) x.classList.toggle('on', x === b);
     saveChat(c);
   };
+  // What ⚡ YOLO let through in this chat, next to the Strict / YOLO switch it is about.
+  for (const b of [...quick.querySelectorAll('.cq-let'), ...bar.querySelectorAll('.cq-let')]) b.onclick = () => { c._cq = undefined; renderComposerBar(c); openLetThrough({ chatId: c.id }); };
   const chipsEl = $('.cmp-chips', rack);
   const rv = s.reasoning || 'off', cv = CREATIVITY_INFO[s.creativity] ? s.creativity : 'default', yolo = c.approval === 'yolo';
   const ch = { think: rv !== (G.settings.reasoning || 'off'), creative: cv !== 'default', safety: c.approval !== (G.settings.approval || 'strict') };
@@ -6251,7 +6253,7 @@ function traceRows(m) {
   const out = [], kinds = [], rounds = {}, llmAt = {}, llmModel = {};
   let mediaStatus = null;
   // Each step carries its kind, so the trace can colour it and the legend can show or hide it.
-  const row = (at, what, kind = 'note') => { out.push(`<div class="step k-${kind}" data-k="${kind}"><div class="when">${kind === 'res' ? '' : secs(at)}</div><div class="what">${what}</div></div>`); kinds.push(kind); };
+  const row = (at, what, kind = 'note', card = '') => { out.push(`<div class="step k-${kind}" data-k="${kind}"${card ? ` data-card="${esc(card)}"` : ''}><div class="when">${kind === 'res' ? '' : secs(at)}</div><div class="what">${what}</div></div>`); kinds.push(kind); };
   const draw = (e) => {
     // Thinking is turned into formatted text only when you open it (see the toggle listener below traceRows).
     if (e.t === 'llm_start') { llmAt[e.step] = out.length; llmModel[e.step] = e.model; row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace" data-think="${e.step}"><summary>💭 Thinking · ${thinkWords(m, e.step)} words</summary><div class="tt-body"></div></details>` : ''}`, 'think'); }
@@ -6291,7 +6293,7 @@ function traceRows(m) {
     else if (e.t === 'decide_done') { if (rounds[e.round]) rounds[e.round].done = e; }
     else if (e.t === 'approval') row(e.at, e.free ? `✋ asks to use <b>${esc(e.tool)}</b>` : `💳 <b>${esc(e.tool)}</b> wants approval · ${money(e.est, 3)} (${esc(e.basis || 'estimated')})`, 'ask');
     else if (e.t === 'card_held') row(e.at, '⏸ You stopped the clock: the card waits for you', 'note');
-    else if (e.t === 'approval_done') row(e.at, e.reply ? `↩ neither allowed nor denied: you replied<div class="sub">${esc(e.reply)}</div>` : `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : e.reply ? 'note' : 'err');
+    else if (e.t === 'approval_done') row(e.at, e.reply ? `↩ neither allowed nor denied: you replied<div class="sub">${esc(e.reply)}</div>` : `${e.approve ? '✅ approved' : '⛔ declined'} by ${byName(e.by)}${e.reason ? `<div class="sub">${esc(e.reason)}</div>` : ''}`, e.approve ? 'ok' : e.reply ? 'note' : 'err', e.id); // data-card: Let through in YOLO links here
     else if (e.t === 'media_status') mediaStatus = e;
     else if (e.t === 'screenshot') row(e.at, `📸 browser ${esc(e.action)}${e.target ? ` ${esc(e.target)}` : ''}<div class="sub">${linkUrls(esc(e.url || ''))}</div><img class="shot" src="${e.image}" alt="screenshot" loading="lazy">`, 'browser');
     else if (e.t === 'command' && e.background) row(e.at, `⏳ <code>${esc(e.command)}</code> → background job <b>${esc(e.background)}</b> · ${esc(e.why || '')}<div class="sub">It keeps running; its output goes to ${esc(e.log || 'its log')}. Stop it from the terminal, or the agent stops it with job_stop.</div>`, 'cmd');
@@ -10099,6 +10101,7 @@ function settingsPanels(S) {
           + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
         stCard('Permissions', 'Everything that runs without asking you: command rules, tools, apps and folders allowed in a chat, Chrome sites and MCP servers, in this chat, a project or everywhere in QuorX. Rules you type here can relax pushes, uncheckable commands and deletes outside the project; ones made with a card’s “Allow always” never do.', '<div id="stPerms"><div class="st-row-help">Loading…</div></div>'),
         stSec('⚡ YOLO'),
+        stCard('Let through in ⚡ YOLO', 'The commands and actions the deciders allowed without asking you, in every chat, newest first: when, what, what they said, and a link to the step. Each chat shows its own from This chat → Mode.', stRow('What ⚡ YOLO let through', '', '<button type="button" class="st-btn secondary sm" data-act="letThrough">Open the list</button>')),
         `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`,
         stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
           `<div class="sx-tiles">${YOLO_ROWS.map(([k, label, help]) => stTile(`yoloAuto.${k}`, YOLO_ICO[k] || '•', label, help, S.yoloAuto?.[k] !== false)).join('')}</div>`),
@@ -10705,6 +10708,7 @@ function wireSettings() {
     if (act === 'pickFallback') { const id = await pickModel('chat', S.fallbackModel || '', { context: 'Fallback when a chat’s model fails', openRouterOnly: true }); if (id) { S.fallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearFallback') { S.fallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSources') { ST.cat = 'providers'; Object.assign(pvState(), { tab: 'local', sel: null }); drawSettings(); $('#stMain').scrollTop = 0; }
+    if (act === 'letThrough') { openLetThrough(); return; }
     if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
@@ -11116,6 +11120,65 @@ async function drawAuditPanel() {
     return `<div class="au-row"><time title="${esc(when.toLocaleString())}">${esc(when.toLocaleDateString())} ${esc(when.toLocaleTimeString())}</time><span class="au-kind" data-tone="${tone}">${label}</span><code title="${esc(r.command || r.rule || '')}">${esc(clip(r.command || r.rule || '', 140))}</code><span class="au-by">${esc(by(r.by))}${r.mode ? ` · ${r.mode === 'yolo' ? '⚡' : '🔒'}` : ''}</span><span class="au-detail">${detail}</span></div>`;
   }).join('')}</div>`;
   wire();
+}
+
+// ---------- what ⚡ YOLO let through ----------
+// In ⚡ YOLO the deciders let commands and actions through without asking you (and, with a chat's deciders off,
+// commands it only checks ran with no check at all). They run without a card, so this is where they are reviewed:
+// newest first, for one chat (This chat → Mode) or every chat (⚙ Settings → Approvals & safety), from the audit log.
+// Each row: when, what, what the deciders said, and a link to the step in its chat. Read only.
+const LT_KIND = { shell: 'Command', schedule: 'Schedule', image: 'Picture', video: 'Video', music: 'Music', speech: 'Voice', browser: 'Browser', chrome: 'Your Chrome', desktop: 'Computer use', mcp: 'MCP tool', plan: 'Plan', helper: 'Helper' };
+const ltKind = (tool) => LT_KIND[tool] || (tool ? `${tool[0].toUpperCase()}${tool.slice(1).replace(/_/g, ' ')}` : 'Action');
+async function openLetThrough({ chatId = null } = {}) {
+  const dlg = $('#letThrough'), body = $('#ltBody');
+  const chat = chatId && G.chats.find((x) => x.id === chatId);
+  $('#ltTitle').textContent = chat ? `Let through in ⚡ YOLO · ${clip(chat.title || 'this chat', 40)}` : 'Let through in ⚡ YOLO';
+  body.innerHTML = '<div class="run-empty">Loading…</div>';
+  $('#ltClose').onclick = () => dlg.close();
+  if (!dlg.open) dlg.showModal();
+  const rows = await getJ(`/api/let-through?limit=500${chatId ? `&chat=${encodeURIComponent(chatId)}` : ''}`).catch(() => null);
+  if (!Array.isArray(rows)) { body.innerHTML = `<div class="run-empty bad">Could not read the list: ${esc(rows?.error || 'no answer')}</div>`; return; }
+  if (!rows.length) {
+    body.innerHTML = `<div class="run-empty"><b>Nothing let through yet${chat ? ' in this chat' : ''}.</b><br>In ⚡ YOLO, each command or action the deciders allow without asking you is listed here, with what they said and a link to the step.</div>`;
+    return;
+  }
+  const cname = (id) => G.chats.find((x) => x.id === id)?.title || 'a chat (deleted)';
+  const when = (t) => { const d = new Date(t), today = d.toDateString() === new Date().toDateString(); return `${today ? '' : `${d.toLocaleDateString()} `}${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`; };
+  const row = (r) => {
+    const kind = ltKind(r.tool), off = r.by === 'deciders off';
+    const said = off ? '<b class="lt-by off">No check</b> <span>The deciders were off in this chat, and ⚙ Approvals & safety runs such commands without one.</span>'
+      : `<b class="lt-by">✓ The deciders${r.votes ? ` · ${r.votes} vote${r.votes > 1 ? 's' : ''}` : ''}</b> <span>${esc(r.reason || 'They allowed it.')}</span>`;
+    const has = G.chats.some((x) => x.id === r.chat);
+    return `<div class="lt-row" data-lf-seg="${esc(kind)}" data-lf-text="${esc(`${kind} ${r.what} ${r.reason} ${off ? 'no check deciders off' : 'deciders'} ${chatId ? '' : cname(r.chat)}`.toLowerCase())}">
+      <time class="lt-at" title="${esc(new Date(r.at).toLocaleString())}">${esc(when(r.at))}</time>
+      <span class="run-kind lt-kind" data-kind="${r.tool === 'shell' ? 'command' : 'action'}">${esc(kind)}</span>
+      <code class="lt-what" title="${esc(r.what)}">${esc(clip(r.what, 220))}</code>
+      <div class="lt-said">${said}</div>
+      <div class="lt-where">${chatId ? '' : has ? `<button type="button" class="run-chat linkish lt-chat" data-chat="${esc(r.chat)}" title="Open this chat">${esc(clip(cname(r.chat), 40))}</button>` : `<span>${esc(cname(r.chat))}</span>`}${has && r.run ? `<button type="button" class="lt-step" data-chat="${esc(r.chat)}" data-run="${esc(r.run)}" data-card="${esc(r.card || '')}" title="Open the chat on this reply's steps, at this approval">Show the step →</button>` : ''}</div>
+    </div>`;
+  };
+  body.innerHTML = `<p class="lt-intro">${rows.length === 500 ? 'The newest 500' : rows.length} command${rows.length === 1 ? '' : 's'} and action${rows.length === 1 ? '' : 's'} that ran without asking you${chat ? ' in this chat' : ', in every chat'}. Rules you made yourself, and what ⚡ YOLO always does by itself (reading, searching), aren’t listed.</p><div class="lt-filter"></div><div class="lt-list">${rows.map(row).join('')}</div>`;
+  listFilter($('.lt-filter', body), { key: 'letThrough', rows: () => body.querySelectorAll('.lt-row'), placeholder: chat ? 'Find a command or reason' : 'Find a command, reason or chat', label: 'Show' });
+  // Going to a chat from ⚙ Settings closes Settings too (asking first when it has unsaved changes).
+  const leave = async () => { if ($('#settings').open) { if (ST.dirty && !(await uiConfirm('Leave Settings? Changes you haven’t saved are dropped.', { ok: 'Leave' }))) return false; cancelSettings(); } dlg.close(); return true; };
+  for (const b of body.querySelectorAll('.lt-chat')) b.onclick = async () => { if (await leave()) showChat(b.dataset.chat); };
+  for (const b of body.querySelectorAll('.lt-step')) b.onclick = async () => { if (await leave()) showLetStep(b.dataset.chat, b.dataset.run, b.dataset.card); };
+}
+// The reply's steps open in the pane, scrolled to the approval and flashed once.
+async function showLetStep(chatId, runId, cardId) {
+  await showChat(chatId);
+  const c = G.open.get(chatId), m = c?.agent?.messages?.find((x) => x.runId === runId);
+  if (!m) return uiAlert('That reply is no longer in the chat (it was retried or the chat was cut short).');
+  m.el?.scrollIntoView({ block: 'center' });
+  openTrace(c, m); toPreview();
+  if (!cardId) return;
+  // The pane draws its steps a moment later (and may draw them again): look for the step a few times.
+  const at = () => [...document.querySelectorAll(`.step[data-card="${CSS.escape(cardId)}"]`)].find((x) => x.offsetParent);
+  for (const ms of [300, 700, 1300, 2200, 3200]) setTimeout(() => {
+    const s = at(); if (!s) return;
+    const r = s.getBoundingClientRect(); if (r.top < 40 || r.bottom > innerHeight - 40) s.scrollIntoView({ block: 'center' });
+    if (!s.classList.contains('lt-flash')) { s.classList.add('lt-flash'); setTimeout(() => s.classList.remove('lt-flash'), 2600); }
+  }, ms);
 }
 
 // ---------- one filter for any long Settings list (Setup check, Skills, and later Memory, Projects, models…) ----------
