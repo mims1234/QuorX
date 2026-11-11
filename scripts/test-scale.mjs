@@ -29,6 +29,22 @@ test('The sidebar gets each project’s newest chats, the open ones, and every p
   assert.equal(r.total, 8);
 });
 
+test('A pinned chat always reaches the sidebar, marked with when it was pinned; pins live in their own file', () => {
+  try {
+    const pins = store.setChatPin('chata10', true);
+    assert.ok(pins.chata10 > 0);
+    const r = store.sidebarChats({ per: 2 });
+    const row = r.chats.find((c) => c.id === 'chata10');
+    assert.ok(row, 'an old chat past the newest two still comes, because it is pinned');
+    assert.equal(row.pinned, pins.chata10);
+    assert.ok(!r.chats.find((c) => c.id === 'chata40').pinned);
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(process.env.OH_HOME, 'data', 'chat-pins.json'), 'utf8'))), ['chata10']);
+    assert.ok(!JSON.parse(fs.readFileSync(path.join(DIR, 'chata10.json'), 'utf8')).pinned, 'the chat file is not touched');
+    assert.throws(() => store.setChatPin('../x', true));
+  } finally { store.setChatPin('chata10', false); }
+  assert.ok(!store.sidebarChats({ per: 2 }).chats.some((c) => c.id === 'chata10'), 'unpinned: back to the newest only');
+});
+
 test('Pages and search go past what the sidebar shows', () => {
   const p = store.chatPage({ project: 'pja', offset: 2, limit: 2 });
   assert.equal(p.total, 5);
