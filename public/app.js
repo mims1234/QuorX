@@ -327,7 +327,7 @@ function normalise(doc) {
     quorium: typeof doc.quorium === 'string' ? doc.quorium : null, qModels: doc.qModels && typeof doc.qModels === 'object' ? doc.qModels : {}, ...(typeof doc.qBase === 'string' ? { qBase: doc.qBase }: {}),
     // What this chat allows on its own (rules, tools and when they were allowed and used, apps, folders): kept on load,
     // or the next save dropped them.
-    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(agent.compactEst ? { compactEst: agent.compactEst } : {}), ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
+    agent: { setup, allowed: agent.allowed || [], ...(agent.allowedMeta ? { allowedMeta: agent.allowedMeta } : {}), ...(agent.cmdRules?.length ? { cmdRules: agent.cmdRules } : {}), ...(agent.apps?.length ? { apps: agent.apps } : {}), ...(agent.folders?.length ? { folders: agent.folders } : {}), extraUsage: agent.extraUsage || [], summary: agent.summary, summaryAt: agent.summaryAt, ...(Array.isArray(agent.btw) && agent.btw.length ? { btw: agent.btw.map((x) => ({ ...x, live: false, ...(x.live && !x.a ? { err: 'The page closed before the answer came back.' } : {}) })) } : {}), ...(agent.compactEst ? { compactEst: agent.compactEst } : {}), ...(agent.videoMode ? { videoMode: agent.videoMode } : {}), ...(agent.videoFrom ? { videoFrom: agent.videoFrom } : {}), messages: (agent.messages || []).map((m) => ({ ...m, live: false, arts: m.arts && dedupeArts(m.arts) })), artifacts },
     ctx: [], images: [], docs: [], running: null, el: null };
 }
 const dedupeArts = (list) => [...new Map(list.map((a) => [a.id, { id: a.id, kind: a.kind, title: a.title }])).values()];
@@ -447,6 +447,7 @@ const COMMANDS = [
   ['new', 'New chat (in this project, or the one you name)', (c, arg) => { const p = arg && G.projects.find((x) => x.name.toLowerCase() === arg.toLowerCase()); newChat(p ? p.id : c.projectId); }],
   ['clear', 'Clear this conversation', (c) => clearChat(c)],
   ['fresh', 'New chat from a short brief of this one (on a model you pick)', (c, arg) => freshFromChat(c, arg)],
+  ['btw', 'Ask a side question: answered beside the chat, never added to it, while the reply keeps working', (c, arg) => askSideQuestion(c, arg)],
   ['continue', 'Carry on the last reply that ran out of steps', (c, arg) => continueLast(c, arg)],
   ['undo', 'Undo the file changes of the last reply', (c) => { const m = [...c.agent.messages].reverse().find((x) => x.stats?.changed?.length && !x.undone); m ? undoReply(c, m) : uiAlert('No reply with file changes to undo.'); }],
   ['files', 'Browse this project\'s files', () => { G.view.files = true; G.view.run = false; syncLayout(); renderPane(); }],
@@ -466,6 +467,7 @@ const COMMANDS = [
 // need: the command does nothing without one, so Enter on the bare command lists them instead of running it.
 const CMD_ARGS = {
   goal: { usage: '<the job>', list: () => [] },
+  btw: { usage: '<question>', list: () => [] },
   model: { usage: '[model]', list: (c) => modelArgs(c) },
   fresh: { usage: '[model]', list: (c) => modelArgs(c) },
   review: { usage: '[reply|changes|branch]', list: () => [['reply', 'the files the last reply changed'], ['changes', 'uncommitted git changes'], ['branch', 'this branch against main (or name a base: branch dev)']].map(([value, hint]) => ({ value, hint })) },
@@ -6281,6 +6283,43 @@ function openFreshChat(c, brief, model) {
   const ta = $('.input', n.el.root);
   if (ta) { ta.value = `Carry on with this work. Handover from the chat "${c.title}":\n\n${brief}`; ta.focus(); ta.dispatchEvent(new Event('input')); }
 }
+// ---------- /btw: a side question, answered in a tab beside the chat while the reply keeps working ----------
+// One call to the chat's own model with no tools (server: sideQuestion), on the chat so far and what the running reply
+// has said. The answer is never added to the chat: it is kept on the chat (c.agent.btw, the last 20) and shown as a
+// "Side question" tab in the group nearest the chat. "Send to chat" puts it in the message box (sendToChat), if it
+// turns out to matter.
+const BTW_KEEP = 20;
+async function askSideQuestion(c, q) {
+  q = String(q || '').trim();
+  if (!q) { const ta = $('.input', c.el.root); if (ta) { ta.value = '/btw '; ta.focus(); ta.setSelectionRange(5, 5); } return; }
+  const a = c.agent, live = a.messages.findLast((m) => m.role === 'assistant' && m.live);
+  const x = { id: `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, q, a: '', at: Date.now(), model: a.setup.model, live: true };
+  a.btw = [...(a.btw || []), x].slice(-BTW_KEEP);
+  openFileInPane(c, { id: `btw::${x.id}`, kind: 'btw', run: '', ref: x.id, name: `Side question · ${clip(q, 40)}` });
+  // The turns a reply would send (runChat), plus what the reply running now has said so far.
+  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && m !== live && !m.error && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: `${m.content || ''}${m.role === 'assistant' ? m.note || '' : ''}` }));
+  const r = await postJ(`/api/chats/${c.id}/btw`, { question: q, model: a.setup.model, history, summary: a.summary || '', live: live ? bodyText(live) : '', projectId: c.projectId, sourceFallback: G.settings.sourceFallback, fallbackModel: G.settings.fallbackModel });
+  Object.assign(x, { live: false, ...(r?.error ? { err: r.error } : { a: r.answer, model: r.model || x.model, cost: r.cost || 0 }) });
+  if (r?.cost) (a.extraUsage ||= []).push({ kind: 'btw', model: r.model, cost: r.cost, at: Date.now(), runId: r.id });
+  saveChat(c); renderChatHead(c);
+  wsRedrawPaneCard(`btw::${x.id}`);
+}
+// A pane card is drawn again once a second while live; the answer arriving redraws its tab at once.
+function wsRedrawPaneCard(fid) {
+  for (const a of PA.list) if (inArea(a, () => paneFiles(focused()).some((f) => f.id === fid) && WK.tabs.get(G.view.ftab)?.st.f?.id === fid)) inArea(a, () => renderPane());
+}
+function btwCardHTML(c, x) {
+  const ans = x.live ? '<div class="btw-wait"><span class="live-beacon running"></span> Thinking… the reply in the chat keeps working.</div>'
+    : x.err ? `<div class="btw-err">${esc(x.err)}</div>` : `<div class="btw-a">${md(x.a)}</div>`;
+  return `<div class="btw-card"><div class="btw-head"><b>Side question</b><span class="btw-note">Not added to the chat · no tools</span></div>
+    <div class="btw-q"><span class="btw-who">You</span>${esc(x.q)}</div>
+    <div class="btw-ans"><span class="btw-who">${esc(short(x.model || ''))}${x.cost ? ` <span class="cost">${money(x.cost, 4)}</span>` : ''}</span>${ans}</div>
+    ${x.a ? `<div class="btw-acts"><button type="button" class="primary btw-send" title="Put the question and this answer in the chat's message box, as a quote">↪ Send to chat</button><button type="button" class="btw-copy" title="Copy the answer">Copy</button></div>` : ''}</div>`;
+}
+function wireBtwCard(c, x, el) {
+  const s = $('.btw-send', el); if (s) s.onclick = () => sendToChat(c, `Side question: ${x.q}\n\n${x.a}`, { quote: true });
+  const k = $('.btw-copy', el); if (k) k.onclick = () => { navigator.clipboard?.writeText(x.a).then(() => flashTip(k, 'Copied'), () => {}); };
+}
 // /fresh [model]: a brief of this whole chat, then a new chat with it.
 async function freshFromChat(c, arg) {
   if (c.running) return uiAlert('This chat is still working. Stop it first, or wait for the reply.');
@@ -6928,6 +6967,7 @@ const PANE_CARDS = {
   changes: { name: (m) => { const n = (m.stats?.changed?.length || 0) - (m.undoneFiles?.length || 0); return `Changes · ${n} file${n === 1 ? '' : 's'}`; },
     html: (c, m) => (m.stats?.changed?.length ? `<div class="review-slot pane-changes"><details class="rv-card" open><summary><span class="rv-title">Review changes</span><span class="rv-count">${(m.stats.changed.length - (m.undoneFiles?.length || 0))} files</span><span class="rv-tot"></span></summary><div class="rv-list"><div class="rv-wait">Loading…</div></div></details></div>` : ''),
     wire: (c, m, el) => { const slot = $('.pane-changes', el); if (slot) loadReview(c, m, slot); } },
+  btw: { name: (x) => `Side question · ${clip(x.q, 40)}`, html: (c, x) => btwCardHTML(c, x), wire: (c, x, el) => wireBtwCard(c, x, el) },
   codereview: { name: (m) => `Code review${m.label ? ` · ${clip(m.label, 30)}` : ''}`,
     html: (c, m) => codeReviewHTML(m, true), wire: (c, m, el) => wireCodeReview(c, m, el) },
 };
@@ -6936,6 +6976,7 @@ function paneMsg(c, f) {
   const ms = c?.agent.messages || [];
   if (f.kind === 'codereview') return ms.find((x) => x.role === 'codereview' && String(x.at) === String(f.ref));
   if (f.kind === 'question' && !f.run) return ms.find((x) => x.questions?.[f.ref]);
+  if (f.kind === 'btw') return (c?.agent.btw || []).find((x) => x.id === f.ref);
   return ms.find((x) => x.runId === f.run);
 }
 // The "Open in pane" button on a piece of a reply (one listener serves them all, wherever they are drawn).
@@ -8500,7 +8541,7 @@ const PREVIEW_KINDS = {
   binary: ['wasm', 'glb', 'zip', 'gz', 'tar', '7z', 'exe', 'dll', 'bin', 'so', 'dylib', 'class', 'jar', 'pyc'],
 };
 const previewKind = (name) => Object.keys(PREVIEW_KINDS).find((k) => PREVIEW_KINDS[k].includes(fileExt(name))) || 'text';
-const PV_ICON = { image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪', plan: '🗺', reply: '💬', question: '❓', changes: '±', codereview: '🔎' };
+const PV_ICON = { btw: '❔', image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪', plan: '🗺', reply: '💬', question: '❓', changes: '±', codereview: '🔎' };
 const sizeText = (b) => (b == null ? '' : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 const durText = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '');
 // A small CSV / TSV reader (quotes and doubled quotes), enough for a preview.

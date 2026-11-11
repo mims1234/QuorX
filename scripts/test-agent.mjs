@@ -1678,3 +1678,22 @@ test('the stream reader reports each tool call as it streams in, for the prepari
   assert.equal(seen.at(-1)[2], '{"path":"a.txt","content":"hi"}');
   assert.equal(r.toolCalls[0].function.name, 'write_file');
 });
+
+test('/btw: one call to the chat model with no tools, on the chat so far and the running reply, never in the chat', async () => {
+  const { sideQuestion } = await import('../server/agent.js');
+  let asked = null;
+  const r = await sideQuestion({ model: 'z-ai/glm-test', question: '  Chart.js or ECharts?  ', summary: 'Earlier: a weather app.',
+    history: [{ role: 'user', content: 'Build a weather dashboard' }, { role: 'assistant', content: 'Started.\n\n[What I did: Wrote app.js. Checks passed.]' }],
+    live: 'Fetching forecast data' }, async (body) => { asked = body; return { message: { content: ' Chart.js is enough here. ' }, usage: { cost: 0.0004 }, model: body.model }; });
+  assert.equal(asked.model, 'z-ai/glm-test');
+  assert.equal(asked.tools, undefined); // no tools
+  assert.match(asked.messages[0].content, /you have no tools/);
+  const u = asked.messages[1].content;
+  assert.match(u, /summary\):\nEarlier: a weather app\./);
+  assert.match(u, /User: Build a weather dashboard/);
+  assert.doesNotMatch(u, /What I did/); // the harness's records stay out, as in a reply
+  assert.match(u, /saying in its reply now:\nFetching forecast data/);
+  assert.match(u, /Side question: Chart\.js or ECharts\?$/);
+  assert.deepEqual(r, { answer: 'Chart.js is enough here.', model: 'z-ai/glm-test', cost: 0.0004 });
+  await assert.rejects(sideQuestion({ model: 'm', question: ' ' }, async () => assert.fail('no call')), /Ask a question after \/btw/);
+});

@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, sideQuestion, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -226,6 +226,21 @@ const server = http.createServer(async (req, res) => {
         if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'compact', project: getChat(cpm[1])?.projectId || 'scratch', chatId: cpm[1], model: r.model, stop: 'compact', cost: +r.cost.toFixed(6) });
         return json(res, 200, { ...r, id });
       } catch (e) { return json(res, 200, { error: e.message, nothing: !!e.nothing }); }
+    }
+    // /btw: a side question on the chat so far, with no tools, never added to the chat. Its cost goes to the ledger and
+    // the chat's spend like a review's.
+    const btm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/btw$/i);
+    if (btm && req.method === 'POST') {
+      if (!validId(btm[1])) return json(res, 400, { error: 'bad chat id' });
+      const b = JSON.parse(await readBody(req, 4e6) || '{}');
+      const st = budgetState(btm[1]);
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to ask a side question.' });
+      try {
+        const r = await sideQuestion({ model: b.model, question: b.question, history: Array.isArray(b.history) ? b.history : [], summary: String(b.summary || ''), live: String(b.live || ''), settings: { sourceFallback: b.sourceFallback, fallbackModel: b.fallbackModel } });
+        const id = `bw-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'btw', project: getChat(btm[1])?.projectId || b.projectId || 'scratch', chatId: btm[1], model: r.model, stop: 'btw', cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message }); }
     }
     // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
     const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);

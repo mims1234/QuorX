@@ -6296,6 +6296,25 @@ export async function compactChat(chatId, { settings = {} } = {}, call) {
   return { summary: r.summary, cutoffAt: keep[0]?.at || Date.now(), turns: old.length, kept: keep.length, oldChars: chars(old) + String(a.summary || '').length, model: r.model, cost: Number(r.usage?.cost) || 0 };
 }
 
+// ---------- /btw: a side question while the reply keeps working ----------
+// One call to the chat's own model, with no tools: the chat so far is context (the page sends it, with what the running
+// reply has said so far), the answer goes back to the page and is never added to the chat. `call` replaces the model
+// call in tests. → { answer, model, cost }.
+export async function sideQuestion({ model, question, history = [], summary = '', live = '', settings = {} }, call, signal) {
+  const q = String(question || '').trim();
+  if (!q) throw new Error('Ask a question after /btw.');
+  model = String(model || '') || DEFAULTS.chatModel;
+  const turns = historyTurns(history).slice(-20).map(({ role, content }) => `${role === 'user' ? 'User' : 'Agent'}: ${clipKeepEnd(content, 3000)}`);
+  const S = { ...DEFAULTS, ...Object.fromEntries(Object.entries(settings).filter(([, v]) => v != null && v !== '')) };
+  call ||= (b, sg) => chatAny(b, sg, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, S, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
+  const r = await call({ model, max_tokens: 1200, temperature: 0.3, ...REASONING.off, messages: [
+    { role: 'system', content: 'The user asks a quick side question about a conversation they are having with an AI agent that builds things. Answer it directly and briefly (a few sentences or a short list), from the conversation and what you know. Do not continue the agent\'s work, do not write files and do not pretend to run anything; you have no tools.' },
+    { role: 'user', content: `${summary ? `Earlier in the conversation (summary):\n${summary}\n\n` : ''}${turns.length ? `The conversation so far:\n${turns.join('\n\n').slice(-40000)}\n\n` : ''}${live ? `What the agent is saying in its reply now:\n${clipKeepEnd(live, 3000)}\n\n` : ''}Side question: ${q}` }] }, signal);
+  const answer = String(r.message?.content || '').trim();
+  if (!answer) throw new Error('The model sent back an empty answer.');
+  return { answer, model: r.model || model, cost: Number(r.usage?.cost) || 0 };
+}
+
 // ---------- the handover brief (the out-of-steps card's "Fresh chat") ----------
 // A brief on a model of an app on this PC is written there; when that fails, OpenRouter's fallback model writes it.
 const briefChat = (body) => chatAny(body, undefined, { orChat: chat, fallback: async (id) => sourceFallbackFor(id, {}, [...await chatModels().catch(() => []), ...await sourceModels().catch(() => [])]) });
