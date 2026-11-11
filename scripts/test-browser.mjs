@@ -273,3 +273,19 @@ test('send to chat: a quote goes into the message box as Markdown, and the termi
   cur = null; ui.termToChat({ title: 'x', text: 'y' }, null);
   assert.equal(alerts.at(-1), 'Open a chat first: the output goes with your next message there.');
 });
+
+test('files changed: the chip covers the replies since your last message that changed files, once they end', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('function fcReplies('), j = page.indexOf('async function drawFilesChanged', i);
+  assert.ok(i >= 0 && j > i);
+  const { fcReplies, fcRun } = new Function(`${page.slice(i, j)}; return { fcReplies, fcRun };`)();
+  const changed = (runId, extra = {}) => ({ role: 'assistant', runId, stats: { changed: ['a.js'] }, ...extra });
+  const c = (messages) => ({ agent: { messages } });
+  // Before your last message: not covered. After it: each reply that changed files, the running one once it ends.
+  const msgs = [{ role: 'user' }, changed('r1'), { role: 'user' }, changed('r2', { stats: { changed: ['b.js'], undoId: 'r1x' } }), { role: 'assistant', runId: 'r3', stats: { changed: [] } }, changed('r4', { live: true })];
+  assert.deepEqual(fcReplies(c(msgs)).map((m) => m.runId), ['r2']);
+  assert.equal(fcRun(fcReplies(c(msgs))[0]), 'r1x'); // a resumed reply's undo copy is its first run's
+  assert.deepEqual(fcReplies(c([...msgs, { role: 'user' }])), []); // a new message starts over
+  assert.deepEqual(fcReplies(c([changed('r9')])).map((m) => m.runId), ['r9']); // no message of yours yet (a schedule)
+});

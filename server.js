@@ -37,7 +37,7 @@ import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from 
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
-import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, redoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
@@ -581,6 +581,13 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       try { return json(res, 200, undoFile(workspaceDir(b.projectId), String(b.runId), String(b.path || ''), { force: !!b.force })); }
+      catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // Redo a file undone one at a time (the files-changed chip's toast): the reply's version comes back from .quorx/trash.
+    if (url.pathname === '/api/review/redo' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, redoFile(workspaceDir(b.projectId), String(b.runId), String(b.path || ''), { force: !!b.force })); }
       catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/checkpoints/restore' && req.method === 'POST') {
