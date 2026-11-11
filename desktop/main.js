@@ -7,7 +7,7 @@
 // The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
 // the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
 // alone, and this one starts server.js with Electron's own Node on the next free port.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut, powerSaveBlocker } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -15,6 +15,7 @@ const crypto = require('node:crypto');
 const { pngIcon } = require('./icon.js');
 const { createStorage, cleanAtStart } = require('./storage.js');
 const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
+const { POLL_MS: AWAKE_POLL_MS, keepAwakeOn, wantAwake, createAwake } = require('./keep-awake.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -593,6 +594,7 @@ handle('storage', async (op, arg) => {
 });
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
+handle('keepAwake', (on) => { if (on !== undefined) { writeConfig({ ...readConfig(), keepAwake: !!on }); awakeTick(); } return { on: keepAwakeOn(readConfig()), held: awake.held }; });
 handle('quit', () => { setImmediate(quitApp); return true; });
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
@@ -943,6 +945,17 @@ async function fetchBusy() {
     return r.ok ? await r.json() : null;
   } catch { return null; }
 }
+// The PC stays awake only while a reply or a command works (desktop/keep-awake.js); asked every few seconds.
+const awake = createAwake(powerSaveBlocker);
+let awakeAsking = false;
+async function awakeTick() {
+  if (awakeAsking) return;
+  awakeAsking = true;
+  try {
+    const on = keepAwakeOn(readConfig());
+    awake.set(on && wantAwake(await fetchBusy(), on));
+  } finally { awakeAsking = false; }
+}
 
 // The (hidden) menu, without Electron's zoom shortcuts: Ctrl + / − / 0 are QuorX's own (the app, each browser tab,
 // the terminal), and the menu's would zoom the app a second time.
@@ -961,6 +974,7 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   linkLoop();
+  setInterval(awakeTick, AWAKE_POLL_MS);
   setInterval(sleepTick, Math.min(10e3, Math.max(1000, (SLEEP_OPTS.after ?? 10e3) / 2)));
   // Installed update downloads go a little after start (⚙ Settings → Storage → Automatic cleanup).
   if (readConfig().storage?.updateCleanup !== false) setTimeout(() => getStorage().clear([{ id: 'desk:updates' }]).catch(() => {}), 30000);
@@ -972,5 +986,5 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => { if (!server) app.quit(); });
 app.on('activate', () => (win ? showWindow() : createWindow()));
 app.on('before-quit', () => { quitting = true; });
-app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch { /* not ready */ } });
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch { /* not ready */ } awake.set(false); });
 app.on('quit', () => { if (server) { try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true }); else server.kill(); } catch { /* gone */ } } });

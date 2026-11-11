@@ -42,3 +42,39 @@ test('the sleep time and the number awake can be set; bad values are ignored', (
   const tabs = [tab('a', 16e3), tab('b', 5000)];
   assert.deepEqual(pickSleepers(tabs, { now: NOW, ...sleepOptions({ QX_TAB_SLEEP_MS: '15000' }) }), ['a']);
 });
+
+// ---------- keeping the PC awake while QuorX works (desktop/keep-awake.js) ----------
+const { KEEP_AWAKE_DEFAULT, keepAwakeOn, wantAwake, createAwake } = require('../desktop/keep-awake.js');
+
+test('keep awake: only while a reply or a command works, and only when the setting is on', () => {
+  assert.equal(KEEP_AWAKE_DEFAULT, true);
+  assert.equal(keepAwakeOn({}), true, 'missing: the default');
+  assert.equal(keepAwakeOn({ keepAwake: false }), false);
+  assert.equal(keepAwakeOn(null), true);
+  const idle = { replies: [], servers: [], commands: [] };
+  assert.equal(wantAwake(idle, true), false);
+  assert.equal(wantAwake({ ...idle, replies: [{ title: 'Snake game' }] }, true), true);
+  assert.equal(wantAwake({ ...idle, commands: [{ label: 'npm run build' }] }, true), true);
+  assert.equal(wantAwake({ ...idle, servers: [{ name: 'dev' }] }, true), false, 'a server on its own never keeps the PC awake');
+  assert.equal(wantAwake({ ...idle, replies: [{}] }, false), false, 'setting off');
+  assert.equal(wantAwake(null, true), false, 'the harness could not be asked');
+});
+
+test('keep awake: one blocker, started once and stopped once', () => {
+  const calls = [];
+  let next = 7;
+  const live = new Set();
+  const psb = { start: (t) => { calls.push(['start', t]); live.add(next); return next++; }, stop: (id) => { calls.push(['stop', id]); live.delete(id); }, isStarted: (id) => live.has(id) };
+  const a = createAwake(psb);
+  assert.equal(a.set(true), true);
+  assert.equal(a.set(true), true);
+  assert.equal(a.held, true);
+  assert.equal(a.set(false), false);
+  assert.equal(a.set(false), false);
+  assert.deepEqual(calls, [['start', 'prevent-app-suspension'], ['stop', 7]]);
+  // Windows let go of it on its own (it is no longer started): letting go again doesn't throw, and it can be held again.
+  a.set(true); live.clear();
+  assert.equal(a.set(false), false);
+  assert.equal(a.set(true), true);
+  assert.equal(calls.filter(([k]) => k === 'start').length, 3);
+});
