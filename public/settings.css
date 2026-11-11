@@ -846,3 +846,9 @@
   #settings .pv-count { display: none; }
   #settings .pv-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* A provider's "When its usage limit is hit" row (srcLimitHTML in app.js): the words above, the model picker under them. */
+.src-card .src-limit { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.src-card .src-limit-t { display: block; font-size: 13px; color: var(--text-bright, var(--text)); margin-bottom: 2px; }
+.src-card .src-limit .st-row-help { margin: 0; }
+.src-card .src-limit .st-fb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

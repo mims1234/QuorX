@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, setRunLimitBack, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -1189,7 +1189,7 @@ const server = http.createServer(async (req, res) => {
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId, onEnd: (end) => body.chatId && settleReply(String(body.chatId), runId, end) }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }
-    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log))?$/);
+    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log|limit))?$/);
     if (rm && validRunId(rm[1])) {
       // A reply's events so far as one JSON list (the MCP server and run replay read this; the page streams /events).
       if (rm[2] === 'log' && req.method === 'GET') return json(res, 200, { ...runStatus(rm[1]), events: readLog(rm[1]) });
@@ -1199,6 +1199,8 @@ const server = http.createServer(async (req, res) => {
       if (rm[2] === 'stop' && req.method === 'POST') return json(res, 200, { ok: stopRun(rm[1]) });
       // While a reply runs: switch it between Strict and YOLO, or send it a note it reads at its next step.
       if (rm[2] === 'mode' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: b.access ? setRunAccess(rm[1], b.access) : setRunApproval(rm[1], b.approval) }); }
+      // The model-switch bar's "Switch back at <reset>" box, changed while the reply runs.
+      if (rm[2] === 'limit' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: setRunLimitBack(rm[1], !!b.back, !!b.now) }); }
       if (rm[2] === 'hold' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: holdCard(rm[1], String(b.id || '')) }); }
       if (rm[2] === 'video' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: setRunVideo(rm[1], b.on) }); }
       if (rm[2] === 'reading' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); return json(res, 200, { ok: setRunReading(rm[1], b.text) }); }

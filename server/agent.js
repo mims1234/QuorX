@@ -14,7 +14,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { chat, chatStream, routeLimits, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
-import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
+import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, sourceLimit, forgetSourceHealth, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';
+import { isLimitHit, resetAt, limitPlan, limitFallbackFor, limitChoice, switchBackDue, LIMIT_SECS } from './limitswitch.js';
 import { pathToFileURL } from 'node:url';
 import { rotateLog } from './storagerules.js';
 import { enhanceRequest } from './enhancer.js';
@@ -67,7 +68,7 @@ import { repairArgs, checkArgs } from './toolargs.js';
 import { groupCalls, numberedWindow, untrusted, trimTranscript, trimPageViews, compactTranscript, transcriptChars, withCacheMarks, retryable, retryWait, pairToolCalls, contextBudget, resultCap, previewOf, toolChangeNote, prepAbout, LOOK_TOOLS } from './loop.js';
 import { checkFile, checkHtml, CHECKED, lintFile, lintHtml, LINTED } from './checks.js';
 import { checkSettings, askDeciders, saveShot, logCheck, votesFor, MAIN_CONTROL_JS, KEY_PAGE_JS, KEY_TRIES, CHECK_DEFAULTS, LOOK_DEFAULTS } from './harness-checks.js';
-import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun } from './runs.js';
+import { saveCheckpoint, loadCheckpoint, dropCheckpoint, checkpointWritten, recordRun, stopRun } from './runs.js';
 import { live, budgetState } from './budget.js';
 import { blobData } from './blobs.js';
 import { modelNotes } from './modelcards.js';
@@ -491,6 +492,11 @@ export function holdCard(runId, id) {
   if (!hold) return false;
   hold();
   return true;
+}
+// The model-switch bar's "Switch back at <reset>" box, changed while the reply runs.
+export function setRunLimitBack(runId, on, now = false) {
+  const ctl = runControls.get(runId);
+  return !!ctl?.setLimitBack?.(!!on, !!now);
 }
 // The prompt enhancer's reading of the request, corrected by the user while the reply runs.
 export function setRunReading(runId, text) {
@@ -1540,6 +1546,8 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const planSteps = Math.max(0, Math.min(MAX_STEPS, Number(S.planSteps ?? DEFAULTS.planSteps) || 0));
   const planFirst = goal ? 'goal' : 'off';
   const run = { mediaPlan: null, stop: 'answered', steps: 0, retries: 0, trimmed: 0, tools: 0, lookStreak: 0, warned: false, verifyRounds: 0, questions: 0, cacheMarks: true, passReasoning: true, routing: true, plan: resumed?.plan || null, planGate: resumed?.plan ? 'approved' : null, reviewRounds: 0, reviews: [], inbox: [], linted: {}, startedAt: resumed?.startedAt || Date.now() };
+  // A chat already moved to a fallback model at a usage limit (the bar above its message box) carries that into the reply.
+  { const x = req.limitSwitch, from = sourceOf(String(x?.from || '')); if (from && x?.to && String(x.to) !== String(x.from)) run.limitSwitch = { source: from.source, from: String(x.from), to: String(x.to), until: Number(x.until) || 0, back: !!x.back }; }
   runControls.set(runId, {
     // Switching to YOLO also approves the cards waiting right now (the chat budget still applies).
     setApproval: (mode) => {
@@ -1573,6 +1581,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         run.inbox.push('[The user says this is a film: Video Mode is on. Follow its order from where you are: the brief and the story with ask_user if they are still open, then a storyboard (the storyboard tool) before any paid media.]');
       }
     },
+    // The "Switch back at <reset>" box on the model-switch bar, ticked or not: the switch back follows it. `now`: the
+    // bar's "Back to …" button, so the next call goes to the chat's own model.
+    setLimitBack: (on, now = false) => { const sw = run.limitSwitch; if (sw) { sw.back = !!on || now; if (now) sw.until = Date.now(); } return !!sw; },
     // A note from the user: shown at once, given to the agent at its next step.
     steer: (text, extra = {}) => {
       run.inbox.push({ text, ...extra });
@@ -1730,14 +1741,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     try {
       try { r = await modelCall(body, step, onText); }
       catch (e) {
-        if (signal.aborted || typeof toolChoice !== 'object') throw e;
+        if (signal.aborted || e?.limitCancel || typeof toolChoice !== 'object') throw e;
         // Some models refuse a forced tool call (e.g. while reasoning): fall back to letting them choose.
         emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} refused a forced decide call (${clip(e.message, 90)}); letting it choose.`, at: at() });
         toolChoice = 'auto';
         r = await modelCall({ ...body, tool_choice: 'auto' }, step, onText);
       }
     } catch (e) {
-      if (signal.aborted) throw e;
+      if (signal.aborted || e?.limitCancel) throw e;
       // Nothing done yet: report the error as before. After real work, keep it and say what happened.
       if (run.steps === 1 && !resumed) throw e;
       run.stop = 'model_error'; run.modelError = clip(e.message, 300); run.modelCode = errorCode(e);
@@ -2125,6 +2136,11 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // A model of an app on this PC: its source first. When that fails, the same call goes to OpenRouter (viaSource
     // says which model), and the step carries on as if nothing happened, apart from a note.
     let fell = null, unmarked = null, routed = null;
+    // The chat moved to its fallback model at a usage limit: the agent's own calls go there until the switch back.
+    if (role === 'writer' && run.limitSwitch && !run.inSwitch) {
+      const sw = limitRoute(body);
+      if (sw) return switchedCall(sw, sig, onText, onThink, onCall);
+    }
     // An OpenRouter id the user runs on its maker's own API (a helper's, the reviewer's) goes there; `routedTo` says so.
     if (!sourceOf(body.model) && !deps.sourceStream) { const to = await routeModel(body.model); if (to !== body.model) { routed = to; body = { ...body, model: to }; } }
     if (sourceOf(body.model)) {
@@ -2170,7 +2186,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     // A source switched off, or one that failed for other chats a moment ago, is not waited on again (tests script
     // the source, so only the real one is checked).
     let why = run.sourceOff[s.source] || (deps.sourceStream ? '' : blockedLocal(sm) || sourceOffWhy(s.source) || sourceSkip(s.source, sm));
-    let kind = why ? 'skipped' : null;
+    let kind = why ? 'skipped' : null, lastErr = null;
     for (let again = true; !why && again;) {
       again = false;
       try {
@@ -2191,6 +2207,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         return { r };
       } catch (e0) {
         const e = e0 && typeof e0 === 'object' ? e0 : new Error(String(e0));
+        lastErr = e;
         // Cut off part-way (Stop too): maybe billed, so it counts at an estimate (plan models cost nothing).
         if (e.partial?.outChars && !e.partial.counted) { e.partial.counted = true; account(sourcePartial(e.partial, body), sm, role); }
         if (sig.aborted) throw e0;
@@ -2209,6 +2226,12 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         run.sourceFails[s.source] = (run.sourceFails[s.source] || 0) + 1;
         if (kind === 'auth' || kind === 'quota' || kind === 'free' || kind === 'setting' || run.sourceFails[s.source] >= 2) run.sourceOff[s.source] = why;
       }
+    }
+    // A usage limit, and the user chose a fallback for this source: the card decides (switch, wait for the reset, stop).
+    if (role === 'writer' && !run.inSwitch) {
+      const lim = kind === 'skipped' ? sourceLimit(s.source, sm) : isLimitHit(kind, lastErr?.retryAfter) ? { kind, reset: resetAt(lastErr?.retryAfter) } : null;
+      const got = lim && await limitCard(body, s, lim, why, sig, onText, onThink, onCall);
+      if (got) return got;
     }
     const to = sourceFallbackFor(sm, S, catalogue);
     if (!to) throw Object.assign(new Error(`${why}. Pick another model in the chat's model button (or fix ${name}), then send a message to carry on. QuorX doesn't switch models by itself (⚙ Settings → Providers → When a call fails).`), { status: 400, source: s.source });
@@ -2229,6 +2252,76 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (run.routing === 'blocked') { if (slugs.length) out.provider = { ignore: slugs }; }
     else if (run.routing) Object.assign(out, routingFor(S, to, slugs));
     return out;
+  }
+  // ---------- switching models at a usage limit (server/limitswitch.js) ----------
+  // A source said its usage is spent (a subscription's window, a plan's quota, a Retry-After) and the user chose a fallback
+  // model for it in ⚙ Settings → Providers. A card in the chat says what hit its limit and when it resets, then:
+  // Switch now (or the countdown runs out) moves the agent's calls to the fallback until the reset, Wait for reset holds
+  // the reply and carries on on the same model, Cancel stops the reply like ■ does, so ▶ Continue picks it up later.
+  // In 🔒 Strict a paid fallback asks first, with no countdown. Returns the call's { r }, or null with no fallback set.
+  async function limitCard(body, s, lim, why, sig, onText, onThink, onCall) {
+    const sm = body.model, to = limitFallbackFor(s.source, sm, S);
+    if (!to) return null;
+    const info = catalogue.find((m) => m.id === to) || null, name = s.def.name;
+    const plan = limitPlan({ approval: S.approval, info, secs: S.limitSwitchSecs ?? LIMIT_SECS, scheduled: !!req.scheduledBy, schedMs: schedCardMs() });
+    const id = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, key = `${runId}:${id}`;
+    emit({ t: 'question', id, gate: 'limit', question: `${name} hit its usage limit.`, why: clip(why, 300), options: ['Switch now', 'Wait for reset', 'Cancel'],
+      limit: { source: s.source, name, from: sm, to, kind: lim.kind, reset: lim.reset || 0, cost: plan.cost, ask: plan.ask, ...(info?.price ? { price: info.price } : {}) },
+      ...(plan.ms ? { wait: waitInfo(plan.ms, plan.onTimeout) } : {}), at: at() });
+    const answered = new Promise((resolve, reject) => {
+      questions.set(key, resolve);
+      sig.addEventListener('abort', () => { questions.delete(key); reject(new Error('aborted')); }, { once: true });
+    });
+    const ans = await userOrTimeout(id, plan.ms, answered);
+    if (ans.timedOut) questions.delete(key);
+    const pick = limitChoice(ans, { reset: lim.reset, onTimeout: plan.onTimeout });
+    emit({ t: 'answer', id, choice: ['switch', 'wait', 'cancel'].indexOf(pick), text: '', ...(ans.timedOut ? { by: 'timeout' } : {}), at: at() });
+    const when = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (pick === 'switch') {
+      run.limitSwitch = { source: s.source, from: sm, to, until: lim.reset || 0, back: !!lim.reset };
+      emit({ t: 'limit_switch', ...run.limitSwitch, by: ans.timedOut ? 'timeout' : 'user', step: run.stepNow ?? null, at: at() });
+      emit({ t: 'note', level: 'info', msg: `${name} hit its usage limit, so the chat moved to ${short(to)}${lim.reset ? ` until it resets at ${when(lim.reset)}` : ''}.`, at: at() });
+      return { r: await switchedCall(limitRoute(body), sig, onText, onThink, onCall) };
+    }
+    if (pick === 'wait') {
+      emit({ t: 'limit_wait', source: s.source, from: sm, until: lim.reset, at: at() });
+      await sleep(Math.max(0, lim.reset - Date.now()), sig);
+      limitCleared(s.source);
+      emit({ t: 'limit_resumed', source: s.source, model: sm, at: at() });
+      return viaSource(body, sig, onText, onThink, 'writer', onCall);
+    }
+    emit({ t: 'note', level: 'info', msg: `Stopped at ${name}'s usage limit. ▶ Continue carries on from here.`, at: at() });
+    // The same as ■: the reply ends as stopped (not failed), and keeps what it wrote.
+    stopRun(runId);
+    throw Object.assign(new Error('Stopped.'), { limitCancel: true });
+  }
+  // The call `body` makes while the chat is switched: to the fallback, or null for the chat's own model (another
+  // source's model, or the switch back is due, which ends the switch).
+  function limitRoute(body) {
+    const sw = run.limitSwitch, src = sourceOf(body.model);
+    if (!sw || !src || src.source !== sw.source) return null;
+    if (switchBackDue(sw)) {
+      run.limitSwitch = null;
+      limitCleared(sw.source);
+      emit({ t: 'limit_back', source: sw.source, from: sw.from, to: sw.to, at: at() });
+      emit({ t: 'note', level: 'info', msg: `${src.def.name}'s limit has reset: back on ${short(body.model)}.`, at: at() });
+      return null;
+    }
+    if (sourceOf(sw.to)) { const { provider: _p, models: _m, ...rest } = body; return { ...rest, model: sw.to }; }
+    return forOpenRouter(body, sw.to);
+  }
+  // One agent call on the fallback model. A fallback that fails goes the usual way (no second card).
+  async function switchedCall(sw, sig, onText, onThink, onCall) {
+    run.inSwitch = true;
+    try { const r = await callModel(sw, sig, onText, onThink, 'writer', onCall); if (r) r.servedBy ||= sw.model; return r; }
+    finally { run.inSwitch = false; }
+  }
+  // The source's limit is over (reset, or waited out): this reply and the other chats try it again.
+  function limitCleared(source) {
+    if (run.sourceOff) delete run.sourceOff[source];
+    if (run.sourceFails) run.sourceFails[source] = 0;
+    if (run.sourceOffSaid) delete run.sourceOffSaid[source];
+    forgetSourceHealth(source);
   }
   // A source call cut off before its usage arrived: about 4 characters a token, at the catalogue's price.
   function sourcePartial(p, body) {
@@ -2289,7 +2382,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       const marked = run.cacheMarks ? withCacheMarks(body.messages, body.model) : body.messages;
       try { return await callModel(marked === body.messages ? body : { ...body, messages: marked }, signal, onText, onThink, 'writer', onCall); }
       catch (e) {
-        if (signal.aborted) throw e;
+        if (signal.aborted || e?.limitCancel) throw e;
         // The provider refused the reasoning passed back: strip it from this reply and carry on without it.
         if (e.status === 400 && run.passReasoning !== false && body.messages.some((m) => m.reasoning_details) && (errorCode(e) === 'REASONING_REFUSED' || !run.cacheMarks)) {
           run.passReasoning = false; attempt--;
