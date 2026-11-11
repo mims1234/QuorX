@@ -247,3 +247,29 @@ test('send to chat: a quote goes into the message box as Markdown, and the termi
   cur = null; ui.termToChat({ title: 'x', text: 'y' }, null);
   assert.equal(alerts.at(-1), 'Open a chat first: the output goes with your next message there.');
 });
+
+test('Needs you: chats waiting on an approval, an answer or their budget, from every project, each with its card', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cut = (from, to) => { const i = page.indexOf(from), j = page.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return page.slice(i, j); };
+  const src = cut('const nextBudget = ', 'async function raiseChatBudget') + cut('const NEED_ICON', 'function drawRunCount(');
+  const chat = (id, projectId, waiting, m) => ({ id, title: `Chat ${id}`, projectId, running: { runId: `r${id}` }, waiting, agent: { messages: [{ role: 'user' }, { role: 'assistant', live: true, runId: `r${id}`, approvals: {}, questions: {}, ...m }] } });
+  const G = { projects: [{ id: 'a', name: 'Arcade' }, { id: 'b', name: 'Shop' }], open: new Map() };
+  const add = (c) => G.open.set(c.id, c);
+  add(chat('1', 'a', true, { approvals: { x: { card: { id: 'x', mode: 'strict', tool: 'shell', what: 'npm install howler' } } } }));
+  add(chat('2', 'b', 'answer', { questions: { q: { card: { id: 'q', question: 'Should prices include tax?' } } } }));
+  add(chat('3', 'b', 'budget', { budgetAsk: { card: { id: 'bud', budget: 0.5, spent: 0.52 } } }));
+  add(chat('4', 'a', false, {})); // running, not waiting
+  add(chat('5', 'a', true, { approvals: { y: { card: { id: 'y', mode: 'strict', tool: 'mcp_setup', what: 'Set up a server', buttonsOnly: true } } } }));
+  add({ ...chat('6', 'a', true, {}), running: null }); // ended
+  const needsYou = new Function('G', 'TOOL_NAME', 'money', `${src}; return needsYou;`)(G, { shell: '💻 Command' }, (n, d) => `$${n.toFixed(d)}`);
+  const list = needsYou();
+  assert.deepEqual(list.map((x) => [x.c.id, x.kind, x.id, x.project]), [['1', 'approval', 'x', 'Arcade'], ['2', 'answer', 'q', 'Shop'], ['3', 'budget', 'bud', 'Shop'], ['5', 'approval', 'y', 'Arcade']]);
+  assert.equal(list[0].what, '💻 Command: npm install howler'); assert.equal(list[0].open, false);
+  assert.equal(list[1].what, 'Should prices include tax?');
+  assert.equal(list[2].raiseTo, 1); // the card's own next step: twice the budget
+  assert.equal(list[3].open, true); // a card that needs more than yes or no opens its chat
+  // Answered cards are not waiting.
+  G.open.get('1').agent.messages[1].approvals.x.outcome = { approve: true };
+  assert.equal(needsYou().some((x) => x.c.id === '1'), false);
+});

@@ -800,6 +800,7 @@ async function showMoreChats(pid) {
   renderSidebar();
 }
 function renderSidebar() {
+  drawRunCount(); // a chat started or stopped waiting on you: the amber count by Running follows
   const q = $('#chatSearch').value.trim().toLowerCase();
   const curProject = focused()?.projectId;
   // Chats open here but not saved yet (no messages) still show while they're on screen.
@@ -6294,7 +6295,7 @@ function wireOutOfSteps(card, c, m) {
 }
 function budgetHTML(b, live = true) {
   const c = b.card, o = b.outcome, open = !o && live;
-  const next = Math.ceil(Math.max(c.budget * 2, c.spent * 1.5) * 100) / 100;
+  const next = nextBudget(c);
   // Cards from before budgets were per chat (a reply cap, a daily cap, a project budget) read the same.
   return `<div class="approval budget-card ${open ? '' : 'done'}" ${open ? `data-id="${esc(c.id)}"` : ''}>
     <h4>💵 Chat budget reached <span class="cost">${money(c.spent, 3)} of ${money(c.budget, 2)}</span></h4>
@@ -6304,18 +6305,27 @@ function budgetHTML(b, live = true) {
       : `<div class="outcome ${o?.raised ? 'yes' : 'no'}">${o ? (o.raised ? `✅ Budget raised to ${o.budget == null ? 'no limit' : money(o.budget, 2)}; the reply carried on` : '⛔ Wrapped up at the budget') : 'Not answered: the reply ended'}</div>`}
   </div>`;
 }
+// What the card offers to raise the budget to, and its two answers. The card and the Running list's Needs you row
+// both use these.
+const nextBudget = (card) => Math.ceil(Math.max(card.budget * 2, card.spent * 1.5) * 100) / 100;
+// Raising the chat's budget is what the waiting reply listens for: it carries on within a second. → the error, or ''.
+async function raiseChatBudget(c, to) {
+  const r = await postJ(`/api/chats/${encodeURIComponent(c.id)}/budget`, { budget: Number(to) });
+  if (r.error) return r.error;
+  c.bud = { ...c.bud, ...r }; drawBudgetChip(c); budgetNotices();
+  return '';
+}
+const stopAtBudget = (m, id) => fetch('/api/budget-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id }) }).catch(() => {});
 function wireBudget(card, c, m) {
   const err = $('.err', card), input = $('.raise-to', card);
-  // Raising the chat's budget is what the waiting reply listens for: it carries on within a second.
   $('.raise', card).onclick = async () => {
-    const r = await postJ(`/api/chats/${encodeURIComponent(c.id)}/budget`, { budget: Number(input.value) });
-    if (r.error) { err.textContent = `Could not raise it: ${r.error}.`; err.hidden = false; return; }
+    const e = await raiseChatBudget(c, input.value);
+    if (e) { err.textContent = `Could not raise it: ${e}.`; err.hidden = false; return; }
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
-    c.bud = { ...c.bud, ...r }; drawBudgetChip(c); budgetNotices();
   };
   $('.stop-here', card).onclick = () => {
     card.querySelectorAll('button, input').forEach((b) => (b.disabled = true));
-    fetch('/api/budget-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: m.runId, id: card.dataset.id }) }).catch(() => {});
+    stopAtBudget(m, card.dataset.id);
   };
 }
 
@@ -11968,7 +11978,7 @@ function drawRunningPane(c, r) {
 // desktop app (yours and each chat's agent tab, with their sound), and the chats driving your Chrome or your desktop.
 // Every row names its chat or project and jumps there; each has its own Stop or Close. The sidebar row counts them.
 const RUNV = { data: null, tabs: null, timer: 0 };
-const RL_SEG = { server: 'Servers', command: 'Commands', terminal: 'Terminals', tab: 'Browser tabs', chrome: 'Chrome', desktop: 'Computer use' };
+const RL_SEG = { need: 'Needs you', server: 'Servers', command: 'Commands', terminal: 'Terminals', tab: 'Browser tabs', chrome: 'Chrome', desktop: 'Computer use' };
 const RL_KIND = { ...RUN_KIND, 'agent-tab': 'Agent tab', 'your-tab': 'Your tab', chrome: 'Chrome', lent: 'Lent Chrome tab', desktop: 'Computer use' };
 const rlSeg = (kind) => (kind === 'server' ? 'server' : kind === 'background' || kind === 'command' ? 'command' : 'terminal');
 async function loadRunningAll() {
@@ -11978,15 +11988,49 @@ async function loadRunningAll() {
   drawRunCount();
   return RUNV.data;
 }
+// ---------- Needs you: chats waiting on an approval, an answer or their budget, at the top of the Running list ----------
+// From every chat this page follows (each reply keeps c.waiting and its open card). Each row answers right there with
+// what the card itself calls (postApproval, raiseChatBudget, stopAtBudget); a question, or a card that needs more
+// than yes or no, opens its chat instead. The counts show waiting chats in amber, apart from what runs.
+const NEED_ICON = { approval: '⏸', answer: '❓', budget: '💲' };
+function needsYou() {
+  const out = [];
+  for (const c of G.open.values()) {
+    if (!c.running || !c.waiting) continue;
+    const m = c.agent.messages.findLast((x) => x.role === 'assistant' && x.live);
+    if (!m) continue;
+    const proj = (G.projects || []).find((p) => p.id === c.projectId);
+    const base = { c, m, title: c.title || 'New chat', projectId: c.projectId, project: proj?.name || '' };
+    if (c.waiting === 'budget' && m.budgetAsk && !m.budgetAsk.outcome) {
+      const k = m.budgetAsk.card;
+      out.push({ ...base, kind: 'budget', id: k.id, what: `Reached its ${money(k.budget, 2)} budget (${money(k.spent, 3)} spent)`, raiseTo: nextBudget(k) });
+    } else if (c.waiting === 'answer') {
+      const q = Object.values(m.questions || {}).findLast((x) => !x.answer && !x.card.auto);
+      if (q) out.push({ ...base, kind: 'answer', id: q.card.id, what: q.card.questions?.length > 1 ? `${q.card.questions.length} questions: ${q.card.questions[0]?.question || ''}` : q.card.question || 'A question for you' });
+    } else {
+      const a = Object.values(m.approvals || {}).findLast((x) => !x.outcome && x.card.mode === 'strict');
+      if (a) out.push({ ...base, kind: 'approval', id: a.card.id, what: `${(TOOL_NAME[a.card.tool] || a.card.tool).replace(/<[^>]+>/g, '')}: ${a.card.what || a.card.detail || ''}`, open: !!(a.card.buttonsOnly || a.card.secret) });
+    }
+  }
+  return out;
+}
 function drawRunCount() {
-  const d = RUNV.data; if (!d) return;
-  const nt = RUNV.tabs?.length || 0, n = d.items.length + nt + d.control.length, loud = (RUNV.tabs || []).filter((t) => t.audible && !t.muted).length;
+  const d = RUNV.data, need = needsYou().length;
+  const nt = RUNV.tabs?.length || 0, n = d ? d.items.length + nt + d.control.length : 0, loud = (RUNV.tabs || []).filter((t) => t.audible && !t.muted).length;
   const el = $('#runCount');
-  if (el) { el.hidden = !n; el.innerHTML = `<span class="on">${n}</span>${loud ? `<span class="rl-loud" title="${loud} tab${loud > 1 ? 's' : ''} playing sound">🔊</span>` : ''}`; }
-  const parts = [[d.items.length, 'server or command', 'servers and commands'], [nt, 'browser tab', 'browser tabs'], [d.control.length, 'Chrome or computer use', 'Chrome and computer use']].filter(([k]) => k);
-  $('#runAllBtn')?.setAttribute('title', `Running: ${parts.length ? parts.map(([k, one, many]) => `${k} ${k === 1 ? one : many}`).join(', ') : 'nothing right now'}. Everything QuorX has running, in every project`);
+  if (el) { el.hidden = !n && !need; el.innerHTML = `${need ? `<span class="need" title="${need} chat${need > 1 ? 's' : ''} waiting on you">${need}</span>` : ''}${n ? `<span class="on">${n}</span>` : ''}${loud ? `<span class="rl-loud" title="${loud} tab${loud > 1 ? 's' : ''} playing sound">🔊</span>` : ''}`; }
+  const parts = d ? [[d.items.length, 'server or command', 'servers and commands'], [nt, 'browser tab', 'browser tabs'], [d.control.length, 'Chrome or computer use', 'Chrome and computer use']].filter(([k]) => k) : [];
+  $('#runAllBtn')?.setAttribute('title', `${need ? `${need} chat${need > 1 ? 's' : ''} waiting on you. ` : ''}Running: ${parts.length ? parts.map(([k, one, many]) => `${k} ${k === 1 ? one : many}`).join(', ') : 'nothing right now'}. Everything QuorX has running, in every project`);
   const r = $('#railRunning');
-  if (r) { r.setAttribute('data-tip', n ? `Running · ${n}` : 'Running'); const b = $('.rl-badge', r); if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : String(n); } }
+  if (r) {
+    r.setAttribute('data-tip', [need ? `Needs you · ${need}` : '', n ? `Running · ${n}` : ''].filter(Boolean).join(' · ') || 'Running');
+    const b = $('.rl-badge', r); if (b) { b.hidden = !n; b.textContent = n > 99 ? '99+' : String(n); }
+    let w = $('.rl-need', r);
+    if (!w && need) { w = document.createElement('i'); w.className = 'rl-need'; r.appendChild(w); }
+    if (w) { w.hidden = !need; w.textContent = need > 99 ? '99+' : String(need); }
+  }
+  // The open list follows at once (it also redraws every 2 s).
+  if ($('#runningAll')?.open) drawRunningAll();
 }
 const rlChat = (chatId, title) => { const h = chatId && G.chats.find((x) => x.id === chatId); return chatId ? `<button type="button" class="run-chat linkish" data-chat="${esc(chatId)}" title="Open this chat">${esc(clip(h?.title || title || 'a chat', 34))}</button>` : ''; };
 const rlProj = (pid) => { const p = pid && G.projects.find((x) => x.id === pid); return p ? `<button type="button" class="rl-proj" data-proj="${esc(p.id)}" style="${projStyle(p)}" title="Open ${esc(p.name)} on its Running tab">${esc(clip(p.name, 26))}</button>` : ''; };
@@ -11995,9 +12039,18 @@ const rlTop = (dot, kind, text) => `<i class="tr-dot ${dot}"></i><span class="ru
 const rlRow = (key, seg, text, top, meta, acts) => `<div class="run-row rl-row" data-key="${esc(key)}" data-lf-seg="${seg}" data-lf-text="${esc(text.toLowerCase())}"><div class="run-top">${top}</div>${meta}<div class="run-acts">${acts}</div></div>`;
 const rlTime = (at, word) => `<span class="run-time" data-started="${at}" data-word="${word}">${word} ${dur(Date.now() - at)}</span>`;
 function rlRows() {
-  const d = RUNV.data, rows = { proc: [], tab: [], ctl: [] };
+  const d = RUNV.data, rows = { need: [], proc: [], tab: [], ctl: [] };
   const pname = (pid) => G.projects.find((p) => p.id === pid)?.name || '';
   const cname = (id, t) => G.chats.find((x) => x.id === id)?.title || t || '';
+  for (const x of needsYou()) {
+    const key = `${x.c.id}:${x.id}`;
+    const acts = x.kind === 'approval' && !x.open ? `<button type="button" class="primary" data-nallow="${esc(key)}" title="Allow it this once, as the card's yes does">Allow</button><button type="button" data-ndeny="${esc(key)}" title="Say no: the agent hears it and carries on without it">Deny</button>`
+      : x.kind === 'budget' ? `<button type="button" class="primary" data-nraise="${esc(key)}" title="Raise this chat's budget to ${esc(money(x.raiseTo, 2))} and let the reply carry on">+ budget · ${esc(money(x.raiseTo, 2))}</button><button type="button" class="danger" data-nstop="${esc(key)}" title="Wrap up the reply here, at the budget">Stop</button>`
+      : `<button type="button" data-nopen="${esc(x.c.id)}" title="Open the chat at its ${x.kind === 'answer' ? 'question' : 'card'}">Open</button>`;
+    rows.need.push(rlRow(`n:${key}`, 'need', `${x.title} ${x.project} ${x.what} needs you ${x.kind}`,
+      `<i class="tr-dot wait"></i><span class="run-kind rl-need-kind" data-kind="need-${x.kind}">${NEED_ICON[x.kind]} ${x.kind === 'approval' ? 'Approval' : x.kind === 'answer' ? 'Question' : 'Budget'}</span>${rlChat(x.c.id, x.title)}`,
+      rlMeta([rlProj(x.projectId), `<span class="rl-what" title="${esc(x.what)}">${esc(clip(x.what, 90))}</span>`]), acts));
+  }
   for (const x of d.items) {
     const who = x.source === 'agent' ? '<span class="run-who agent">🤖 agent</span>' : x.source === 'you' ? '<span class="run-who you">👤 you</span>' : '';
     const port = x.url ? `<a class="run-url" href="${esc(x.url)}" rel="noopener" data-cl="1">:${esc(String(x.url).match(/:(\d+)/)?.[1] || '')}</a>` : '';
@@ -12044,7 +12097,7 @@ async function openRunningAll() {
 function drawRunningAll() {
   const body = $('#rlBody'), d = RUNV.data; if (!body || !d || !$('#runningAll').open) return;
   // Rebuilt only when what runs changes; times tick in place, so a click never lands on a button just replaced.
-  const sig = JSON.stringify([d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
+  const sig = JSON.stringify([needsYou().map((x) => [x.c.id, x.kind, x.id, x.title, x.raiseTo]), d.error, d.items.map((x) => [x.projectId, x.id, x.status, x.chatId]), RUNV.tabs && RUNV.tabs.map((t) => [t.sid, t.url, t.title, t.audible, t.muted]), d.control.map((x) => [x.kind, x.runId, x.tab, x.app])]);
   if (body.dataset.sig === sig) {
     for (const t of body.querySelectorAll('.run-time[data-started]')) t.textContent = `${t.dataset.word} ${dur(Date.now() - Number(t.dataset.started))}`;
     return;
@@ -12054,6 +12107,7 @@ function drawRunningAll() {
   const sec = (k, title, hint, list, empty, tool = '') => `<section class="run-group rl-sec" data-sec="${k}"><h4>${esc(title)} <span class="run-n">${list.length}</span><small>${esc(hint)}</small>${tool}</h4>${list.join('') || `<div class="rl-none">${esc(empty)}</div>`}</section>`;
   const q0 = document.activeElement?.classList.contains('lf-q') && body.contains(document.activeElement) ? document.activeElement.selectionStart : null;
   body.innerHTML = `${d.error ? `<div class="run-empty bad">Could not list servers and commands: ${esc(d.error)}</div>` : ''}<div class="rl-filter"></div>
+    ${rows.need.length ? sec('need', 'Needs you', 'chats waiting on you, in every project', rows.need, '') : ''}
     ${sec('proc', 'Servers and commands', 'in every project', rows.proc, 'No servers or commands are running.', procN > 1 ? `<button type="button" class="rl-stopall danger" title="Stop every server and command in every project (your terminal tabs stay open)">■ Stop all ${procN}</button>` : '')}
     ${RUNV.tabs ? sec('tab', 'Browser tabs in QuorX', 'your tabs and each chat’s agent tab', rows.tab, 'No browser tabs are open.') : ''}
     ${sec('ctl', 'Chrome and computer use', 'chats using your Chrome or your desktop', rows.ctl, 'No chat is using your Chrome or your desktop.')}`;
@@ -12068,6 +12122,24 @@ function wireRunningAll(body) {
   const again = async () => { await loadRunningAll(); drawRunningAll(); pollDev(); };
   const leave = () => $('#runningAll').close();
   for (const b of body.querySelectorAll('[data-chat]')) b.onclick = () => { leave(); showChat(b.dataset.chat); if (isPhone()) setMView('chat'); };
+  // Needs you: the same calls the chat's own card makes; the reply's events then close the card and the row.
+  const need = (b, attr) => needsYou().find((x) => `${x.c.id}:${x.id}` === b.dataset[attr]);
+  const busy = (b) => { for (const x of b.parentElement.querySelectorAll('button')) x.disabled = true; };
+  for (const b of body.querySelectorAll('[data-nallow], [data-ndeny]')) b.onclick = async () => {
+    const x = need(b, b.dataset.nallow ? 'nallow' : 'ndeny'); if (!x) return again();
+    busy(b); await postApproval(x.m, x.id, { approve: !!b.dataset.nallow, reason: '' });
+  };
+  for (const b of body.querySelectorAll('[data-nraise]')) b.onclick = async () => {
+    const x = need(b, 'nraise'); if (!x) return again();
+    busy(b); const e = await raiseChatBudget(x.c, x.raiseTo);
+    if (e) { uiAlert(`Could not raise the budget: ${e}.`); for (const y of b.parentElement.querySelectorAll('button')) y.disabled = false; }
+  };
+  for (const b of body.querySelectorAll('[data-nstop]')) b.onclick = () => { const x = need(b, 'nstop'); if (!x) return again(); busy(b); stopAtBudget(x.m, x.id); };
+  for (const b of body.querySelectorAll('[data-nopen]')) b.onclick = async () => {
+    leave(); await showChat(b.dataset.nopen); if (isPhone()) setMView('chat');
+    const c = G.open.get(b.dataset.nopen), card = c?.el && [...c.el.root.querySelectorAll('.msgs .approval[data-id]')].findLast((y) => !y.dataset.answered);
+    card?.scrollIntoView({ block: 'center' }); card?.querySelector('input, textarea, button')?.focus({ preventScroll: true });
+  };
   for (const b of body.querySelectorAll('[data-proj]')) b.onclick = async () => {
     // The project's newest chat, with the pane on its Running tab.
     const h = G.chats.filter((x) => x.projectId === b.dataset.proj).sort((a, z) => (z.lastAt || z.updated || 0) - (a.lastAt || a.updated || 0))[0];
