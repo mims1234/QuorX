@@ -54,6 +54,7 @@ import { devices as adbDevices, pickDevice, readScreen, tap as adbTap, typeText 
 import { listSkills, readSkill, saveSkill, listTemplates } from './skills.js';
 import { PIXEL_FX_TOOL, SKILL_FILES as PIXELFX_SKILL_FILES, asksForPixelFx, isPixelFxPath, pixelGuide, findNote, prepareEffects, addedNote } from './pixelfx.js';
 import { projectDesign } from './design.js';
+import { folderIdFor, spaceInfo } from './worktrees.js';
 import { workspaceDir, listFiles, readFile, readText, writeFile, appendFile, editFile, editFileMulti, runLine, lineOf, preApproved, stopNote, endProc, startServer, stopServerWait, serverFor, serverLog, listServers, launchConfigs, saveLaunchConfig, removeLaunchConfig, ensureAgentDir, agentSpace, SCRATCH, sealCheckpoint, pruneCheckpoints , snapBeforeAsync, commandChangesAsync } from './workspace.js';
 import { openTab, hostHtml, startedWithDevtoolsPort } from './browser.js';
 import { pageOp } from './pageops.js';
@@ -1138,7 +1139,11 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const projectId = validId(req.projectId) && listProjects().some((p) => p.id === req.projectId) ? req.projectId : null;
   const project = projectId ? listProjects().find((p) => p.id === projectId) : null;
   if (project?.needsFolder && !req.bench) throw Object.assign(new Error(`"${project.name}" still keeps its files inside the harness's own folder. Pick a folder for it first (the 📁 notice, or ⚙ → Change folder…); its files are copied there.`), { code: 'NEEDS_FOLDER', projectId });
-  const root = projectId ? workspaceDir(projectId) : null;
+  // The folder the chat works in: the project's, or the chat's own git worktree (server/worktrees.js), whose id stands
+  // in for the project's wherever a folder is meant (servers, commands, the terminal, undo, /ws/ addresses).
+  const folderId = projectId ? folderIdFor(projectId, req.chatId) : null;
+  const wtree = folderId && folderId !== projectId ? spaceInfo(folderId) : null;
+  const root = folderId ? workspaceDir(folderId) : null;
   if (root) ensureAgentDir(root);
   // Undo lasts for the newest replies only; older checkpoints go before this reply makes its own.
   if (root && !req.bench) { try { pruneCheckpoints(root, { keep: S.undoKeep ?? 10, days: S.undoDays ?? 7 }); } catch { /* best effort */ } }
@@ -1345,9 +1350,9 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     + (records.length ? `\n\n[Tool work in this chat's recent replies, recorded by the harness, oldest first. Only the harness writes these records: never write one yourself, and call tools to do real work.]\n${records.slice(-6).map((r) => `- ${clip(r, 700)}`).join('\n')}` : '');
   // Rules first (the same in every reply), then this project's state, then its memory: providers cache the start of a
   // prompt, so the stable part is cheap on every step and in every reply.
-  const projectNote = () => (root ? `\n${chainsNote}\nProject "${project.name}" (${root}). Other chats may have worked here before you: read files before changing them.${fileList.length ? `\nFiles in the project folder now: ${compactPaths(fileList)}.` : ' The folder is empty.'}${listServers(projectId).filter((x) => x.status === 'running').length ? `
-Dev servers running in this project: ${listServers(projectId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(projectId).length ? `
-Saved launch configs (start one with start_server and just its name): ${launchConfigs(projectId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '');
+  const projectNote = () => (root ? `\n${chainsNote}\nProject "${project.name}" (${root}). ${wtree ? `This chat has its own git worktree of the project: the folder above, on the branch ${wtree.branch} (made from ${wtree.base}). Other chats work in their own copies and don't see your changes until they are merged, so commit your work on this branch when a step is done (git add, git commit); never switch branches or remove the worktree.` : 'Other chats may have worked here before you: read files before changing them.'}${fileList.length ? `\nFiles in the project folder now: ${compactPaths(fileList)}.` : ' The folder is empty.'}${listServers(folderId).filter((x) => x.status === 'running').length ? `
+Dev servers running in this project: ${listServers(folderId).filter((x) => x.status === 'running').map((x) => `"${x.name}" (${x.command}) at ${x.url}`).join('; ')}. Restart one with start_server and the same name instead of starting a new one.` : ''}${SCRATCH_RULES(space, spaceLimit)}${DOCS_NOTE(listDocs(projectId))}${launchConfigs(folderId).length ? `
+Saved launch configs (start one with start_server and just its name): ${launchConfigs(folderId).map((x) => `"${x.name}" = ${[x.command, ...x.args].join(' ')}${x.port ? ` on port ${x.port}` : ''}`).join('; ')}.` : ''}` : '');
   let systemFor = (decideOn) => BASE_RULES([...arts.values()], T.artifacts.on) + (root ? CODE_RULES + NOTES_RULES : '') + (goal ? PLAN_RULES(S.review !== 'off' && browserOn && !qaBench) : '') + (helpersOn ? helperRules(helperRoles) : '') + (browserOn ? (S.deciders === false ? BROWSER_RULES_NO_LOOK : BROWSER_RULES) : '') + (cats.length ? MEDIA_RULES(S.approval, cats, T) : '')
     + projectNote() + memory + (decideOn ? `\n${DECIDE_RULES}` : '');
   // Chats, files and projects the user attached with @: they go in the user's own message (see contentFor), next to
@@ -2062,7 +2067,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (run.loopOff) unchecked.push('Loop checks were turned off for the rest of this reply.');
     if (run.hookFailed) unchecked.push(`A reply-end hook still fails: ${run.hookFailed}`);
     if (stats.verify && !stats.verify.ok) unchecked.push(`${stats.verify.problems.length} problem${stats.verify.problems.length === 1 ? '' : 's'} from the checks ${stats.verify.problems.length === 1 ? 'is' : 'are'} still open.`);
-    const jobs = projectId ? listBackground(projectId).filter((j) => j.status === 'running' && (!req.chatId || j.chatId === req.chatId)) : [];
+    const jobs = projectId ? listBackground(folderId).filter((j) => j.status === 'running' && (!req.chatId || j.chatId === req.chatId)) : [];
     if (jobs.length) unchecked.push(`Still running in the background: ${jobs.slice(0, 3).map((j) => `${j.id} (${clip(j.label, 50)})`).join(', ')}${jobs.length > 3 ? ` and ${jobs.length - 3} more` : ''}.`);
     if (!unchecked.length) return null;
     const w = { unchecked };
@@ -2707,7 +2712,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   function builtTargets() {
     const htmlArts = [...touched.arts].filter((id) => arts.get(id)?.kind === 'html');
     // The agent's own scratch pages (self-tests in .quorx/) are not what it built.
-    const targets = [...htmlArts.map((id) => `artifact:${id}`), ...[...touched.sites].filter((p) => !/^\.?quorx[\\/]|^\.quorx/i.test(p)).map((p) => `site:${p}`), ...[...touched.apps].filter((n) => serverFor(projectId, n)?.status === 'running').map((n) => `app:${n}`)];
+    const targets = [...htmlArts.map((id) => `artifact:${id}`), ...[...touched.sites].filter((p) => !/^\.?quorx[\\/]|^\.quorx/i.test(p)).map((p) => `site:${p}`), ...[...touched.apps].filter((n) => serverFor(folderId, n)?.status === 'running').map((n) => `app:${n}`)];
     // A site opened in an earlier reply counts too when its files changed now.
     // Only a site whose own files changed: its page, or a file in its folder (for a page at the top of the project,
     // a file at the top). A change in one site doesn't send the reviewer through every other site of the project.
@@ -2720,8 +2725,8 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (dir === '.') { const refs = linked(e); return changed.some((f) => f === e || refs.has(f)); }
       return changed.some((f) => f === e || f.startsWith(`${dir}/`));
     };
-    for (const lc of launchConfigs(projectId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
-    for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${projectId}/`) && ofSite(a.url.slice(`/ws/${projectId}/`.length))) { const t = `site:${a.url.slice(`/ws/${projectId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
+    for (const lc of launchConfigs(folderId)) if (lc.args?.[0] === '.quorx/serve.mjs' && lc.args[1] && ofSite(lc.args[1])) { const t = `site:${lc.args[1]}`; if (!targets.includes(t)) targets.push(t); }
+    for (const a of arts.values()) if (a.kind === 'site' && a.url?.startsWith(`/ws/${folderId}/`) && ofSite(a.url.slice(`/ws/${folderId}/`.length))) { const t = `site:${a.url.slice(`/ws/${folderId}/`.length)}`; if (!targets.includes(t)) targets.push(t); }
     // Video Mode: the films are what was built (the site server plays them), first in line; the storyboard sheet is
     // the plan, not the build.
     if (run.video) {
@@ -2977,7 +2982,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     }
     for (const id of htmlArts) problems.push(...await checkHtml(arts.get(id).html, { label: `artifact ${id}` }));
     for (const name of touched.apps) {
-      const sv = serverFor(projectId, name);
+      const sv = serverFor(folderId, name);
       if (!sv || sv.status !== 'running') problems.push(`server "${name}" is not running${sv?.code != null ? ` (it exited with code ${sv.code})` : ''}${sv ? `. Last output: ${clip(scrubSecrets(root, serverLog(sv.key).split('\n').slice(-6).join(' | ')), 300)}` : ''}`);
     }
     if (browserOn) {
@@ -3317,7 +3322,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (name === 'desktop' && Array.isArray(args.steps)) return `Desktop app ${args.app || args.job}: ${args.steps.length} steps (${args.steps.map((x) => x?.action).filter(Boolean).join(', ')})`;
     if (name === 'desktop') return args.action === 'open' ? `Open the app "${args.app}" on your computer` : `Desktop app ${args.app || args.job}: ${args.action}${args.ref ? ` [${args.ref}]` : ''}${args.x != null ? ` at ${args.x},${args.y}` : ''}${args.text ? ` "${clip(args.text, 60)}"` : ''}${args.keys ? ` ${clip(args.keys, 40)}` : ''}`;
     if (name === 'start_server') {
-      const saved = !args.command && root && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
+      const saved = !args.command && root && launchConfigs(folderId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       return `Start server "${args.name}": ${saved ? `${[saved.command, ...saved.args].join(' ')} (saved launch config)` : [args.command, ...(args.args || [])].join(' ')}`;
     }
     if (name === 'delegate') return `Ask a helper: "${clip(args.task, 160)}"`;
@@ -3873,7 +3878,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         const g = await gateCommand(d, line, SF.shell);
         if (!g.ok) return g.text;
         const sb = SF.snapshots ? await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-        const s = await termStart({ projectId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30, env: projectEnv(root),
+        const s = await termStart({ projectId: folderId, chatId: req.chatId || null, cwd, line, shell: SF.shell, cols: Number(args.cols) || 100, rows: Number(args.rows) || 30, env: projectEnv(root),
           onExit: () => { if (sb.snap) commandChangesAsync(root, filesId, sb.snap).catch(() => { /* best effort */ }); } });
         notes.push(`opened terminal ${s.id}: ${clip(line, 60)}`);
         const scr = show(s.id, await termRead(s.id, 8000, 1000), line); // a shell can take a few seconds to start
@@ -3890,7 +3895,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
       if (act === 'avds') { const l = await listAvds(); return l.length ? `Virtual devices: ${l.join(', ')}. Boot one with start {avd}.` : 'This computer has no virtual devices (AVDs). Tell the user: one can be made in Android Studio → Device Manager, or with sdkmanager and avdmanager (a download of about 1.5 GB, so ask first).'; }
       if (act === 'start') {
         const logRel = `${SCRATCH}/logs/${runId}-emulator-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
-        const e = await startEmulator({ avd: String(args.avd || ''), projectId, chatId: req.chatId || null, cwd: root, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId }, signal });
+        const e = await startEmulator({ avd: String(args.avd || ''), projectId: folderId, chatId: req.chatId || null, cwd: root, logTo: path.join(root, logRel), logRel, term: { projectId: folderId, source: 'agent', chatId: req.chatId }, signal });
         aud({ kind: 'background', command: `emulator ${args.avd}`, by: 'tool', job: e.job, why: 'android emulator' });
         emit({ t: 'android', device: e.serial, action: act, at: at() });
         return e.booted ? `${args.avd} is running as ${e.serial} (background job ${e.job}, ${e.note}). Pass device: "${e.serial}" when more than one is connected.`
@@ -3928,14 +3933,14 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         if (!g.ok) return g.text;
         run.debugOn = true;
         const logRel = `${SCRATCH}/logs/${runId}-debug-${(run.cmdSeq = (run.cmdSeq || 0) + 1)}.log`;
-        const s = await debugStart({ projectId, cwd: root, file, args: (args.args || []).map(String), program, logTo: path.join(root, logRel), logRel, term: { projectId, source: 'agent', chatId: req.chatId } });
+        const s = await debugStart({ projectId: folderId, cwd: root, file, args: (args.args || []).map(String), program, logTo: path.join(root, logRel), logRel, term: { projectId: folderId, source: 'agent', chatId: req.chatId } });
         aud({ kind: 'background', command: line, by: g.by, job: s.job, why: 'debugger' });
         emit({ t: 'debug', id: s.id, action: 'start', file, at: at() });
         return `Debug session ${s.id} (${s.kind}) started: ${file} is paused before its first line. Set breakpoints with break, then continue. Its output goes to ${logRel}; it runs as background job ${s.job} (the job for the desktop tool, when it opens a window).${s.note ? ` ${s.note}` : ''}`;
       }
       if (act === 'attach') {
         // No new command runs: the job it attaches to was approved when it started.
-        const s = await debugAttach({ projectId, cwd: root, port: args.port });
+        const s = await debugAttach({ projectId: folderId, cwd: root, port: args.port });
         run.debugOn = true;
         emit({ t: 'debug', id: s.id, action: 'attach', file: `port ${args.port}`, at: at() });
         return `Debug session ${s.id} attached to job ${s.job} on port ${args.port}: ${s.paused ? 'paused on its first line' : 'it keeps running'}. Set breakpoints with break, then continue (trigger the code from the app if it runs on a click). stop disconnects; job_stop ends the program.`;
@@ -4135,7 +4140,7 @@ ${r.text || '(no text found)'}`;
       return r.already ? `Job ${args.job} already ${r.already}.` : `Job ${args.job}: ${r.note}.`;
     }
     if (name === 'start_server') {
-      const saved = !args.command && launchConfigs(projectId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
+      const saved = !args.command && launchConfigs(folderId).find((x) => x.name.toLowerCase() === String(args.name || '').toLowerCase());
       if (!args.command && !saved) return `Error: no saved launch config named "${args.name}"; give a command.`;
       if (saved) { args.command = saved.command; args.args = saved.args; }
       // Every server line, saved or new, gets the same check as a shell command. A plain start by node, npm, python and
@@ -4149,21 +4154,21 @@ ${r.text || '(no text found)'}`;
       if (!g.ok) return g.text;
       // What the start changed (an install, a build it runs first) goes in the snapshot, so Undo covers it as for a command.
       const sb = SF.snapshots && !d.segments.every((s) => s.cls === 'read') ? snapBefore(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-      const r = await (deps.startServer || startServer)({ projectId, name: args.name, cmd: args.command, args: (args.args || []).map(String), port: saved?.port || undefined });
+      const r = await (deps.startServer || startServer)({ projectId: folderId, name: args.name, cmd: args.command, args: (args.args || []).map(String), port: saved?.port || undefined });
       if (sb.snap) { try { commandChanges(root, filesId, sb.snap); } catch { /* best effort */ } }
       emit({ t: 'server', name: String(args.name || 'app'), url: r.url, status: r.status, at: at() });
       notes.push(`started server ${args.name} on ${r.url}`);
       touched.apps.add(String(args.name || 'app'));
       return `Server "${args.name}" is ${r.status} at ${r.url}; it opened in the user's Browser tab and is saved in the launch file. Check it with browser target app:${args.name}. Recent output:\n${r.log || '(none)'}`;
     }
-    if (name === 'stop_server') { const sv = serverFor(projectId, args.name); const r = sv && await stopServerWait(sv.key); return r ? `Stopped "${args.name}": ${stopNote(r)}.` : `No server named "${args.name}".`; }
+    if (name === 'stop_server') { const sv = serverFor(folderId, args.name); const r = sv && await stopServerWait(sv.key); return r ? `Stopped "${args.name}": ${stopNote(r)}.` : `No server named "${args.name}".`; }
     // Saved launch configs go through QuorX's own code, so the file stays valid; starting one is still checked like a command.
     if (name === 'launch_config') {
       const show = (c) => `- ${c.name}: ${[c.command, ...(c.args || [])].join(' ')}${c.port ? ` (port ${c.port})` : ''}`;
       if (args.action === 'save') {
         if (!args.name) return 'Error: give the config a name.';
         try {
-          const list = launchConfigs(projectId), byName = (n) => list.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
+          const list = launchConfigs(folderId), byName = (n) => list.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
           const old = args.old_name && byName(args.old_name);
           if (args.old_name && !old) return `Error: no saved launch config named "${args.old_name}".`;
           const next = { name: String(args.name), command: args.command ?? old?.command, args: (args.args ?? old?.args ?? []).map(String), port: args.port ?? old?.port };
@@ -4180,7 +4185,7 @@ ${r.text || '(no text found)'}`;
             emit({ t: 'approval_done', id: card.id, ...ans, at: at() });
             if (!ans.approve) return `The user kept their launch entry "${old.name}" as it is${ans.reason ? `: "${ans.reason}"` : ''}. Save yours under another name.`;
           }
-          const c = saveLaunchConfig(projectId, { ...next, oldName: args.old_name });
+          const c = saveLaunchConfig(folderId, { ...next, oldName: args.old_name });
           own.add(c.name.toLowerCase());
           notes.push(`saved launch config ${c.name}`);
           return `Saved:\n${show(c)}\nStart it with start_server and the name "${c.name}".`;
@@ -4188,11 +4193,11 @@ ${r.text || '(no text found)'}`;
       }
       if (args.action === 'remove') {
         if (!args.name) return 'Error: say which config to remove.';
-        if (!removeLaunchConfig(projectId, String(args.name))) return `No saved launch config named "${args.name}".`;
+        if (!removeLaunchConfig(folderId, String(args.name))) return `No saved launch config named "${args.name}".`;
         notes.push(`removed launch config ${args.name}`);
-        return `Removed "${args.name}" from the launch configs.${serverFor(projectId, args.name) ? ' It is still running: stop_server ends it.' : ''}`;
+        return `Removed "${args.name}" from the launch configs.${serverFor(folderId, args.name) ? ' It is still running: stop_server ends it.' : ''}`;
       }
-      const list = launchConfigs(projectId);
+      const list = launchConfigs(folderId);
       return list.length ? `Saved launch configs:\n${list.map(show).join('\n')}` : 'No saved launch configs yet.';
     }
     if (name === 'preview_site') {
@@ -4201,7 +4206,7 @@ ${r.text || '(no text found)'}`;
       // A launch entry already serving another page (or running something else) is left alone: without a name the
       // site gets its own entry named after its page ("site-receipts" for receipts/index.html); a name the agent
       // gives that is taken is refused.
-      const configs = launchConfigs(projectId), own = (run.ownConfigs ??= new Set());
+      const configs = launchConfigs(folderId), own = (run.ownConfigs ??= new Set());
       const entryOf = (n) => configs.find((x) => x.name.toLowerCase() === n.toLowerCase());
       const fits = (n) => { const x = entryOf(n); return !x || own.has(n.toLowerCase()) || (x.args?.[0] === '.quorx/serve.mjs' && String(x.args?.[1] || '').replaceAll('\\', '/') === entry.replaceAll('\\', '/')); };
       let sname = String(args.name || '').trim();
@@ -4216,7 +4221,7 @@ ${r.text || '(no text found)'}`;
       fs.mkdirSync(path.join(root, '.quorx'), { recursive: true });
       fs.copyFileSync(new URL('./serve-static.mjs', import.meta.url), path.join(root, '.quorx', 'serve.mjs'));
       const saved = configs.find((x) => x.name.toLowerCase() === sname.toLowerCase());
-      const r = await (deps.startServer || startServer)({ projectId, name: sname, cmd: 'node', args: ['.quorx/serve.mjs', entry], port: saved?.port || undefined });
+      const r = await (deps.startServer || startServer)({ projectId: folderId, name: sname, cmd: 'node', args: ['.quorx/serve.mjs', entry], port: saved?.port || undefined });
       emit({ t: 'server', name: sname, url: r.url, status: r.status, entry, at: at() });
       notes.push(`ran site ${entry} as server ${sname} on ${r.url}`);
       touched.sites.add(entry);
@@ -4296,7 +4301,7 @@ ${r.text || '(no text found)'}`;
           continue;
         }
         const sb = SF.snapshots ? await snapBeforeAsync(root, { maxBytes: SF.snapshotMaxMB * 1024 * 1024 }) : { snap: null };
-        const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, env: projectEnv(root), timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId, source: 'agent', chatId: req.chatId } });
+        const r = await runLine(root, line, { shell: SF.shell, label: `hook: ${line}`, signal, env: projectEnv(root), timeout: h.timeout * 1000, memoryMB: SF.memoryMB, term: { projectId: folderId, source: 'agent', chatId: req.chatId } });
         if (sb.snap) { try { await commandChangesAsync(root, filesId, sb.snap); } catch { /* best effort */ } }
         const ok = r.code === 0 && !r.timedOut && !r.stopped;
         const blocks = HOOK_BLOCKS.has(event) && !ok && h.feedback, sendsBack = event === 'reply_end' && !ok && h.feedback;
@@ -4481,11 +4486,11 @@ ${r.text || '(no text found)'}`;
     let termJob = null;
     // background: its program runs on after a launcher (Start-Process, code.cmd) exits, until it ends or is stopped.
     const runP = runLine(cwd, line, { shell, label, signal, env: projectEnv(root), timeout: long ? 24 * 3600e3 : SF.timeout * 1000, memoryMB: SF.memoryMB, untilEmpty: background, logTo: path.join(root, logRel),
-      term: { projectId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); }, onJob: (j) => { termJob = j; if (bg) { bg.termJob = j; markJob(j, { bg: bg.id }); } } });
+      term: { projectId: folderId, source: 'agent', chatId: req.chatId }, onStart: (p) => { proc = p; if (bg) bg.proc = p; if (trip) endProc(p); }, onJob: (j) => { termJob = j; if (bg) { bg.termJob = j; markJob(j, { bg: bg.id }); } } });
     // A job that outlives this tool call keeps its tripwire, and records what it changed when it ends. When you stop
     // it from the page while this reply still works, the agent hears about it before its next step.
     const toBackground = (why) => {
-      bg = startBackground({ projectId, chatId: req.chatId || null, termJob, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
+      bg = startBackground({ projectId: folderId, chatId: req.chatId || null, termJob, label: label || line, logTo: path.join(root, logRel), logRel, running: { promise: runP, proc },
         onDone: (j, res) => {
           stopTripwire?.();
           if (sb.snap) commandChangesAsync(root, filesId, sb.snap).catch(() => { /* best effort */ });
@@ -4759,7 +4764,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const target = String(t || '').trim();
     if (!target) {
       // Name what can be opened right now, so the next call has a real target.
-      const can = [...listServers(projectId).filter((x) => x.status !== 'stopped').map((x) => `app:${x.name}`), ...[...arts.keys()].slice(-3).map((id) => `artifact:${id}`)];
+      const can = [...listServers(folderId).filter((x) => x.status !== 'stopped').map((x) => `app:${x.name}`), ...[...arts.keys()].slice(-3).map((id) => `artifact:${id}`)];
       throw new Error(`no target was given. Pass one${can.length ? `, for example ${can.join(', ')}` : ''}; or site:<a file in the project, like index.html or assets/film.mp4>, or an http(s) URL`);
     }
     const base = `http://localhost:${runtime.port}`;
@@ -4795,16 +4800,16 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (target.startsWith('site:')) {
       // A site running from the launch file (serve.mjs) opens there: its own origin, so storage works.
       const entry = target.slice(5).replace(/^[/\\]+/, '') || 'index.html';
-      const sv = listServers(projectId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
+      const sv = listServers(folderId).find((x) => x.status !== 'stopped' && /\.quorx[/\\]serve\.mjs/.test(x.command || '') && x.url);
       // A film, a sound or a picture opens in QuorX's own plain player (centred, on black), not as a bare file.
-      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${projectId}/${entry}${MEDIA_TARGET.test(target) ? '?player=1' : ''}`;
+      return sv ? new URL(entry, sv.url).href : `${pages}/ws/${folderId}/${entry}${MEDIA_TARGET.test(target) ? '?player=1' : ''}`;
     }
     if (target.startsWith('app:')) {
       // app:<server name>, or app:<server name>/<page> for a page on it.
       const rest = target.slice(4), cut = rest.indexOf('/');
       const nm = cut >= 0 ? rest.slice(0, cut) : rest, page = cut >= 0 ? rest.slice(cut + 1) : '';
-      const sv = serverFor(projectId, nm);
-      if (!sv) throw new Error(`no server named ${nm}${launchConfigs(projectId).length ? ` (servers in the launch file: ${launchConfigs(projectId).map((x) => x.name).join(', ')}; start one with start_server)` : ''}`);
+      const sv = serverFor(folderId, nm);
+      if (!sv) throw new Error(`no server named ${nm}${launchConfigs(folderId).length ? ` (servers in the launch file: ${launchConfigs(folderId).map((x) => x.name).join(', ')}; start one with start_server)` : ''}`);
       return `http://localhost:${sv.port}/${page.replace(/^\/+/, '')}`;
     }
     throw new Error('target must be artifact:<id>, site:<path> (or file:<path>), app:<name>, or an http(s) URL');
@@ -5190,7 +5195,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function attachApp(target) {
     const port = Number(target.slice(4));
     if (!(Number.isInteger(port) && port >= 1024 && port <= 65535)) return 'Error: cdp:<port> needs a port between 1024 and 65535.';
-    const owned = listBackground(projectId).some((j) => j.status === 'running' && startedWithDevtoolsPort(j.label, port));
+    const owned = listBackground(folderId).some((j) => j.status === 'running' && startedWithDevtoolsPort(j.label, port));
     if (!owned) return `Error: none of your running background jobs was started with --remote-debugging-port=${port}. Start the app with shell (background: true) and that flag first; QuorX only attaches to apps you started.`;
     let t = null;
     for (let i = 0; i < 20 && !t; i++) { try { t = await (deps.openTab || openTab)({ cdpPort: port }); } catch (e) { if (i === 19) return `Error: ${e.message}`; await sleep(500, signal); } }
@@ -6222,7 +6227,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     madeMedia(f?.rel ? { path: f.rel, kind: art.kind } : { art: id, kind: art.kind, name: art.title });
     if (f?.rel) {
       const pic = art.kind === 'image';
-      return `${made} Saved in the project folder as ${f.rel} (${f.kb} KB); the user sees it under Files. In this project's pages use src="${f.rel}" (relative to the page); in a page artifact use src="/ws/${projectId}/${f.rel}". To look at it yourself, open site:${f.rel} in the browser${pic ? `, or give the deciders "file:${f.rel}"` : ''}.`;
+      return `${made} Saved in the project folder as ${f.rel} (${f.kb} KB); the user sees it under Files. In this project's pages use src="${f.rel}" (relative to the page); in a page artifact use src="/ws/${folderId}/${f.rel}". To look at it yourself, open site:${f.rel} in the browser${pic ? `, or give the deciders "file:${f.rel}"` : ''}.`;
     }
     saveArtifact(art);
     return `${made} Saved as artifact \`${id}\`; the user can ${art.kind === 'image' ? 'see' : 'play'} it.${f?.error ? ` (It could not be saved into the project folder: ${f.error}.)` : ''}`;
