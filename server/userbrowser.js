@@ -59,11 +59,11 @@ export async function userBrowse(sid, op, a = {}) {
   if (!/^[\w-]{6,60}$/.test(String(sid))) throw new Error('bad session');
   const real = !!a.real;
   // Your real tab is only looked at here (💬 comment mode): read, scroll and point, never click or type.
-  if (real && !['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
+  if (real && !['look', 'peek', 'scroll', 'inspect', 'text'].includes(op)) throw new Error('only looking and scrolling here');
   const s = await session(sid, a.w, a.h, real);
   if (!s) return { none: true };
   if (!s.real) return step(sid, s, op, a);
-  if (!['look', 'peek', 'scroll', 'inspect'].includes(op)) throw new Error('only looking and scrolling here');
+  if (!['look', 'peek', 'scroll', 'inspect', 'text'].includes(op)) throw new Error('only looking and scrolling here');
   // A real tab can be let go elsewhere (taken back from the agent detaches it): attach again once and retry.
   try { return await step(sid, s, op, a); } catch {
     sessions.delete(sid); s.tab.close().catch(() => {});
@@ -71,7 +71,7 @@ export async function userBrowse(sid, op, a = {}) {
   }
 }
 async function step(sid, s, op, a) {
-  if (s.locked && op !== 'look' && op !== 'peek' && op !== 'inspect') throw new Error('the agent is using this page right now: watch only until its reply ends');
+  if (s.locked && !['look', 'peek', 'inspect', 'text'].includes(op)) throw new Error('the agent is using this page right now: watch only until its reply ends');
   // 💬 Comment: what is under a point of the picture, and a cropped picture of it. Reads only; never clicks.
   if (op === 'inspect') {
     const x = Math.max(0, Math.min(s.w, Number(a.x) || 0)), y = Math.max(0, Math.min(s.h, Number(a.y) || 0));
@@ -81,6 +81,15 @@ async function step(sid, s, op, a) {
     return { hit: { ...hit, url: info }, crop: await s.tab.crop(hit.rect, hit.scroll).catch(() => null), w: s.w, h: s.h };
   }
   const t = s.tab;
+  // @page in the message box: what the page says now (address, title, text), read only. A tab of yours this browser
+  // hasn't loaded yet (one shown in a frame) is loaded at its address first.
+  if (op === 'text') {
+    const read = () => t.eval('({ url: location.href, title: document.title, text: (document.body ? document.body.innerText : "").slice(0, 30000) })');
+    let r = await read().catch(() => null);
+    if ((!r || r.url === 'about:blank') && /^https?:\/\//i.test(String(a.url || '')) && !s.locked && !s.real) { await t.open(String(a.url), { width: s.w, height: s.h, mobile: false }).catch(() => {}); r = await read().catch(() => null); }
+    if (!r) throw new Error('the page could not be read');
+    return { url: r.url, title: r.title, text: String(r.text || '') };
+  }
   if (op === 'open') {
     const url = String(a.url || '');
     if (!/^https?:\/\//i.test(url)) throw new Error('only http and https addresses can be opened');

@@ -273,3 +273,48 @@ test('send to chat: a quote goes into the message box as Markdown, and the termi
   cur = null; ui.termToChat({ title: 'x', text: 'y' }, null);
   assert.equal(alerts.at(-1), 'Open a chat first: the output goes with your next message there.');
 });
+
+test('@ mentions: terminals, pages, servers and this chat\'s changes, each read into a chip when picked', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const SNAP_CTX'), j = page.indexOf('function tokenAtCaret', i);
+  assert.ok(i >= 0 && j > i);
+  const term = { projectId: 'p1', terms: [{ id: 'u1', name: 'Terminal 1' }], order: ['j1'] };
+  const G = { term };
+  const calls = [];
+  const getJ = async (u) => {
+    calls.push(u);
+    if (u.startsWith('/api/servers/overview')) return { servers: [{ key: 'p1/dev', name: 'dev', status: 'running', url: 'http://localhost:5173' }, { key: 'p1/old', name: 'old', status: 'stopped' }] };
+    if (u.startsWith('/api/servers/log')) return { log: 'VITE ready\nlocal: http://localhost:5173' };
+    if (u.includes('&path=')) return { hunks: [{ lines: [['-', 1, null, 'const a = 1;'], ['+', null, 1, 'const a = 2;']] }] };
+    if (u.startsWith('/api/review')) return { files: [{ path: 'src/a.js', status: 'modified', added: 1, removed: 1 }, { path: 'logo.png', status: 'added', binary: true }], undone: [] };
+    return null;
+  };
+  const postJ = async (u, b) => (b.op === 'text' ? { url: 'http://localhost:5173/', title: 'Shop', text: 'Products\nCart (2)' } : null);
+  const termScreenText = (t, f) => ({ title: f === 'all' ? '⌨ Activity (last 1 command)' : '⌨ Terminal 1 (last 2 lines)', text: f === 'all' ? '$ npm test\nok' : 'PS> dir\nfoo' });
+  const browserTabs = () => [{ sid: 'agent-c1', agent: true, url: 'http://localhost:5173/', title: 'Shop' }, { sid: 'ub1', url: '', title: 'New tab' }];
+  const { mentionSources } = new Function('G', 'getJ', 'postJ', 'termScreenText', 'browserTabs', 'clip', 'DESK', `${page.slice(i, j)}; return { mentionSources };`)(
+    G, getJ, postJ, termScreenText, browserTabs, (s, n) => String(s).slice(0, n), false);
+  // Two replies changed the same files: each shows once.
+  const c = { id: 'c1', projectId: 'p1', agent: { messages: [{ role: 'user' }, { role: 'assistant', runId: 'r0', at: 0, stats: { changed: ['src/a.js'] } }, { role: 'assistant', runId: 'r1', at: 1, stats: { changed: ['src/a.js', 'logo.png'] } }] } };
+  // Nothing typed: one of each kind.
+  assert.deepEqual((await mentionSources(c, '')).map((x) => x.label), ['terminal · Terminal 1', "page · Agent's page · Shop", 'server · dev', 'changes · this chat']);
+  const all = [...await mentionSources(c, 'term'), ...await mentionSources(c, 'page'), ...await mentionSources(c, 'server'), ...await mentionSources(c, 'changes')];
+  // Typing the word narrows it to that kind.
+  assert.deepEqual((await mentionSources(c, 'serv')).map((x) => x.label), ['server · dev']);
+  assert.deepEqual((await mentionSources(c, 'term')).map((x) => x.label), ['terminal · Terminal 1', 'terminal · Activity']);
+  // What each puts in its chip.
+  const got = Object.fromEntries(await Promise.all(all.map(async (x) => { const r = await x.get(); return [r.type + (r.id === 'term-all' ? '-all' : ''), r]; })));
+  assert.equal(got.term.text, 'PS> dir\nfoo'); assert.equal(got.term.title, '⌨ Terminal 1 (last 2 lines)');
+  assert.match(got.page.text, /^Address: http:\/\/localhost:5173\/\nTitle: Shop\n\nProducts\nCart \(2\)$/);
+  assert.equal(got.page.id, 'page-agent-c1');
+  assert.match(got.server.text, /^Server "dev": running at http:\/\/localhost:5173\nVITE ready/);
+  assert.match(got.changes.text, /--- src\/a\.js \(modified, \+1 −1\)\n```diff\n@@\n-const a = 1;\n\+const a = 2;\n```/);
+  assert.match(got.changes.text, /--- logo\.png \(added\): binary/);
+  assert.equal(got.changes.title, 'Changes · 2 files');
+  assert.equal(got.changes.text.match(/--- src\/a\.js/g).length, 1);
+  // No terminal loaded for this project, no changed files: those kinds don't show.
+  G.term = { projectId: 'other', terms: [{ id: 'u1', name: 'Terminal 1' }], order: [] };
+  const bare = await mentionSources({ ...c, agent: { messages: [] } }, '');
+  assert.deepEqual(bare.map((x) => x.label), ["page · Agent's page · Shop", 'server · dev']);
+});

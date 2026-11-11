@@ -383,6 +383,8 @@ async function contextText(list) {
     const t = await fetch(`/ws/${item.projectId}/${item.path.split('/').map(encodeURIComponent).join('/')}`).then((r) => r.ok ? r.text() : '').catch(() => '');
     if (t) parts.push(`### File ${item.path} (project "${G.projects.find((p) => p.id === item.projectId)?.name || item.projectId}")\n\`\`\`\n${t.slice(0, 8000)}${t.length > 8000 ? '\n… (cut)' : ''}\n\`\`\``);
   }
+  // @page, @server, @changes: what they showed when you picked them.
+  for (const item of list.filter((x) => SNAP_CTX[x.type])) parts.push(`### ${SNAP_CTX[item.type].head}: ${item.title}\n${item.text}`);
   for (const item of list.filter((x) => x.type === 'term')) parts.push(`### Terminal output the user shared: ${item.title}\n\`\`\`\n${item.text}\n\`\`\``);
   for (const item of list.filter((x) => x.type === 'project')) {
     const p = G.projects.find((x) => x.id === item.id);
@@ -597,6 +599,80 @@ async function projectFiles(pid) {
   fileCache.set(pid, { at: Date.now(), files: files.filter((f) => !/skipped\)$/.test(f.path)) });
   return fileCache.get(pid).files;
 }
+// ---------- @terminal, @page, @server, @changes: more things to mention ----------
+// Each puts a chip above the box (removable before you send) holding what it shows when you pick it: a terminal tab's
+// last output (the same chip the terminal's ↪ sends), an open browser page's address and text, a project server's recent
+// output, or what this chat's replies changed, with the diffs. They join the @ list after the chats; typing the word
+// ("@term", "@page", "@serv", "@chan") narrows the list to that kind.
+const SNAP_CTX = {
+  page: { icon: '🌐', head: 'Browser page the user shared (address, title and text)' },
+  server: { icon: '🖥', head: 'Project server output the user shared' },
+  changes: { icon: '±', head: 'What this chat\'s replies changed (diffs)' },
+};
+const MENTION_MAX = 20000;
+const srvCache = new Map();
+async function projectServers(pid) {
+  const hit = srvCache.get(pid);
+  if (hit && Date.now() - hit.at < 5000) return hit.list;
+  const r = await getJ(`/api/servers/overview?project=${encodeURIComponent(pid)}`).catch(() => null);
+  const list = (r?.servers || []).filter((s) => s.key && (s.status !== 'stopped' || s.started));
+  srvCache.set(pid, { at: Date.now(), list });
+  return list;
+}
+// Every reply in this chat that changed files and still has some not undone, newest first.
+const changedReplies = (c) => c.agent.messages.filter((m) => m.role === 'assistant' && !m.live && m.stats?.changed?.length && m.undone !== true).reverse();
+async function mentionSources(c, q) {
+  const word = (w) => !q || w.startsWith(q);
+  const out = [];
+  // Terminals: your own tabs in this project, and the commands the agent and you ran (Activity). Only the project whose
+  // terminal is loaded here (loading another would close that one's stream).
+  const t = G.term?.projectId === c.projectId ? G.term : null;
+  const tabs = !t ? [] : [...t.terms.map((u) => ({ f: u.id, name: u.name })), ...(t.order.length ? [{ f: 'all', name: 'Activity' }] : [])];
+  for (const x of tabs) if (word('terminal') || x.name.toLowerCase().includes(q)) out.push({ icon: '⌨', label: `terminal · ${x.name}`, hint: 'its last output', kind: 'src', get: async () => { const it = termScreenText(t, x.f); return it && { type: 'term', id: `term-${x.f}`, title: it.title, text: it.text.slice(-MENTION_MAX) }; } });
+  // Pages: the browser tabs open in this project, and this chat's agent tab.
+  for (const b of browserTabs(c).filter((x) => /^https?:/i.test(x.url || ''))) {
+    const name = b.agent ? `Agent's page · ${b.title || b.url}` : b.title || b.url;
+    if (word('page') || `${b.title} ${b.url}`.toLowerCase().includes(q)) out.push({ icon: '🌐', label: `page · ${clip(name, 50)}`, hint: clip(b.url.replace(/^https?:\/\//, ''), 40), kind: 'src', get: async () => {
+      const r = await postJ('/api/ubrowser', { sid: b.sid, op: 'text', url: b.url, ...(DESK && !b.agent ? { real: true } : {}) });
+      if (r?.error || r?.none) throw new Error(r?.error || 'the page is not open any more');
+      return { type: 'page', id: `page-${b.sid}`, title: clip(r.title || b.title || r.url, 60), text: `Address: ${r.url}\nTitle: ${r.title || ''}\n\n${r.text}`.slice(0, MENTION_MAX) };
+    } });
+  }
+  // Servers: this project's servers that run, or ran, with their recent output.
+  for (const s of await projectServers(c.projectId)) if (word('server') || s.name.toLowerCase().includes(q)) out.push({ icon: '🖥', label: `server · ${s.name}`, hint: `${s.status}${s.url ? ` · ${s.url.replace(/^https?:\/\//, '')}` : ''}`, kind: 'src', get: async () => {
+    const r = await getJ(`/api/servers/log?key=${encodeURIComponent(s.key)}`);
+    const lines = String(r?.log || '').split('\n'), cut = lines.length > 200;
+    return { type: 'server', id: `server-${s.key}`, title: `${s.name} (${s.status})`, text: `Server "${s.name}": ${s.status}${s.url ? ` at ${s.url}` : ''}\n${(cut ? ['… (earlier lines cut)', ...lines.slice(-200)] : lines).join('\n')}`.slice(-MENTION_MAX) };
+  } });
+  // Changes: what this chat's replies changed (the newest three), file by file, with the diffs.
+  const reps = changedReplies(c);
+  if (reps.length && (word('changes') || word('diff'))) {
+    const n = new Set(reps.flatMap((m) => m.stats.changed.filter((p) => !(m.undoneFiles || []).includes(p)))).size;
+    out.push({ icon: '±', label: 'changes · this chat', hint: `${n} file${n === 1 ? '' : 's'} its replies changed, with the diffs`, kind: 'src', get: () => changesText(c, reps.slice(0, 3)) });
+  }
+  // Nothing typed yet: one of each kind, so every kind shows (typing its word lists them all).
+  return q ? out : out.filter((x, i) => out.findIndex((y) => y.label.split(' · ')[0] === x.label.split(' · ')[0]) === i);
+}
+async function changesText(c, reps) {
+  const parts = [], q = (m) => `project=${encodeURIComponent(c.projectId)}&run=${encodeURIComponent(m.stats?.undoId || m.runId)}`;
+  // Newest reply first: a file changed by several replies shows once, as the newest reply left it against its copy.
+  let files = 0; const seen = new Set();
+  for (const m of reps) {
+    const r = await getJ(`/api/review?${q(m)}`);
+    if (r?.error) { parts.push(`(A reply from ${new Date(m.at).toLocaleString()}: ${r.error})`); continue; }
+    for (const f of r.files) {
+      if (seen.has(f.path)) continue;
+      seen.add(f.path); files++;
+      const head = `${f.path} (${f.status}${f.added != null ? `, +${f.added} −${f.removed}` : ''}${f.changedSince ? ', changed again since' : ''})`;
+      if (f.binary || f.large) { parts.push(`--- ${head}: ${f.binary ? 'binary' : 'too large to show'}`); continue; }
+      const d = await getJ(`/api/review?${q(m)}&path=${encodeURIComponent(f.path)}`);
+      const body = (d?.hunks || []).map((h) => `@@\n${h.lines.map(([t, , , line]) => `${t}${line}`).join('\n')}`).join('\n');
+      parts.push(`--- ${head}\n\`\`\`diff\n${body || '(no line changes)'}\n\`\`\``);
+      if (parts.join('\n').length > MENTION_MAX) break;
+    }
+  }
+  return { type: 'changes', id: 'changes-chat', title: `Changes · ${files} file${files === 1 ? '' : 's'}`, text: parts.join('\n\n').slice(0, MENTION_MAX) };
+}
 function tokenAtCaret(ta) {
   const before = ta.value.slice(0, ta.selectionStart);
   // / at the start: the command, then (after a space) what it takes next.
@@ -631,8 +707,13 @@ async function updateSuggest(c) {
     const match = (s) => !q || String(s).toLowerCase().includes(q);
     const here = chats.filter((x) => x.projectId === c.projectId && match(x.title)).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
     const elsewhere = chats.filter((x) => x.projectId !== c.projectId && match(x.title)).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+    const srcs = pick(await mentionSources(c, q).catch(() => []), 4);
+    // Typing a kind's word (@term, @page, @serv, @chan): that kind first, ahead of chats whose titles happen to match.
+    const kindFirst = q && srcs.length && ['terminal', 'page', 'server', 'changes', 'diff'].some((w) => w.startsWith(q));
     items = [
+      ...(kindFirst ? srcs : []),
       ...pick(here, 4).map((x) => ({ icon: '💬', label: x.title, hint: `chat · ${ago(x.lastAt || x.updated)}`, kind: 'chat', value: x })),
+      ...(kindFirst ? [] : srcs),
       ...pick(files.filter((f) => match(f.path)), 5).map((f) => ({ icon: '📄', label: f.path, hint: 'file in this project', kind: 'file', value: f })),
       ...pick(elsewhere, 3).map((x) => ({ icon: '💬', label: x.title, hint: `chat in ${G.projects.find((p) => p.id === x.projectId)?.name || x.projectId}`, kind: 'chat', value: x })),
       ...pick(G.projects.filter((p) => p.id !== c.projectId && match(p.name)), 3).map((p) => ({ icon: '📁', label: p.name, hint: 'another project: its notes and file list', kind: 'project', value: p })),
@@ -673,6 +754,7 @@ function chooseSuggest(c, i, how = 'run') {
     if (how === 'complete') return put(`/${it.cmd} ${it.value}`);
     ta.value = ''; ta.dispatchEvent(new Event('input')); runCommand(c, `/${it.cmd} ${it.value}`); ta.focus(); return;
   }
+  if (it.kind === 'src') return chooseSource(c, it, before, after);
   if (it.kind === 'chat') c.ctx.push({ type: 'chat', id: it.value.id, title: it.value.title });
   if (it.kind === 'file') c.ctx.push({ type: 'file', projectId: c.projectId, path: it.value.path, title: it.value.path });
   if (it.kind === 'project') c.ctx.push({ type: 'project', id: it.value.id, title: `📁 ${it.value.name}` });
@@ -684,6 +766,20 @@ function chooseSuggest(c, i, how = 'run') {
   ta.selectionStart = ta.selectionEnd = head.length + gap.length;
   ta.dispatchEvent(new Event('input'));
   ta.focus(); renderAttachments(c);
+}
+// A picked @terminal, @page, @server or @changes: the @word goes from the box, and the chip comes once what it shows is
+// read (the same chip path as the terminal's ↪: sendToChat). A second pick of the same thing replaces the first.
+async function chooseSource(c, it, before, after) {
+  const ta = $('.input', c.el.root);
+  const head = before.replace(/[ \t]+$/, ''), tail = after.replace(/^[ \t]+/, ''), gap = head && tail && !/\s$/.test(head) && !/^\s/.test(tail) ? ' ' : '';
+  ta.value = head + gap + tail; ta.selectionStart = ta.selectionEnd = head.length + gap.length;
+  ta.dispatchEvent(new Event('input')); ta.focus();
+  let x;
+  try { x = await it.get(); } catch (e) { return flashTip(ta, `Couldn't read it: ${e.message}`, 2600); }
+  if (!x?.text?.trim()) return flashTip(ta, 'Nothing to add: it shows nothing yet', 2200);
+  c.ctx = c.ctx.filter((y) => !(y.type === x.type && y.id === x.id));
+  sendToChat(c, x.text, { title: x.title, type: x.type, from: ta });
+  const last = c.ctx.at(-1); if (last) { last.id = x.id; renderAttachments(c); }
 }
 async function openNotes(c) {
   G.view.files = true; G.view.run = false; syncLayout(); await renderFiles(c);
@@ -721,7 +817,7 @@ function renderAttachments(c) {
   const box = c.el && $('.attachments', c.el.root);
   if (!box) return;
   box.innerHTML = (c.comments || []).map((x, i) => `<span class="cmt-chip cmp-att-item" title="${esc(x.note || 'No note: the agent will ask what to change')}">${x.crop ? `<img src="${x.crop}" alt="">` : ''}<span class="cmt-what">💬 <b>${esc(x.tag)}</b> ${esc(clip(x.text || x.selector, 40))}</span><button type="button" data-cmt="${i}" aria-label="Remove this comment">✕</button></span>`).join('')
-    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : x.type === 'term' ? 'termout' : 'chat'}" title="${x.type === 'term' ? esc(clip(x.text, 600)) : 'Attached as context for your next message'}">${x.type === 'file' ? '📄' : x.type === 'project' || x.type === 'term' ? '' : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
+    + c.ctx.map((x, i) => `<span class="ctx-chip cmp-att-item ${x.type === 'file' ? 'file' : x.type === 'project' ? 'project' : x.type === 'term' ? 'termout' : SNAP_CTX[x.type] ? `snap ${x.type}` : 'chat'}" title="${x.type === 'term' || SNAP_CTX[x.type] ? esc(clip(x.text, 600)) : 'Attached as context for your next message'}">${x.type === 'file' ? '📄' : x.type === 'project' || x.type === 'term' ? '' : SNAP_CTX[x.type] ? SNAP_CTX[x.type].icon : '💬'} ${esc(x.title)}<button type="button" data-ctx="${i}" aria-label="Remove">✕</button></span>`).join('')
     + c.images.map((x, i) => `<span class="img-chip cmp-att-item image"><img src="${x.thumb}" alt="attached image ${i + 1}"><button type="button" data-img="${i}" aria-label="Remove image">✕</button></span>`).join('')
     + (c.docs || []).map((d, i) => docChip(d, i)).join('')
     + ((G.lent ||= {})[c.id] ? `<span class="lent-chip cmp-att-item" title="The agent can work in this tab of yours (signed in as you) in this chat. Sending, deleting, buying and account changes ask you first."><span class="lent-ico" aria-hidden="true">🤖</span><span class="lent-l">${G.lent[c.id].chrome ? 'Your Chrome tab' : 'Your tab'}</span><b>${esc(clip(G.lent[c.id].title || G.lent[c.id].url, 40))}</b><button type="button" class="lent-back" title="Take the tab back: the agent can no longer use it">Take back</button></span>` : '');
