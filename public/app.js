@@ -13419,7 +13419,7 @@ const RUN_KIND = { background: 'Background', command: 'Command', 'agent-term': '
 const dur = (ms) => (ms < 59500 ? `${Math.max(0, Math.round(ms / 1000))}s` : secs(ms));
 async function refreshRunning(c) {
   const r = await getJ(`/api/running?project=${encodeURIComponent(spaceOf(c))}`);
-  if (r && !r.error) (G.runCount ||= {})[c.projectId] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
+  if (r && !r.error) (G.runCount ||= {})[spaceOf(c)] = { n: r.items.filter((x) => x.kind !== 'your-term').length };
   renderPaneTabs(c);
   drawRunningPane(c, r);
 }
