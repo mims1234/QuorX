@@ -12348,6 +12348,8 @@ function deskAgentEvent(ev) {
   });
 }
 
+// How much works now, from /api/busy (replies, servers, commands); 0 when it couldn't be asked.
+const busyCount = (b) => (b && !b.error ? (b.replies?.length || 0) + (b.servers?.length || 0) + (b.commands?.length || 0) : 0);
 // ⚙ Settings → About, in the desktop app only: start at login (applied right away) and the data folder.
 async function drawDesktopSettings() {
   const box = $('#stDesktop'); if (!box || !DESK) return;
@@ -12370,7 +12372,8 @@ async function drawDesktopSettings() {
     if (v) for (const x of box.querySelectorAll('#stDeskClose .st-seg-btn')) { x.classList.toggle('active', x.dataset.v === v); x.setAttribute('aria-checked', String(x.dataset.v === v)); }
   };
   const quit = $('#stDeskQuit');
-  if (quit) quit.onclick = async () => { if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and scheduled tasks wait until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
+  // With something still working the desktop app asks itself, naming it (desktop/quit-prompt.js): no second question here.
+  if (quit) quit.onclick = async () => { if (info.ownsServer && busyCount(await getJ('/api/busy').catch(() => null))) return window.ohDesktop.quit(); if (await uiConfirm(info.ownsServer ? 'Quit QuorX? The harness stops too, and scheduled tasks wait until you open QuorX again.' : 'Close QuorX? The harness it is attached to keeps running.')) window.ohDesktop.quit(); };
   const st = await window.ohDesktop.update('state').catch(() => ({}));
   const feed = $('#stDeskFeed');
   if (feed) feed.value = st.url || '';
