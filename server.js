@@ -19,7 +19,7 @@ import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsag
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -212,6 +212,21 @@ const server = http.createServer(async (req, res) => {
     // A short brief of a whole chat (/fresh, and attaching a chat to another), cached until the chat changes.
     const brm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/brief$/i);
     if (brm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, await briefForChat(brm[1], { model: b.model })); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // Compact, by the context meter: older turns become a summary now, with the chat's own model. Its cost goes to the
+    // ledger (and the page adds it to the chat) like a review's.
+    const cpm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/compact$/i);
+    if (cpm && req.method === 'POST') {
+      if (!validId(cpm[1])) return json(res, 400, { error: 'bad chat id' });
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      const st = budgetState(cpm[1]);
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to compact it.' });
+      try {
+        const r = await compactChat(cpm[1], { settings: { sourceFallback: b.sourceFallback, fallbackModel: b.fallbackModel } });
+        const id = `cp-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'compact', project: getChat(cpm[1])?.projectId || 'scratch', chatId: cpm[1], model: r.model, stop: 'compact', cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message, nothing: !!e.nothing }); }
+    }
     // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
     const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);
     if (trm && req.method === 'GET') { const t = getTrace(trm[1], trm[2]); return t ? json(res, 200, t) : json(res, 404, { error: 'no such steps' }); }
