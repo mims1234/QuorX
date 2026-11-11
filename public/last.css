@@ -3097,6 +3097,8 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .sb-sched { flex: none; margin-left: 5px; font: 600 9.5px/14px var(--mono); padding: 0 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--text); }
 .sb-sched.on { border-color: color-mix(in srgb, var(--ok, #22c55e) 55%, var(--line)); }
 .sb-sched.off { color: var(--muted); }
+/* An unsent draft waits in the chat's box: a quiet italic tag, not a status colour or a button. */
+.sb-draft { flex: none; margin-left: 5px; font: italic 500 10px/14px var(--font, inherit); padding: 0 4px; border-radius: 4px; border: 1px dashed var(--line); color: var(--muted); }
 .u-fresh { margin-left: 6px; font: 10.5px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px dashed var(--line); color: var(--muted); white-space: nowrap; }
 .stop-sched { color: var(--red, #ef4444); }
 /* ⚙ Models → Blocked providers */
