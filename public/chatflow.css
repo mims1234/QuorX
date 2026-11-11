@@ -218,3 +218,9 @@ html:root body .msg .tl-at.tl-same > .tl-t { display: none; }
 /* Messages off screen are not laid out or painted until they come near: a long chat costs the browser only the part
    in view (the size each one had is remembered, so the scrollbar stays steady once a message has been seen). */
 .msgs > .msg { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+
+/* 🔊 Read aloud (app.js, "read a reply aloud"): the button stays lit while it reads, and the sentence being read is marked
+   with a CSS highlight, so the message's own markup never changes. */
+.mt-btn.mt-speak.on { color: var(--accent); background: var(--accent-dim); border-color: var(--accent-border, var(--accent)); }
+.mt-btn.mt-speak.on svg { fill: currentColor; }
+::highlight(qx-speak) { background-color: var(--accent-dim); color: var(--text-bright, var(--text)); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }

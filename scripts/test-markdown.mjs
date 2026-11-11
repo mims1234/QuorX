@@ -5,6 +5,7 @@ import './test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderMarkdown as md, stableCut } from '../public/markdown.js';
+import { sentencePieces, pickVoice } from '../public/speak.js';
 
 const REPLIES = [
   'Here is the plan.\n\n1. First item\n2. Second item\n\n3. Third after a blank line\n\n- a\n  - nested b\n    - deeper c\n- d\n\nSome **bold**, *italic*, `code` and a [link](https://example.com).',
@@ -64,4 +65,23 @@ test('markdown: the finished part never ends inside a code fence or a math block
   assert.equal(stableCut('a\n\n'), 3, 'a blank line with a line after it');
   assert.equal(stableCut('a\n'), 0, 'the last line is still being written');
   assert.equal(stableCut('a\r\n\r\nb'), 0, 'text with \\r is drawn whole');
+});
+
+// 🔊 Read aloud (public/speak.js): the sentences read and lit one at a time, and the voice that reads them.
+test('read aloud: a reply splits into the sentences it reads, with offsets for the highlight; a local voice in the language reads them', () => {
+  const text = 'The game now saves your high score.  It shows under the score! Reload to see it? Version 2.1 works.';
+  const parts = sentencePieces(text, 'en');
+  assert.deepEqual(parts.map((x) => x.text), ['The game now saves your high score.', 'It shows under the score!', 'Reload to see it?', 'Version 2.1 works.']);
+  for (const x of parts) assert.equal(text.slice(x.from, x.to), x.text, 'the offsets cover the sentence, without the spaces around it');
+  assert.deepEqual(sentencePieces('— • ', 'en'), [], 'nothing with no letter or digit is read');
+  assert.deepEqual(sentencePieces('', 'en'), []);
+  assert.deepEqual(sentencePieces('No full stop at the end', 'xx-not-a-lang').map((x) => x.text), ['No full stop at the end'], 'an odd language still splits');
+  const v = (name, lang, local = true, def = false) => ({ name, lang, localService: local, default: def });
+  const voices = [v('Online US', 'en-US', false, true), v('David', 'en-US', true, false), v('Zira', 'en-US', true, false), v('Hazel', 'en-GB'), v('Hortense', 'fr-FR')];
+  assert.equal(pickVoice(voices, 'en-US').name, 'David', 'a voice on this computer before one that sends the text away');
+  assert.equal(pickVoice([v('David', 'en-US'), v('Zira', 'en-US', true, true)], 'en-US').name, 'Zira', 'the system default first');
+  assert.equal(pickVoice(voices, 'en-IN').name, 'David', 'the same language family');
+  assert.equal(pickVoice(voices, 'fr_FR').name, 'Hortense');
+  assert.equal(pickVoice([v('Online', 'en-US', false, true)], 'de-DE').name, 'Online', 'nothing local: the default');
+  assert.equal(pickVoice([], 'en-US'), null, 'no voices yet: the browser picks');
 });
