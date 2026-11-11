@@ -117,3 +117,31 @@ test('the summon key: registered when on, the old key let go on a change, off wh
   st = applySummon(gs, { on: false, key: st.key }, st, fire);
   assert.equal(mine.size, 0, 'turned off: unregistered');
 });
+
+test('device sizes for the Browser tab: presets, your own size, turning sideways, and fitting the pane', async () => {
+  const { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } = await import('../public/devices.js');
+  assert.deepEqual(DEVICES.map((d) => d.id), ['phone', 'phone-l', 'tablet', 'laptop', 'desktop']);
+  const phone = preset('phone');
+  assert.deepEqual(phone, { id: 'phone', name: 'Phone', w: 390, h: 844, mobile: true });
+  assert.equal(preset('nope'), null);
+  assert.deepEqual(parseSize('1024x768'), { w: 1024, h: 768 });
+  assert.deepEqual(parseSize(' 800 × 600 '), { w: 800, h: 600 });
+  assert.deepEqual(parseSize('640,480'), { w: 640, h: 480 });
+  for (const bad of ['', 'big', '100x100', '5000x800', '1024']) assert.equal(parseSize(bad), null, bad);
+  assert.equal(custom(500, 900).mobile, true, 'a narrow size of your own is a touch screen');
+  assert.equal(custom(1280, 720).mobile, false);
+  const side = rotate(phone);
+  assert.deepEqual([side.w, side.h, side.turned], [844, 390, true]);
+  assert.deepEqual([rotate(side).w, rotate(side).turned], [390, false]);
+  assert.equal(rotate(null), null);
+  assert.deepEqual(fitBox(phone, { width: 800, height: 1000 }), { scale: 1, width: 390, height: 844 }, 'never scaled up');
+  const f = fitBox(phone, { width: 600, height: 422 });
+  assert.equal(f.scale, 0.5); assert.deepEqual([f.width, f.height], [195, 422]);
+  assert.equal(fitBox(preset('desktop'), { width: 960, height: 2000 }).scale, 0.5, 'the narrower side decides');
+  assert.equal(deviceLabel(null), 'Fit');
+  assert.equal(deviceLabel(phone), 'Phone 390×844');
+  assert.equal(deviceLabel(phone, 0.62), 'Phone 390×844 · 62%');
+  assert.equal(deviceLabel(custom(1000, 700)), '1000×700');
+  assert.deepEqual(deviceMetrics(phone), { width: 390, height: 844, mobile: true });
+  assert.equal(deviceMetrics(null), null);
+});
