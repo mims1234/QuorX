@@ -7053,7 +7053,7 @@ function setPaneHidden(on, quiet) {
   G.paneHidden = !!on;
   syncPaneToggles();
   $('.layout')?.classList.toggle('pane-hidden', G.paneHidden);
-  if (!POP) { try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* this session only */ } }
+  if (!POP) { try { localStorage.setItem('oh-pane-hidden', G.paneHidden ? '1' : '0'); } catch { /* kept until the page reloads */ } }
   if (!quiet) { syncLayout?.(); deskPlace?.(true); window.dispatchEvent(new Event('resize')); }
 }
 function paneVisible() {
