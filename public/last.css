@@ -1118,9 +1118,9 @@ body.top-in-sidebar .sb-titlebar .spend .sp-tip { left: 0 !important; right: aut
 .sb-foot-btns:empty { display: none; }
 .sb-foot .top-btn { width: 28px !important; height: 28px !important; min-height: 0 !important; padding: 0 !important; display: grid; place-items: center; font-size: 14px; }
 .sb-foot .upd-note { height: 24px; padding: 0 8px; font-size: 11px; }
-#restartBtn.stale, #railRestart.stale { color: var(--amber, #f59e0b) !important; border-color: var(--amber, #f59e0b) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber, #f59e0b) 30%, transparent); animation: restart-pulse 1.6s ease-in-out infinite; }
+#restartBtn.stale, #railRestart.stale, #wrRestart.stale { color: var(--amber, #f59e0b) !important; border-color: var(--amber, #f59e0b) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber, #f59e0b) 30%, transparent); animation: restart-pulse 1.6s ease-in-out infinite; }
 @keyframes restart-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--amber, #f59e0b) 18%, transparent); } }
-:root.reduce-motion #restartBtn.stale, :root.reduce-motion #railRestart.stale { animation: none; }
+:root.reduce-motion #restartBtn.stale, :root.reduce-motion #railRestart.stale, :root.reduce-motion #wrRestart.stale { animation: none; }
 .sb-rail-foot { margin-top: auto; display: grid; gap: 4px; padding-bottom: 8px; }
 /* the "pick a folder" badge is a compact icon (it overlapped the name) */
 .sb-ph .sb-missing.needs { flex: none; width: 22px; height: 22px; min-height: 0 !important; padding: 0 !important; display: grid; place-items: center; border-radius: 6px; font-size: 12px; margin-left: 4px; }

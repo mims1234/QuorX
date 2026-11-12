@@ -90,3 +90,13 @@ test('after a full test pass: the tour points at the new shell, ＋ stays reacha
   // A slash command clears the saved draft too, even when its card redraws the chat before the save.
   assert.match(app, /runCommand\(c, t\.trim\(\)\)\) \{ ta\.value = ''; c\.unsent = ''; return; \}/);
 });
+
+test('activity bar: ⟳ restarts the harness from just above ⚙, turns amber when a restart is needed and spins while it runs', () => {
+  const ws = read('public/workspace.css'), last = read('public/last.css');
+  assert.match(app, /id="wrRestart" data-act="restart"[^`]*`\n\s*\+ `<button type="button" class="wr-btn" data-act="settings"/);
+  assert.match(app, /if \(b\.dataset\.act === 'restart'\) return \$\('#restartBtn'\)\?\.disabled \? undefined : restartHarness\(\);/);
+  assert.match(app, /for \(const b of \['#restartBtn', '#railRestart', '#wrRestart'\]/);
+  assert.match(last, /#restartBtn\.stale, #railRestart\.stale, #wrRestart\.stale \{/);
+  assert.match(ws, /\.ws-rail #wrRestart\.spinning svg \{ animation: ohSpin/);
+  assert.equal((app.match(/id="wrRestart"/g) || []).length, 1);
+});
