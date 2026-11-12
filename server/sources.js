@@ -25,7 +25,7 @@ import { findOnPath, localModels, localStream, ensureLocalServer, localServer, L
 import { failureKind } from './errors.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
-import { ACP_SOURCES, ACP_IDS, acpModels, acpStream, acpRunning } from './acp.js';
+import { ACP_SOURCES, ACP_IDS, acpModels, acpStream, acpRunning, authFor } from './acp.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { LOCAL_HTTP, LOCAL_HTTP_IDS, localHttpModels, localHttpStream, ensureLocalHttp, localHttpServer, findLocalApp } from './localhttp.js';
@@ -84,7 +84,7 @@ export const SOURCES = {
     // the desktop tool: the model says it can't, instead of starting and stalling.
     noDesktop: 'Grok Build models in QuorX read text only and stop short of long steps like drawing, so 🖥 Computer use is off with them. Pick a Claude Code model, or an OpenRouter model that sees pictures, to use apps on this computer.',
   },
-  // Subscription-login ACP CLIs on this computer (acp.js): Antigravity, Codex, Gemini CLI, Copilot, Cursor, Droid, Kimi, Qwen.
+  // Coding CLIs on this computer that speak ACP (acp.js): Antigravity (API key / Google Cloud only), Codex, Copilot, Cursor, Droid, Kimi, Qwen.
   ...ACP_SOURCES,
   // The model makers' own APIs (directapi.js), each with the user's key, billed per call at the provider's prices.
   ...Object.fromEntries(DIRECT_IDS.map((id) => {
@@ -99,7 +99,7 @@ const APPS = {
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
   // Listing an ACP CLI's models opens a session and checks its sign-in without calling a model.
-  ...Object.fromEntries(ACP_IDS.map((id) => [id, { list: () => acpModels(id), stream: (b, sg, t, th, o) => acpStream(id, b, sg, t, th, o), check: async () => {}, server: () => ({ running: acpRunning(id) > 0, calls: acpRunning(id), perCall: true }) }])),
+  ...Object.fromEntries(ACP_IDS.map((id) => [id, { list: () => acpModels(id, { env: acpEnv(id) }), stream: (b, sg, t, th, o) => acpStream(id, b, sg, t, th, { ...o, env: acpEnv(id) }), check: async () => {}, server: () => ({ running: acpRunning(id) > 0, calls: acpRunning(id), perCall: true }) }])),
   // Ollama's server is started when the user wants it; listing its models is the check.
   [OLLAMA_ID]: { list: () => ollamaModels(), stream: ollamaStream, check: () => ensureOllama(), server: ollamaServer },
   ...Object.fromEntries(LOCAL_HTTP_IDS.map((id) => [id, {
@@ -161,6 +161,15 @@ export function keyFor(id) {
   for (const e of def.envs || [def.env]) if (e && process.env[e]) return { key: process.env[e], from: 'env', env: e };
   return null;
 }
+// Extra environment for an ACP CLI: Antigravity signs in with the Gemini key saved for Google Gemini (⚙ Settings → Providers),
+// when the environment doesn't carry one already.
+function acpEnv(id) {
+  if (!ACP_SOURCES[id]?.authOnly?.includes('gemini-api-key') || process.env.GEMINI_API_KEY) return {};
+  const k = keyFor('gemini-api');
+  return k?.key ? { GEMINI_API_KEY: k.key } : {};
+}
+// A CLI that may sign in only some ways (Antigravity) and has none of them set up: why, else ''.
+const authMissing = (id) => (authFor(SOURCES[id], acpEnv(id)) === null ? `${SOURCES[id].name} needs a Gemini API key (⚙ Settings → Providers → Google Gemini) or Google Cloud: Google’s terms keep its personal sign-in out of other apps` : '');
 /** The address an API or local HTTP source with a configurable base is called at: the one set in ⚙ Settings, else its own. */
 export const baseFor = (id) => (SOURCES[id]?.base ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
 /** For a maker's API: whether its models also take the place of the same models on OpenRouter ('direct'), or not ('openrouter'). */
@@ -171,13 +180,14 @@ const appBin = (d) => (d ? (d.apps || [d.app]).find((a) => a && findOnPath(a)) |
 const localInstalled = (id, d) => !!(d.portServer || cleanBase(load()[id]?.base) || (id === 'foundry-local' && process.env.FOUNDRY_LOCAL_HOST) || findLocalApp(id) || appBin(d));
 const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : localInstalled(id, d)); };
 /** Whether a source's models show in the pickers: switched on, and its app installed (or its key in). */
-export const sourceOn = (id) => !!load()[id]?.on && ready(id);
+export const sourceOn = (id) => !!load()[id]?.on && ready(id) && !authMissing(id);
 /** Why a source's models can't run now (no key, not installed, switched off), or ''. */
 export function sourceOffWhy(id) {
   const d = SOURCES[id];
   if (!d) return 'no such source';
   if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → Providers)`;
   if (!d.needsKey && !localInstalled(id, d)) return `${d.name} is not installed (⚙ Settings → Providers)`;
+  if (authMissing(id)) return authMissing(id);
   return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → Providers)`;
 }
 // What is kept: each source's switch, the key of one that takes a key, and a configurable address / routing.
@@ -212,6 +222,7 @@ export function setSourceOn(id, on) {
   const d = SOURCES[id];
   if (on && d.needsKey && !keyFor(id)) throw new Error(`Add your ${d.name} key first.`);
   if (on && !d.needsKey && !localInstalled(id, d)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
+  if (on && authMissing(id)) throw new Error(`${authMissing(id)}.`);
   const s = tidy(load());
   s[id] = { ...(s[id] || {}), on: !!on };
   save(s);

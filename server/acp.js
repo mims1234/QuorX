@@ -1,6 +1,8 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Subscription-login coding CLIs on this computer that speak the Agent Client Protocol (ACP, JSON-RPC 2.0 over stdio):
-// Google Antigravity, OpenAI Codex, Gemini CLI, GitHub Copilot, Cursor, Factory Droid, Kimi Code and Qwen Code.
+// Google Antigravity, OpenAI Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code and Qwen Code.
+// Google Antigravity runs only on a Gemini API key or Google Cloud: Google's Additional Terms (section 6) keep its
+// personal sign-in (Free, AI Pro, Ultra) out of third-party agent apps, so QuorX never uses that sign-in.
 //   - The user signs in once with each CLI's own login command; QuorX never reads or copies its tokens.
 //   - Every call runs in an empty folder of QuorX's own (data/<source>), with fs:false, terminal:false and no MCP
 //     servers. Any built-in tool the agent asks permission to run (session/request_permission) or starts (tool_call) is
@@ -19,7 +21,6 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, callKey, notR
 
 export const ANTIGRAVITY_ID = 'antigravity-local';
 export const CODEX_ID = 'codex-local';
-export const GEMINI_CLI_ID = 'gemini-local';
 export const COPILOT_ID = 'copilot-local';
 export const CURSOR_ID = 'cursor-local';
 export const DROID_ID = 'droid-local';
@@ -30,21 +31,17 @@ export const ACP_SOURCES = {
   [ANTIGRAVITY_ID]: {
     id: ANTIGRAVITY_ID, name: 'Google Antigravity on this PC', short: 'Antigravity', app: 'agy', apps: ['agy', 'agy_acp_server'], appName: 'Google Antigravity',
     acpArgs: (exe) => (/agy_acp_server/i.test(path.basename(String(exe || ''))) ? (process.platform === 'linux' ? ['--uid='] : []) : ['acp']),
-    billing: 'mixed', local: true, planLabel: 'Antigravity', providerName: 'Google Antigravity', maker: 'google', dev: 'google', login: 'agy acp --login',
+    billing: 'mixed', local: true, planLabel: 'Antigravity', providerName: 'Google Antigravity', maker: 'google', dev: 'google', update: 'agy update', minVersion: '1.5.0',
+    // Only these sign-ins, never the personal one (oauth-personal / a cached personal token): see authFor().
+    authOnly: ['gemini-api-key', 'agent-platform'],
     site: 'https://antigravity.google', keyUrl: 'https://antigravity.google/docs/cli/acp/', docs: 'https://antigravity.google/docs/cli/acp/',
-    keyHint: 'No key: QuorX uses the account you signed in to Antigravity with (agy acp --login).', install: 'winget install Google.AntigravityCLI',
+    keyHint: 'Runs on your Gemini API key (⚙ Settings → Providers → Google Gemini) or Google Cloud (GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION), billed per call. Google’s terms don’t allow its personal sign-in in other agent apps.', install: 'winget install Google.AntigravityCLI',
   },
   [CODEX_ID]: {
     id: CODEX_ID, name: 'Codex on this PC', short: 'Codex', app: 'codex-acp', apps: ['codex-acp'], appName: 'Codex',
     acpArgs: () => [], billing: 'mixed', local: true, planLabel: 'ChatGPT', providerName: 'OpenAI through Codex', maker: 'openai', dev: 'openai', login: 'codex login',
     site: 'https://developers.openai.com/codex/cli', keyUrl: 'https://developers.openai.com/codex/cli', docs: 'https://github.com/agentclientprotocol/codex-acp',
     keyHint: 'No key: QuorX uses the ChatGPT plan or key you signed in to Codex with (codex login).', install: 'npm i -g @openai/codex @agentclientprotocol/codex-acp',
-  },
-  [GEMINI_CLI_ID]: {
-    id: GEMINI_CLI_ID, name: 'Gemini CLI on this PC', short: 'Gemini CLI', app: 'gemini', apps: ['gemini'], appName: 'Gemini CLI',
-    acpArgs: () => ['--acp'], billing: 'mixed', local: true, planLabel: 'Gemini', providerName: 'Google through Gemini CLI', maker: 'google', dev: 'google', login: 'gemini',
-    site: 'https://geminicli.com', keyUrl: 'https://geminicli.com', docs: 'https://geminicli.com',
-    keyHint: 'No key: QuorX uses the Google account you signed in to Gemini CLI with (run gemini once).', install: 'npm i -g @google/gemini-cli',
   },
   [COPILOT_ID]: {
     id: COPILOT_ID, name: 'GitHub Copilot on this PC', short: 'Copilot', app: 'copilot', apps: ['copilot'], appName: 'GitHub Copilot CLI',
@@ -98,9 +95,25 @@ export function findAcpExe(id, find = findOnPath) {
   return null;
 }
 const dirFor = (id) => path.join(HOME, 'data', id);
-const envOf = (def) => ({ ...envFor(), NO_UPDATE_NOTIFIER: '1', ...(def.envVars || {}) });
+const envOf = (def, extra = {}) => ({ ...envFor(), NO_UPDATE_NOTIFIER: '1', ...(def.envVars || {}), ...extra });
 const notInstalled = (def) => err(`${def.appName} is not installed on this computer (${def.install}), or not on PATH.`, { kind: 'notinstalled' });
-const signIn = (def) => err(`${def.appName} is not signed in. Run "${def.login}" in a terminal, then try again.`, { kind: 'auth', status: 401 });
+const signIn = (def) => err(`${def.appName} is not signed in. Run "${def.login}" in a terminal, then try again.${def.signInNote ? ` ${def.signInNote}` : ''}`, { kind: 'auth', status: 401 });
+/**
+ * The sign-in QuorX may use for a source that allows only some (Antigravity: a Gemini API key, else Google Cloud's
+ * Application Default Credentials with a project and location), from QuorX's environment plus `env`; null when none
+ * is set up. Sources without such a list sign in as before.
+ */
+export function authFor(def, env = {}) {
+  if (!def?.authOnly) return undefined;
+  const e = { ...process.env, ...env };
+  if (def.authOnly.includes('gemini-api-key') && String(e.GEMINI_API_KEY || '').trim()) return 'gemini-api-key';
+  if (def.authOnly.includes('agent-platform') && String(e.GOOGLE_CLOUD_PROJECT || '').trim() && String(e.GOOGLE_CLOUD_LOCATION || '').trim()) return 'agent-platform';
+  return null;
+}
+const personalOff = (def) => err(`${def.appName} needs a Gemini API key (⚙ Settings → Providers → Google Gemini) or Google Cloud (GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION) in QuorX. Google’s terms don’t allow its personal Google sign-in (Free, AI Pro or Ultra) inside other agent apps, so QuorX never uses it.`, { kind: 'auth', status: 401, personalOff: true });
+// A CLI from before its ACP mode refuses the argument (agy before 1.5.0: unexpected argument "acp").
+const TOO_OLD = /unexpected argument|unknown (command|subcommand|flag|option|argument)|unrecognized (argument|option|command)|invalid choice|no such (command|option)/i;
+const tooOld = (def) => err(`${def.appName} on this PC is too old for QuorX: it has no ACP mode yet${def.minVersion ? ` (it needs ${def.minVersion} or newer)` : ''}. Update it with "${def.update || def.install}", then try again.`, { kind: 'notinstalled' });
 
 // Non-interactive API-key auth methods an ACP agent may offer when an environment variable is set.
 const ENV_AUTH = [
@@ -119,14 +132,15 @@ function pickEnvAuth(methods = []) {
 const isAuthErr = (e) => e?.code === -32000 || e?.status === 401 || /auth[_ ]?required|authentication required|not (authenticated|signed in|logged in)|unauthori[sz]ed|login required|please (sign|log) in/i.test(String(e?.message || ''));
 
 // Starts an ACP subprocess and speaks newline-delimited JSON-RPC 2.0 over stdio.
-function openAcp(def, { start = spawn, find = findOnPath, onNotify, onRequest } = {}) {
+function openAcp(def, { start = spawn, find = findOnPath, onNotify, onRequest, env = {} } = {}) {
+  if (authFor(def, env) === null) throw personalOff(def); // nothing starts without an allowed sign-in
   const found = findAcpExe(def.id, find);
   if (!found) throw notInstalled(def);
   const dir = dirFor(def.id);
   fs.mkdirSync(dir, { recursive: true });
   let proc;
   try {
-    proc = launch(found.exe, def.acpArgs(found.exe), { cwd: dir, env: envOf(def), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start);
+    proc = launch(found.exe, def.acpArgs(found.exe), { cwd: dir, env: envOf(def, env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' }, start);
   } catch (e) { throw err(`${def.appName} didn't start: ${e.message}`, { kind: 'network' }); }
   let set = active.get(def.id);
   if (!set) active.set(def.id, (set = new Set()));
@@ -176,7 +190,7 @@ function openAcp(def, { start = spawn, find = findOnPath, onNotify, onRequest } 
     closed = true;
     const tail = buf.trim(); buf = ''; if (tail) handleLine(tail);
     const said = stderr.replace(/\s+/g, ' ').trim().slice(-240);
-    const e = /not (authenticated|signed in|logged in)|authentication required/i.test(said) ? signIn(def) : err(`${why}${said ? `: ${said}` : ''}`, { kind: 'network' });
+    const e = /not (authenticated|signed in|logged in)|authentication required/i.test(said) ? signIn(def) : TOO_OLD.test(said) ? tooOld(def) : err(`${why}${said ? `: ${said}` : ''}`, { kind: 'network' });
     for (const [, p] of pending) p.reject(e);
     pending.clear();
     set.delete(proc);
@@ -188,7 +202,7 @@ function openAcp(def, { start = spawn, find = findOnPath, onNotify, onRequest } 
 }
 
 // Initializes an ACP connection, authenticates silently when needed, and opens a fresh empty session.
-async function startSession(def, conn, sysText = '') {
+async function startSession(def, conn, sysText = '', env = {}) {
   const init = await conn.send('initialize', {
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -196,7 +210,13 @@ async function startSession(def, conn, sysText = '') {
   });
   const methods = Array.isArray(init?.authMethods) ? init.authMethods : [];
   let paidAuth = false;
-  if (methods.some((m) => m?.id === 'cached_token')) {
+  const only = authFor(def, env);
+  if (only === null) throw personalOff(def);
+  if (only) {
+    if (!methods.some((m) => m?.id === only)) throw err(`${def.appName} on this PC doesn’t offer the ${only} sign-in QuorX needs. Update it with "${def.update || def.install}", then try again.`, { kind: 'notinstalled' });
+    try { await conn.send('authenticate', { methodId: only }); } catch (e) { throw err(`${def.appName} refused the ${only === 'gemini-api-key' ? 'Gemini API key' : 'Google Cloud sign-in'}: ${e?.message || 'authentication failed'}`, { kind: 'auth', status: 401 }); }
+    paidAuth = true;
+  } else if (methods.some((m) => m?.id === 'cached_token')) {
     try { await conn.send('authenticate', { methodId: 'cached_token' }); } catch { throw signIn(def); }
   }
   const sysCap = init?.agentCapabilities?.sessionCapabilities?.systemPrompt;
@@ -279,12 +299,12 @@ function findMd(dev, def, rawId) {
 const nice = (id) => String(id || '').split('/').pop().replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** Lists the models an ACP source offers now, enriched with limits and list prices from models.dev. */
-export async function acpModels(id, { start = spawn, find = findOnPath, fetchJSON } = {}) {
+export async function acpModels(id, { start = spawn, find = findOnPath, fetchJSON, env = {} } = {}) {
   const def = ACP_SOURCES[id];
   if (!def) throw err(`no such ACP source ${id}`, { kind: 'request' });
-  const conn = openAcp(def, { start, find });
+  const conn = openAcp(def, { start, find, env });
   try {
-    const [{ init, session, paidAuth }, dev] = await Promise.all([startSession(def, conn), modelsDev(fetchJSON)]);
+    const [{ init, session, paidAuth }, dev] = await Promise.all([startSession(def, conn, '', env), modelsDev(fetchJSON)]);
     if (init.agentCapabilities?.sessionCapabilities?.close && session.sessionId) conn.send('session/close', { sessionId: session.sessionId }, 5000).catch(() => {});
     const cfg = session.configOptions || [];
     const mOpt = modelConfigOpt(cfg), eOpt = effortConfigOpt(cfg);
@@ -417,7 +437,7 @@ export async function acpStream(id, body, signal, onText, onThink, opts = {}) {
   }
 }
 
-async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath, reminder = '', onCall } = {}) {
+async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 180e3, start = spawn, find = findOnPath, reminder = '', onCall, env = {} } = {}) {
   const def = ACP_SOURCES[id];
   if (!def) throw err(`no such ACP source ${id}`, { kind: 'request' });
   const realModel = String(body.model || '').slice(id.length + 1);
@@ -449,7 +469,7 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
   };
 
   conn = openAcp(def, {
-    start, find,
+    start, find, env,
     onRequest: (_reqId, method, params, reply) => {
       if (method === 'session/request_permission') {
         const optsList = Array.isArray(params.options) ? params.options : [];
@@ -492,7 +512,7 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
   signal?.addEventListener('abort', onAbort, { once: true });
   try {
     arm();
-    const { init, session, paidAuth, sysMode } = await startSession(def, conn, fullSystem);
+    const { init, session, paidAuth, sysMode } = await startSession(def, conn, fullSystem, env);
     halt();
     sessionId = session.sessionId;
     if (!sessionId) throw err(`${def.appName} gave no ACP session id`, { kind: 'shape' });
