@@ -8208,7 +8208,7 @@ WS.defineTabKind('running', { render: () => { const c = focused(); if (c) openTe
 WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) toggleServers(c); } });
 // Something came to the front: recorded for back / forward (‹ ›, Alt+← / Alt+→, the mouse's side buttons). A pane
 // tab or a file also names the chat it was in, so stepping back to it brings that chat back first.
-const wsSeen = (kind, id, extra) => { wsFrontFor(kind); if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
+const wsSeen = (kind, id, extra) => { wsFrontFor(kind, id); if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
 function inArea(a, fn) {
   const was = AREA, wc = CTX.chat;
   if (!a) return fn();
@@ -8489,14 +8489,25 @@ function wsPlace() {
   $('#wsPhoneSw')?.remove();
   const W = lay.clientWidth, H = lay.clientHeight;
   if (!W || !H) return;
-  const shown = wsShownGroups(), whole = shown.length === WS.groups(WK.lay).length;
+  const shown0 = wsShownGroups();
+  // A chat shown inside a pane group (Single, or one you moved there): its own slot gives way and it is drawn in that
+  // group's box, under the group's strip (Single: in place of the group; the strip is the row above).
+  const hosted = wsHosted(shown0), hidden = new Set(hosted.map(([cg]) => cg));
+  const shown = shown0.filter((id) => !hidden.has(id)), whole = shown.length === WS.groups(WK.lay).length;
   // Some groups hidden (◧, a maximised group, a chat group with no chat now): the rest share the space, without bars.
-  const rs = shown.length === 1 ? { groups: { [shown[0]]: { x: 0, y: 0, w: W, h: H } }, bars: [] } : WS.rects(whole ? WK.lay : WS.keepGroups(WK.lay, shown), { x: 0, y: 0, w: W, h: H }, WS_GAP);
-  if (!whole) rs.bars = [];
-  // Single: the chat and its one pane group share the whole space; only the one in front (WK.front) is drawn.
-  const one = wsSingle() && singleArea();
-  if (one && shown.includes(WS.CHAT_GROUP)) { const full = { x: 0, y: 0, w: W, h: H }; rs.groups = { [WS.CHAT_GROUP]: full, [one.gid]: full }; rs.bars = []; }
-  const key = JSON.stringify([rs.groups, rs.bars.map((b) => [b.x, b.y, b.w, b.h]), one ? WK.front : '']);
+  // Only hosted chats hidden: the rest keep their bars, and a resize is written back into the whole layout (WP.base).
+  const base = whole ? WK.lay : WS.keepGroups(WK.lay, shown), onlyHosted = shown0.length === WS.groups(WK.lay).length && hidden.size > 0;
+  const rs = shown.length === 1 ? { groups: { [shown[0]]: { x: 0, y: 0, w: W, h: H } }, bars: [] } : WS.rects(base, { x: 0, y: 0, w: W, h: H }, WS_GAP);
+  if (!whole && !onlyHosted) rs.bars = [];
+  WP.base = whole || !onlyHosted ? null : base;
+  const single = wsSingle();
+  for (const [cg, pg] of hosted) {
+    const r = rs.groups[pg]; if (!r) continue;
+    const top = single ? 0 : (areaOf(pg)?.el.querySelector('.pane-tabs')?.offsetHeight || 34);
+    rs.groups[cg] = { x: r.x, y: r.y + top, w: r.w, h: Math.max(0, r.h - top) };
+  }
+  const fronts = hosted.map(([cg, pg]) => [cg, pg, wsFrontOf(pg)]);
+  const key = JSON.stringify([rs.groups, rs.bars.map((b) => [b.x, b.y, b.w, b.h]), fronts, single]);
   WP.rects = rs.groups;
   if (key === WP.key) return;
   WP.key = key;
@@ -8507,10 +8518,17 @@ function wsPlace() {
   };
   work.style.removeProperty('display');
   G.panes.forEach((_, i) => { const el = chatBox(i); if (el) put(el, rs.groups[i ? WS.CHAT2_GROUP : WS.CHAT_GROUP]); });
-  const side = PA.list.some((a) => rs.groups[a.gid]);
-  pane.style.display = side ? '' : 'none';
-  for (const a of PA.list) { a.el.hidden = !rs.groups[a.gid]; put(a.el, rs.groups[a.gid]); a.el.classList.toggle('maxed', WK.max === a.gid && shown.length === 1); }
-  if (one && shown.includes(WS.CHAT_GROUP)) { const chatFront = WK.front !== 'pane'; const cb = chatBox(0); if (cb) cb.style.display = chatFront ? '' : 'none'; one.el.style.display = chatFront ? 'none' : ''; one.el.hidden = chatFront; pane.style.display = chatFront ? 'none' : ''; }
+  for (const a of PA.list) { a.el.hidden = !rs.groups[a.gid]; put(a.el, rs.groups[a.gid]); a.el.classList.toggle('maxed', WK.max === a.gid && shown.length === 1); a.el.classList.remove('host-chat'); }
+  // Each hosting group shows either its chat or its own tab: the other steps out of sight (nothing is rebuilt).
+  for (const el of document.querySelectorAll('#chats > .chatpane.hosted')) el.classList.remove('hosted');
+  for (const [cg, pg, front] of fronts) {
+    const cb = chatBox(cg === WS.CHAT2_GROUP ? 1 : 0), a = areaOf(pg); if (!a) continue;
+    cb?.classList.toggle('hosted', !single); // kept inside its group's box, even when the group is short
+    if (cb) cb.style.display = front === 'chat' ? '' : 'none';
+    if (single) { a.el.style.display = front === 'chat' ? 'none' : ''; a.el.hidden = front === 'chat'; }
+    else a.el.classList.toggle('host-chat', front === 'chat');
+  }
+  pane.style.display = PA.list.some((a) => rs.groups[a.gid] && !a.el.hidden) ? '' : 'none';
   wsBars(rs.bars);
   deskPlace(true);
 }
@@ -8534,7 +8552,7 @@ function wsNodeBox(n) {
 }
 const WS_MIN = 140;
 function wsBarSizes(b) {
-  const n = WS.nodeAt(WK.lay, b.path), A = n && wsNodeBox(n.kids[b.i]), B = n && wsNodeBox(n.kids[b.i + 1]);
+  const n = WS.nodeAt(WP.base || WK.lay, b.path), A = n && wsNodeBox(n.kids[b.i]), B = n && wsNodeBox(n.kids[b.i + 1]);
   if (!A || !B) return null;
   return b.dir === 'row' ? [A.w, B.w] : [A.h, B.h];
 }
@@ -8545,22 +8563,25 @@ function wsWireBar(s) {
     e.preventDefault(); s.setPointerCapture(e.pointerId); s.classList.add('drag'); document.body.classList.add('resizing');
     // Real browser tabs step aside while you drag (they'd take the pointer): a still picture stands in.
     PA.drag = 'resize'; deskPlace(true);
-    const row = b.dir === 'row', p0 = row ? e.clientX : e.clientY, [la, lb] = sz, base = WK.lay, min = Math.min(WS_MIN, (la + lb) / 2 - 1);
+    const row = b.dir === 'row', p0 = row ? e.clientX : e.clientY, [la, lb] = sz, base = WP.base || WK.lay, full = WK.lay, part = !!WP.base, min = Math.min(WS_MIN, (la + lb) / 2 - 1);
     s.onpointermove = (ev) => {
       const na = Math.max(min, Math.min(la + lb - min, la + (row ? ev.clientX : ev.clientY) - p0));
-      WK.lay = { ...WS.resizePair(base, b.path, b.i, na, la + lb - na), focus: WK.lay.focus };
+      const r = WS.resizePair(base, b.path, b.i, na, la + lb - na);
+      WK.lay = { ...(part ? WS.writeBack(full, r) : r), focus: WK.lay.focus };
       wsPlace();
     };
     s.onpointerup = s.onpointercancel = () => { s.onpointermove = s.onpointerup = s.onpointercancel = null; s.classList.remove('drag'); document.body.classList.remove('resizing'); PA.drag = null; wsResized(); };
   };
-  s.ondblclick = () => { WK.lay = WS.evenShares(WK.lay, s._bar.path); wsPlace(); wsResized(); };
+  // On a layout with a hosted chat taken out (WP.base), sizes are changed there and written back into the whole one.
+  const apply = (f) => { WK.lay = WP.base ? WS.writeBack(WK.lay, f(WP.base)) : f(WK.lay); };
+  s.ondblclick = () => { apply((l) => WS.evenShares(l, s._bar.path)); wsPlace(); wsResized(); };
   s.onkeydown = (e) => {
     const b = s._bar, row = b?.dir === 'row', d = { ArrowLeft: -24, ArrowRight: 24, ArrowUp: -24, ArrowDown: 24 }[e.key];
     if (!b || d == null || row !== (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
     e.preventDefault();
     const [la, lb] = wsBarSizes(b) || []; if (!la) return;
     const na = Math.max(WS_MIN, Math.min(la + lb - WS_MIN, la + d));
-    WK.lay = WS.resizePair(WK.lay, b.path, b.i, na, la + lb - na); wsPlace(); wsResized();
+    apply((l) => WS.resizePair(l, b.path, b.i, na, la + lb - na)); wsPlace(); wsResized();
   };
 }
 // The first layout of a project: the chat on the left and the pane on the right, as wide as you last made the pane.
@@ -8655,7 +8676,7 @@ function wsDropHint(box, e) {
   const side = { left: 'on the left of', right: 'on the right of', top: 'above', bottom: 'below' }[zone];
   const ownG = src.type === 'chat' ? (G.panes.indexOf(src.id) === 1 ? WS.CHAT2_GROUP : G.panes.includes(src.id) ? WS.CHAT_GROUP : null) : null;
   if (src.type === 'chat' && wsAdds(src, zone) && WS.groups(WK.lay).length >= WS.MAX_GROUPS) { ok = false; cap = true; say = `At most ${WS.MAX_GROUPS} groups in a window`; }
-  else if (src.type === 'chat') { if (gid === ownG) { ok = false; say = ''; } else if (zone === 'center') { ok = false; say = 'Drop on an edge to put the chat there'; } else say = ownG ? `Chat ${side} this group` : `Open beside: ${side} this group`; }
+  else if (src.type === 'chat') { if (gid === ownG) { ok = false; say = ''; } else if (zone === 'center') { if (WS.isChatGroup(gid) || isPhone()) { ok = false; say = 'Drop on an edge to put the chat there'; } else say = 'Show the chat in this group'; } else say = ownG ? `Chat ${side} this group` : `Open beside: ${side} this group`; }
   else if (WS.isChatGroup(gid) && zone === 'center') { ok = false; say = 'Drop on an edge: a chat keeps a group of its own'; }
   else if (wsAdds(src, zone) && WS.groups(WK.lay).length >= WS.MAX_GROUPS) { ok = false; cap = true; say = `At most ${WS.MAX_GROUPS} groups in a window`; }
   else if (src.type === 'pane' && zone === 'center' && src.from && areaOf(gid) === src.from && inArea(src.from, () => paneTab() === src.tab && !G.view.ftab)) { ok = false; say = 'Already here'; }
@@ -8670,7 +8691,7 @@ function wsDropHint(box, e) {
 function wsDropAt(src, gid, zone) {
   const c = focused(); if (!c) return;
   if (src.type === 'chat') {
-    if (zone === 'center') return;
+    if (zone === 'center') { if (WS.isChatGroup(gid) || isPhone()) return; return wsHostChatById(src.id, gid); }
     const at = G.panes.indexOf(src.id), own = at === 1 ? WS.CHAT2_GROUP : WS.CHAT_GROUP;
     // A chat on screen moves with its group; another chat opens beside, as the second one.
     if (at >= 0 || !src.id) { if (gid === own) return; const r = WS.moveGroup(WK.lay, own, gid, zone); if (r.ok) { WK.lay = r.layout; wsPlaced(); } return; }
@@ -8910,7 +8931,7 @@ async function wsApplyLayout(key) {
   // Each group shows the pane tab the layout gives it (its file tabs stay in its strip).
   for (const [gid, kind] of Object.entries(r.kinds)) { const a = areaOf(gid); if (a) inArea(a, () => { G.view = paneView(focused(), kind); }); }
   setPaneHidden(!!shape.focus, true);
-  WK.preset = key; if (key === 'single') WK.front = 'chat';
+  WK.preset = key; WK.hosts = {}; if (key === 'single') WK.front = 'chat';
   if (chatsChanged) renderPanes(); else { syncLayout(); eachArea(renderPane); paneMarkAreas(); }
   paneSave(); wsChrome(); wsLayoutsDraw(); deskPlace(true); window.dispatchEvent(new Event('resize'));
 }
@@ -9004,7 +9025,9 @@ function wsGroupMenu(e, a) {
   if (POP) return popMenu(e, [['⧉ Dock back into the main window', () => popCall('dock', POP.id)]]);
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), tab = inArea(a, () => (G.view.ftab ? { type: 'file', tid: G.view.ftab } : { type: 'pane', tab: paneTab(), from: a }));
   const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
+  const hostCg = hostedIn(a.gid);
   popMenu(e, [
+    ...(isPhone() || wsSingle() ? [] : hostCg ? [['💬 Give the chat its own group again', () => wsUnhost(hostCg)], null] : [['💬 Show the chat in this group', () => wsHostChatById(curId(), a.gid), { disabled: !curId(), title: 'The chat you use moves into this group: its tab sits before this group\'s tabs' }], null]),
     ['◫ Split right', () => paneSplitTab(a.gid, null, 'right'), capped],
     ['⊟ Split down', () => paneSplitTab(a.gid, null, 'bottom'), capped],
     ...others.map((o) => [`→ Move ${wsAreaName(a)} to ${wsWith(o)}`, () => wsDropAt(tab, o.gid, 'center')]),
@@ -9139,7 +9162,7 @@ function paneSave() {
   const c = primaryChat(); if (!c || PA.chat !== c.id) return;
   wsSync();
   const tabs = wsTabState(), split = WS.sideGroups(WK.lay).length > 1, own = WT.pid === projOf(c);
-  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins, preset: WK.preset });
+  const s = WS.serialise(WK.lay, tabs, own ? WT.closed : [], { follow: WK.follow, max: WK.max, pins: WK.pins, preset: WK.preset, hosts: WK.hosts });
   if (s === PA.saved) return;
   PA.saved = s;
   const old = split ? WS.toAreas(WK.lay, tabs) : null;
@@ -9173,7 +9196,7 @@ function paneChat(c) {
   const r = c ? wsLoad(c) : null;
   const ok = r?.layout && WS.findGroup(r.layout, WS.CHAT_GROUP) && WS.sideGroups(r.layout).length;
   const lay = ok ? r.layout : wsDefaultLayout();
-  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : 'single'; WK.front = 'chat'; queueMicrotask(() => wsLayoutsDraw()); // a project's first layout: Single (every tab in one row)
+  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : 'single'; WK.front = 'chat'; WK.hosts = ok ? r.hosts || {} : {}; WK.fronts = {}; queueMicrotask(() => wsLayoutsDraw()); // a project's first layout: Single (every tab in one row)
   PA.saved = '';
   const side = WS.sideGroups(lay).slice(0, PANE_MAX_AREAS);
   if (a0.gid !== side[0].id) { const old = a0.gid; a0.st.dsk = null; bindArea(a0, side[0].id); wsForget(old); }
@@ -9963,15 +9986,81 @@ const singleArea = () => { const side = WS.sideGroups(WK.lay); return side.lengt
 const wsSingle = () => WK.preset === 'single' && !isPhone() && !POP && G.panes.length === 1 && !!singleArea();
 // What you brought to the front decides which side shows: a chat → the chat; a tab or file → the pane (not when the
 // agent opened it).
-function wsFrontFor(kind) {
-  if (!wsSingle()) return;
-  const f = kind === 'chat' ? 'chat' : (kind === 'tab' || kind === 'file') && !WP.agent ? 'pane' : null;
-  if (f) wsSetFront(f);
+function wsFrontFor(kind, id) {
+  if (WP.agent) return; // what the agent opens never pulls anything in front of you
+  // Settings is a tab too (a pane group's): opening it brings its group in front of the chat there.
+  if (kind === 'settings') { const tid = typeof settingsTab === 'function' && settingsTab(); if (!tid) return queueMicrotask(() => wsFrontFor('settings-late')); }
+  const paneKind = kind === 'tab' || kind === 'file' || kind === 'settings' || kind === 'settings-late';
+  if (wsSingle()) { const f = kind === 'chat' ? 'chat' : paneKind ? 'pane' : null; if (f) wsSetFront(f); return; }
+  const hosts = wsHosts(); if (!Object.keys(hosts).length) return;
+  if (kind === 'settings' || kind === 'settings-late') { const gid = WS.groupOf(WK.lay, settingsTab())?.id; if (gid && Object.values(hosts).includes(gid)) wsSetFrontOf(gid, 'pane'); return; }
+  if (kind === 'chat') { const pg = hosts[G.panes.indexOf(id) === 1 ? WS.CHAT2_GROUP : WS.CHAT_GROUP]; if (pg) wsSetFrontOf(pg, 'chat'); }
+  else if ((kind === 'tab' || kind === 'file') && AREA && Object.values(hosts).includes(AREA.gid)) wsSetFrontOf(AREA.gid, 'pane');
 }
 function wsSetFront(f) {
   if (WK.front === f) return;
   WK.front = f; WP.key = '';
   queueMicrotask(() => { wsPlace(); wsChrome(); });
+}
+
+// ---------- a chat inside a pane group (split layouts) ----------
+// Drag a chat tab into the middle of a pane group (or pick "Show the chat here" in the group's ⋯) and the chat shows in
+// that group: the group's strip gets a 💬 tab for it before its own tabs, the chat's own slot gives its space to the
+// others, and clicking the chat's tab or one of the group's tabs decides which one shows. × on the chat's tab gives it
+// its own group back. Saved with the project's layout (WK.hosts); which side is in front (WK.fronts) is not.
+const wsHosts = () => WS.cleanHosts(WK.lay, WK.hosts || {});
+function wsHosted(shown) {
+  if (isPhone() || POP) return [];
+  if (wsSingle()) { const a = singleArea(); return a && shown.includes(WS.CHAT_GROUP) && shown.includes(a.gid) ? [[WS.CHAT_GROUP, a.gid]] : []; }
+  const on = (cg) => !!G.panes[cg === WS.CHAT2_GROUP ? 1 : 0];
+  return Object.entries(wsHosts()).filter(([cg, pg]) => on(cg) && shown.includes(cg) && shown.includes(pg) && !!areaOf(pg));
+}
+const wsFrontOf = (pg) => (wsSingle() ? (WK.front === 'pane' ? 'pane' : 'chat') : (WK.fronts?.[pg] === 'pane' ? 'pane' : 'chat'));
+function wsSetFrontOf(pg, f) {
+  if (wsSingle()) return wsSetFront(f);
+  if ((WK.fronts ||= {})[pg] === f) return;
+  WK.fronts[pg] = f; WP.key = '';
+  queueMicrotask(() => { wsPlace(); wsChrome(); const a = areaOf(pg); if (a) inArea(a, () => renderPaneTabs(focused())); });
+}
+const hostedIn = (gid) => Object.entries(wsHosts()).find(([, pg]) => pg === gid)?.[0] || null;
+function wsHostChat(cg, pg) {
+  if (!WS.findGroup(WK.lay, cg) || !areaOf(pg)) return;
+  const hosts = { ...wsHosts() };
+  for (const [k, v] of Object.entries(hosts)) if (v === pg || k === cg) delete hosts[k];
+  hosts[cg] = pg; WK.hosts = hosts; (WK.fronts ||= {})[pg] = 'chat';
+  WP.key = ''; wsPlaced(); wsChrome(); eachArea(() => renderPaneTabs(focused()));
+}
+function wsUnhost(cg) {
+  const hosts = { ...wsHosts() }; if (!hosts[cg]) return;
+  delete hosts[cg]; WK.hosts = hosts;
+  WP.key = ''; wsPlaced(); wsChrome(); eachArea(() => renderPaneTabs(focused()));
+}
+// The 💬 tab in a hosting group's own strip (drawn with its strip; this runs inside the group being drawn).
+// A chat dropped into a group: one on screen moves in; another opens beside first (as the second chat), then moves in.
+async function wsHostChatById(id, gid) {
+  if (!id) return;
+  if (!G.panes.includes(id)) { if (G.panes.length >= 2) return flashTip(groupEl(gid) || document.body, 'Two chats are on screen already: close one first', 2200); await openBeside(id, { target: gid, zone: 'right' }); }
+  const at = G.panes.indexOf(id); if (at < 0) return;
+  wsHostChat(at === 1 ? WS.CHAT2_GROUP : WS.CHAT_GROUP, gid);
+}
+function drawHostTab(box) {
+  if (!box || !AREA) return;
+  let el = $('.pa-host', box);
+  const cg = !wsSingle() && hostedIn(AREA.gid), id = cg && G.panes[cg === WS.CHAT2_GROUP ? 1 : 0];
+  if (!id) { el?.remove(); box.closest('.pane-area')?.classList.remove('hosting'); return; }
+  box.closest('.pane-area')?.classList.add('hosting');
+  if (!el) {
+    el = document.createElement('span'); el.className = 'pa-host';
+    ($('.pa-own', box) || box.firstChild)?.after?.(el) || box.prepend(el);
+    el.addEventListener('click', (e) => {
+      const gid = el.closest('.pane-area')?.dataset.gid || el.dataset.gid, c2 = el.dataset.cg;
+      if (e.target.closest('.pp-x')) return wsUnhost(c2);
+      wsSetFrontOf(gid, 'chat');
+    });
+  }
+  const front = wsFrontOf(AREA.gid) === 'chat', [st, say] = chatState(id), t = chatTitle(id);
+  el.dataset.cg = cg; el.dataset.gid = AREA.gid;
+  el.innerHTML = `<span class="pa-ctab ${front ? 'on' : ''} ${st ? `st-${st}` : ''}" role="tab" aria-selected="${front}" title="${esc(t)}${say ? `\n${say}` : ''}\nThe chat, shown in this group · × gives it its own group again"><i class="wt-dot" aria-hidden="true"></i><span class="pp-name">💬 ${esc(clip(t, 26))}</span><button type="button" class="pp-x" aria-label="Give ${esc(t)} its own group again">×</button></span>`;
 }
 // The one strip: in #wsTop after the chat tabs, while Single is on (the pane group's own strip steps aside).
 function wsSingleStrip() {
@@ -9991,7 +10080,7 @@ function wsSingleStrip() {
     ['k:all', '⌨', 'Terminal', 'Project'],
     ...terms.map((u) => [`k:${u.id}`, '⌨', u.name || 'Terminal', 'yours']),
     ['t:files', '📁', 'Files', 'Project'],
-    ...fileTabs(a.gid).map((id) => { const st = WK.tabs.get(id)?.st || {}, f = st.f || {}; return [`f:${id}`, '📄', baseName(f.label || f.name || 'File'), clip((G.open.get(st.chat) || c).title || owner, 22)]; }),
+    ...fileTabs(a.gid).map((id) => { const st = WK.tabs.get(id)?.st || {}, f = st.f || {}; return f.kind === 'settings' ? [`f:${id}`, '⚙', 'Settings', 'App'] : [`f:${id}`, '📄', baseName(f.label || f.name || 'File'), clip((G.open.get(st.chat) || c).title || owner, 22)]; }),
   ];
   const sig = JSON.stringify([items.map((x) => x.slice(0, 4)), cur, DESK ? pages.map((x) => G.sound?.tabs?.[x.sid] || null) : 0]);
   if (box.dataset.sig === sig) return;
@@ -15409,6 +15498,7 @@ function renderPaneTabs(c) {
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   drawFileTabs(box);
   drawPageTabs(box, c);
+  drawHostTab(box);
   queueMicrotask(wsSingleStrip);
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
@@ -15524,7 +15614,8 @@ function wirePaneChrome() {
 function wireAreaChrome() {
   const area = AREA;
   for (const b of $$a('#paneTabs [data-tab]')) {
-    b.onclick = () => (paneTab() === b.dataset.tab && b.dataset.tab !== 'art' && !G.view.ftab ? setPaneTab('art') : setPaneTab(b.dataset.tab));
+    // Clicking the open tab again goes back to Plan, unless the click only brought the group in front of its chat.
+    b.onclick = () => { const fromChat = area.fromChat; area.fromChat = false; return paneTab() === b.dataset.tab && b.dataset.tab !== 'art' && !G.view.ftab && !fromChat ? setPaneTab('art') : setPaneTab(b.dataset.tab); };
     // Drag a tab onto a group's edge to give it a group of its own, or onto a middle to show it there; right-click for
     // the same as a menu.
     b.draggable = true;
@@ -15534,6 +15625,8 @@ function wireAreaChrome() {
   }
   for (const b of $$a('#paneTabs [data-pa]')) b.onclick = (e) => (b.dataset.pa === 'max' ? wsMaxToggle(area.gid) : b.dataset.pa === 'add' ? paneAddMenu(Object.assign(e, { anchor: b }), area) : wsGroupMenu(Object.assign(e, { anchor: b }), area));
   wirePageTabs(area);
+  // A group showing a chat (a hosted chat): its own tabs bring the group back in front of the chat.
+  $('#paneTabs').addEventListener('click', (e) => { if (!e.target.closest('.pa-host') && e.target.closest('[data-tab], .pa-ptab, .pa-ftab') && hostedIn(area.gid)) { area.fromChat = wsFrontOf(area.gid) === 'chat'; wsSetFrontOf(area.gid, 'pane'); } }, true);
   // A double-click on the empty part of the strip maximises the group (and restores it).
   $('#paneTabs').ondblclick = (e) => { if (e.target === e.currentTarget || e.target.classList.contains('pt-spacer')) wsMaxToggle(area.gid); };
   // Files open as tabs: click to show, double-click to keep a preview, × or middle-click to close, drag or right-click
