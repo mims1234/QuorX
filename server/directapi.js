@@ -93,7 +93,7 @@ async function getJSON(url, { headers = {}, ms = 20000, fetchFn = fetch } = {}) 
   return r.json();
 }
 let devCache = null; // { at, p }: models.dev, kept an hour
-function modelsDev(fetchJSON) {
+export function modelsDev(fetchJSON) {
   if (fetchJSON) return fetchJSON(MODELS_DEV).catch(() => null);
   if (devCache && Date.now() - devCache.at < 3600e3) return devCache.p;
   const p = getJSON(MODELS_DEV).catch(() => null);

@@ -26,6 +26,7 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
+import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe } from '../server/acp.js';
 import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
 
 // ---------- Apps on this PC: the main model through OpenCode on this computer (server/sources.js) ----------
@@ -725,7 +726,7 @@ test('OpenCode on this PC lists every text model of its connected providers, pri
 });
 
 // ---------- Claude Code on this PC (claudelocal.js), against scripts/fake-claude.mjs ----------
-const FAKE_CLAUDE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'fake-claude.mjs');
+const FAKE_CLAUDE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs');
 async function viaFakeClaude(mode, body, opts = {}) {
   const log = path.join(tempDir('fake-claude-'), 'call.json');
   const keep = { mode: process.env.FAKE_CLAUDE_MODE, log: process.env.FAKE_CLAUDE_LOG, or: process.env.OPENROUTER_API_KEY };
@@ -896,6 +897,109 @@ test('Grok Build: signed out says to run grok login, Stop ends it, and its model
     assert.ok(grokArgs({ model: 'grok-4.6', file: 'p.txt' }).includes('--no-auto-update'));
     process.env.FAKE_GROK_MODE = 'signedout';
     try { await assert.rejects(grokModels(grokOpts), /grok login/); } finally { delete process.env.FAKE_GROK_MODE; }
+  }
+});
+
+// ---------- Subscription-login ACP CLIs on this PC (server/acp.js), against scripts/fake-acp.mjs ----------
+const FAKE_ACP = path.join(path.dirname(FAKE_CLAUDE), 'fake-acp.mjs');
+const ACP_DEV = {
+  google: { models: { 'gemini-4-carbon': { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1000000, output: 65536 }, cost: { input: 1.25, output: 10, cache_read: 0.31 } } } },
+  anthropic: { models: { 'claude-sonnet-4-6': { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 200000, output: 64000 }, cost: { input: 3, output: 15, cache_read: 0.3 }, canonical_model_id: 'anthropic/claude-sonnet-4.6' } } },
+};
+const acpOpts = (exe = 'agy.exe') => ({ find: (n) => (n === exe.replace(/\.exe$/, '') ? exe : null), start: (_cmd, args, o) => spawn(process.execPath, [FAKE_ACP, ...args], o), fetchJSON: async () => ACP_DEV });
+async function viaFakeAcp(id, mode, body, opts = {}) {
+  const log = path.join(tempDir('fake-acp-'), 'call.json');
+  const keep = { mode: process.env.FAKE_ACP_MODE, log: process.env.FAKE_ACP_LOG, or: process.env.OPENROUTER_API_KEY, gk: process.env.GEMINI_API_KEY };
+  Object.assign(process.env, { FAKE_ACP_MODE: mode, FAKE_ACP_LOG: log, OPENROUTER_API_KEY: 'sk-or-test', ...(opts.geminiKey ? { GEMINI_API_KEY: opts.geminiKey } : {}) });
+  if (!opts.geminiKey) delete process.env.GEMINI_API_KEY;
+  const shown = [], thought = [], prepped = [];
+  try {
+    const out = await acpStream(id, body, opts.signal || new AbortController().signal, (d) => shown.push(d), (d) => thought.push(d),
+      { info: { plan: 'plan', in: ['text', 'image'], variants: ['Low', 'Medium', 'High', 'Extra', 'Max'], cost: { input: 1.25, output: 10 }, ...opts.info }, idleMs: opts.idleMs || 20e3, onCall: (_i, c) => prepped.push(c.function.name), ...acpOpts(opts.exe) })
+      .then((r) => ({ r }), (e) => ({ e }));
+    let call = null;
+    try { call = JSON.parse(fs.readFileSync(log, 'utf8')); } catch { /* did not start */ }
+    return { ...out, call, shown: shown.join(''), thought: thought.join(''), prepped };
+  } finally {
+    for (const [k, v] of [['FAKE_ACP_MODE', keep.mode], ['FAKE_ACP_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or], ['GEMINI_API_KEY', keep.gk]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+const ACP_BODY = { ...CLAUDE_BODY, model: 'antigravity-local/gemini-4-carbon', reasoning: { effort: 'xhigh' } };
+
+test('ACP sources: all eight subscription-login CLIs register, list grouped models with models.dev prices, and map effort levels', async () => {
+  for (const id of ['antigravity-local', 'codex-local', 'gemini-local', 'copilot-local', 'cursor-local', 'droid-local', 'kimi-local', 'qwen-local']) {
+    assert.ok(ACP_IDS.includes(id) && SOURCE_IDS.includes(id), id);
+    assert.equal(ACP_SOURCES[id].local, true);
+  }
+  assert.deepEqual(findAcpExe('antigravity-local', (n) => (n === 'agy_acp_server' ? '/bin/agy_acp_server.exe' : null)), { exe: '/bin/agy_acp_server.exe', app: 'agy_acp_server' }, 'Antigravity falls back to the standalone ACP registry binary');
+  assert.deepEqual(ACP_SOURCES['antigravity-local'].acpArgs('/bin/agy.exe'), ['acp']);
+  assert.deepEqual(ACP_SOURCES['antigravity-local'].acpArgs('C:\\agy\\agy_acp_server.exe'), []);
+
+  const list = await acpModels('antigravity-local', acpOpts());
+  assert.deepEqual(list.map((m) => [m.id, m.maker, m.plan, m.planLabel, m.ctx, m.status]), [
+    ['antigravity-local/gemini-4-carbon', 'google', 'plan', 'Antigravity', 1000000, null],
+    ['antigravity-local/claude-sonnet-4-6', 'anthropic', 'plan', 'Antigravity', 200000, null],
+    ['antigravity-local/old-preview', 'google', 'plan', 'Antigravity', null, 'deprecated'],
+  ]);
+  assert.deepEqual([list[0].in, list[0].listPrice, list[1].listPrice], [['text', 'image'], [1.25, 10], [3, 15]]);
+  assert.equal(sameOnOpenRouter('antigravity-local/claude-sonnet-4-6', [{ id: 'anthropic/claude-sonnet-4.6', tools: true }], list[1]), 'anthropic/claude-sonnet-4.6');
+  assert.deepEqual([acpEffort({ effort: 'xhigh' }, list[0].variants), acpEffort({ enabled: false }, list[0].variants)], ['Extra', 'Low']);
+
+  // Signed-out ACP CLI points the user to its login command; with an env API key it authenticates as paid.
+  const keepMode = process.env.FAKE_ACP_MODE, keepKey = process.env.GEMINI_API_KEY;
+  try {
+    process.env.FAKE_ACP_MODE = 'signedout'; delete process.env.GEMINI_API_KEY;
+    const err = await acpModels('antigravity-local', acpOpts()).catch((x) => x);
+    assert.equal(failureKind(err), 'auth');
+    assert.match(err.message, /agy acp --login/);
+    process.env.FAKE_ACP_MODE = 'envkey'; process.env.GEMINI_API_KEY = 'AIza-test-key';
+    const paid = await acpModels('antigravity-local', acpOpts());
+    assert.deepEqual([paid[0].plan, paid[0].price], ['paid', [1.25, 10]]);
+  } finally {
+    if (keepMode === undefined) delete process.env.FAKE_ACP_MODE; else process.env.FAKE_ACP_MODE = keepMode;
+    if (keepKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = keepKey;
+  }
+});
+
+test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied native permissions, zero-usage fallback and Stop', async () => {
+  { // Streams thought + text, reads <quorx_call>, sends base64 pictures, lowers yolo mode to ask, and strips OPENROUTER_API_KEY
+    const { r, e, call, shown, thought, prepped } = await viaFakeAcp('antigravity-local', 'normal', ACP_BODY);
+    assert.equal(e, undefined, e?.message);
+    assert.deepEqual([r.text, shown, thought, r.finishReason, r.provider], ['Building now.', 'Building now.\n', 'Plan via ACP.', 'tool_calls', 'Google Antigravity']);
+    assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"app.js"}']]);
+    assert.ok(prepped.includes('write_file'), 'streaming <quorx_call> feeds onCall');
+    assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.prompt_tokens_details?.cached_tokens], [500, 60, 200]);
+    assert.equal(call.openrouter, false);
+    assert.match(call.cwd, /antigravity-local$/);
+    const sets = call.requests.filter((x) => x.method === 'session/set_config_option').map((x) => [x.params.configId, x.params.value]);
+    assert.deepEqual(sets, [['mode', 'ask'], ['model', 'gemini-4-carbon'], ['thinking', 'Extra']]);
+    const promptReq = call.requests.find((x) => x.method === 'session/prompt');
+    assert.deepEqual(promptReq.params.prompt.filter((p) => p.type === 'image'), [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]);
+  }
+  { // Zero-usage ACP servers (agy_acp_server) still get estimated tokens so plan_cost is priced from models.dev
+    const { r, e } = await viaFakeAcp('antigravity-local', 'nousage', ACP_BODY);
+    assert.equal(e, undefined, e?.message);
+    assert.equal(r.usage.tokens_estimated, true);
+    assert.ok(r.usage.prompt_tokens > 0 && r.usage.completion_tokens > 0);
+    const pr = sourcePriced({ plan: 'plan', cost: { input: 1.25, output: 10 } }, r.usage);
+    assert.ok(pr.cost === 0 && pr.plan_cost > 0, 'list-price plan value is still recorded');
+  }
+  { // Droid disables auto-update on spawn; native permission requests are denied and retried once with a reminder
+    const droid = await viaFakeAcp('droid-local', 'perm_retry', { ...ACP_BODY, model: 'droid-local/claude-sonnet-4-6' }, { exe: 'droid.exe' });
+    assert.equal(droid.e, undefined, droid.e?.message);
+    assert.equal(droid.call.droidNoUpdate, 'true');
+    assert.equal(droid.r.toolCalls[0]?.function.name, 'write_file');
+    const stuck = await viaFakeAcp('antigravity-local', 'perm_always', ACP_BODY);
+    assert.equal(failureKind(stuck.e), 'shape');
+    assert.match(stuck.e.message, /run_command/);
+    assert.deepEqual(stuck.call.permOutcomes[0], { outcome: 'selected', optionId: 'deny' });
+  }
+  { // Stop cancels a running ACP call promptly
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 400);
+    const t0 = Date.now();
+    const stopped = await viaFakeAcp('antigravity-local', 'hang', ACP_BODY, { signal: ac.signal });
+    assert.ok(stopped.e && Date.now() - t0 < 8000);
   }
 });
 
