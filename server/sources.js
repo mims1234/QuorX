@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { HOME, decisionModels } from './openrouter.js';
+import { HOME, decisionModels, chatModels, cachedChatModels } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
 import { failureKind } from './errors.js';
@@ -282,6 +282,10 @@ function refreshLists(ids, listers) {
     }
     const keepIds = (catalogue?.ids || []).filter((id) => !ids.includes(id));
     catalogue = { at, ids: [...keepIds, ...ids], list: [...old.filter((m) => keepIds.includes(m.source)), ...ids.flatMap((id) => got[id] || [])], errors: errs };
+    // Reference prices from OpenRouter's list: at once from the copy already fetched, else once it arrives (tests
+    // that bring their own lists bring no OpenRouter list either).
+    if (cachedChatModels()) reprice();
+    else if (!Object.keys(listers).length) chatModels().then(reprice, () => {});
   }).finally(() => { if (refreshing === job) refreshing = null; }) };
   refreshing = job;
   return job.p;
@@ -303,6 +307,8 @@ export async function sourceModels({ refresh = false, all = false, listers = {} 
     if (missing.length) await refreshLists(missing, listers);
     if (stale.length) refreshLists(stale, listers).catch(() => {});
   }
+  // OpenRouter's list may have arrived since the catalogue was priced (the first listing doesn't wait for it).
+  if (!Object.keys(listers).length) reprice();
   return catalogue.list.filter((m) => want.includes(m.source));
 }
 /** A source model's catalogue entry from the list already loaded, or null. */
@@ -327,6 +333,77 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
   if (!hits.length) return null;
   const v = VENDOR[cv] || cv;
   return hits.find((x) => x.split('/')[0] === v) || hits[0];
+}
+
+// ---------- reference prices ----------
+// Every call counts toward the chat's budget at a price. When a source gives no money figure of its own, the same
+// model's price on OpenRouter (its list price, no discount) stands in:
+//   - plan models (OpenCode Go, Command Code, Ollama cloud, a Claude or Grok subscription): what a call counted against
+//     the plan. Claude Code and Grok Build price each call themselves, and their figure comes first; Go and Command
+//     Code are counted at OpenRouter's price, then models.dev's list price when OpenRouter has no such model.
+//   - a maker's API model models.dev has no price for (and Refuseless, which lists none): billed per call, so counted
+//     at OpenRouter's price for the same model, marked as such.
+//   - a model in OpenCode with no price from a subscription connected there (Copilot, a coding plan): a plan.
+//   - Claude Code or Grok Build on an API key: their own figure, and OpenRouter's price for a call cut off before it.
+// Free means free: a model on this computer, a free API or tier (NVIDIA's, a -free variant).
+// A model OpenRouter doesn't have keeps what it had: unknown stays unknown ($0, marked), never a guess.
+// A $0 model in OpenCode is free (a local model, NVIDIA's free API, a router's free tier) unless its provider is a
+// subscription: those are plans, priced like any other.
+const SUB_PROVIDER = /^(github-copilot|zai-coding-plan|zhipuai-coding-plan|kimi-for-coding|minimax-coding-plan|alibaba-coding-plan|moonshotai-coding|chutes-plan)/i;
+const ORIG = new WeakMap(); // repriced entry → the entry as its source listed it (so pricing again starts over)
+const refCost = (x) => ({ input: x.price[0], output: x.price[1], ...(x.cachePrice?.[0] != null ? { cache_read: x.cachePrice[0] } : {}), ...(x.cachePrice?.[1] != null ? { cache_write: x.cachePrice[1] } : {}) });
+const sanePair = (p) => Array.isArray(p) && p.length >= 2 && p.slice(0, 2).every((v) => Number.isFinite(Number(v)) && v >= 0 && v <= 500) && (p[0] > 0 || p[1] > 0);
+/** The same model in OpenRouter's chat list, for its price (null when there is none). */
+export function orTwin(m, orList = []) {
+  const chat = orList.filter((x) => x?.id && (!x.kind || x.kind === 'chat') && !/:(free|batch)$/.test(x.id));
+  const byId = new Map(chat.map((x) => [x.id, x]));
+  const name = String(m.modelID || m.realId || '').toLowerCase();
+  // Claude Code names its models by family (opus, sonnet): the newest of that family on OpenRouter.
+  if (m.source === CLAUDE_ID && /^[a-z]+$/.test(name)) return chat.filter((x) => x.id.startsWith(`anthropic/claude-${name}`)).sort((a, b) => (b.created || 0) - (a.created || 0))[0] || null;
+  // Grok Build's ids carry suffixes OpenRouter's don't (grok-4.7-fast-reasoning is x-ai/grok-4.7-fast).
+  if (m.providerID === 'x-ai' && name) { const parts = name.split('-'); for (let n = parts.length; n >= 2; n--) { const x = byId.get(`x-ai/${parts.slice(0, n).join('-')}`); if (x) return x; } }
+  const hit = sameOnOpenRouter(m.id, chat.map((x) => ({ ...x, tools: true })), m);
+  if (hit) return byId.get(hit) || null;
+  // Names with a size tag, a variant or a date on the end: gpt-oss:120b-cloud (Ollama), glm-5.3-abliterated
+  // (Refuseless), claude-haiku-4-5-20251001 (Command Code).
+  const bare = name.split('/').pop().replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').replace(/-(abliterated|fast|cloud)$/i, '');
+  const sized = bare.replace(/:(\d+(?:\.\d+)?[bkmt])(?:-cloud)?$/i, '-$1').replace(/:.*$/, ''), plain = bare.replace(/:.*$/, '');
+  for (const want of [...new Set([sized, plain])]) {
+    const hits = chat.filter((x) => norm(x.id.split('/').pop()) === norm(want));
+    if (hits.length) return hits.find((x) => x.id.split('/')[0] === (VENDOR[m.maker] || m.maker)) || hits[0];
+  }
+  return null;
+}
+/** Source models with their reference prices (see above), from OpenRouter's chat list. */
+export function withRefPrices(list = [], orList = []) {
+  return list.map((m) => {
+    const b = ORIG.get(m) || m;
+    const out = repriced(b, orList);
+    if (out !== b) ORIG.set(out, b);
+    return out;
+  });
+}
+function repriced(b, orList) {
+  if (!b?.source || b.kind !== 'chat' || b.unusable) return b;
+  // A -free variant on a maker's API (Refuseless's): free, not unknown.
+  if (b.priceUnknown && /-free$/i.test(String(b.realId || ''))) { const { priceUnknown: _u, ...rest } = b; return { ...rest, plan: 'free', price: [0, 0], cost: {} }; }
+  if (b.plan === 'free' && !(b.source === LOCAL_ID && SUB_PROVIDER.test(String(b.providerID || '')) && !/-free$/i.test(String(b.realId || '')))) return b;
+  if (!(b.plan === 'plan' || b.plan === 'free' || b.priceUnknown || b.priceFromApp)) return b;
+  const x = orTwin(b, orList);
+  if (!x || !sanePair(x.price)) return b;
+  const ref = { model: x.id, cost: refCost(x) }, list = [x.price[0], x.price[1]];
+  if (b.plan === 'plan') return { ...b, ref, listPrice: list, refFrom: x.id };
+  // No price in OpenCode, not a local model: a subscription connected there.
+  if (b.plan === 'free') return { ...b, plan: 'plan', planLabel: b.providerName || b.providerID || 'OpenCode', ref, listPrice: list, refFrom: x.id };
+  if (b.priceFromApp) return { ...b, ref, refFrom: x.id };
+  const { priceUnknown: _u, ...rest } = b;
+  return { ...rest, price: list, cost: ref.cost, priceRef: x.id, refFrom: x.id };
+}
+/** Prices the loaded catalogue again with OpenRouter's list as last fetched. */
+// Only when that list is newer than the one the catalogue was priced with (cheap to call often).
+export function reprice() {
+  const or = cachedChatModels();
+  if (catalogue && or?.length && catalogue.pricedWith !== or) catalogue = { ...catalogue, list: withRefPrices(catalogue.list, or), pricedWith: or };
 }
 
 // ---------- OpenRouter's ids on a maker's own API (⚙ Settings → Providers → "OpenRouter's ids run here") ----------
@@ -477,15 +554,29 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
 // No single call costs more than this: a figure above it (a bad price record, a misread report) counts as unknown, 0.
 export const CALL_COST_MAX = 50;
 const saneCall = (x) => Number.isFinite(x) && x >= 0 && x <= CALL_COST_MAX;
+// Where a call's figure came from, for the page: plan_ref / cost_ref 'app' (the app's own), 'openrouter' (the same
+// model's price there, ref_model naming it) or 'list' (models.dev's list price).
 export function priced(info, u = {}) {
   const said = u.cost !== null && u.cost !== '' && u.cost !== undefined && Number.isFinite(Number(u.cost)) ? Number(u.cost) : null;
-  if (info?.plan === 'plan') return { cost: said != null && saneCall(said) ? said : 0, plan_cost: Number(u.plan_cost) > 0 ? Number(u.plan_cost) : costOf(info, u) };
+  const ref = info?.ref?.cost ? info.ref : null;
+  const atRef = () => costOf({ cost: ref.cost }, u);
+  if (info?.plan === 'plan') {
+    // Claude Code and Grok Build price each call themselves; the plans with an API (Go, Command Code) are counted at
+    // OpenRouter's price, not the app's or a discounted one.
+    const app = Number(u.plan_cost) > 0 && saneCall(Number(u.plan_cost)) ? Number(u.plan_cost) : null;
+    const appFirst = info.source === CLAUDE_ID || info.source === GROK_ID;
+    const from = appFirst && app != null ? 'app' : ref ? 'openrouter' : app != null ? 'app' : 'list';
+    const v = from === 'app' ? app : from === 'openrouter' ? atRef() : costOf(info, u);
+    return { cost: said != null && saneCall(said) ? said : 0, plan_cost: saneCall(v) ? v : 0, plan_ref: from, ...(from === 'openrouter' ? { ref_model: ref.model } : {}) };
+  }
   if (said != null) return saneCall(said) ? { cost: said } : { cost: 0, cost_unknown: true };
   if (info?.plan === 'free') return { cost: 0 };
+  // Claude Code or Grok Build on an API key that sent no figure: OpenRouter's price for the same model.
+  if (info?.priceFromApp && ref) { const c = atRef(); return saneCall(c) ? { cost: c, estimated_cost: true, cost_ref: 'openrouter', ref_model: ref.model } : { cost: 0, estimated_cost: true, cost_unknown: true }; }
   // A model whose price isn't known costs 0 here, marked unknown, rather than a guess.
   if (info?.priceUnknown) return { cost: 0, estimated_cost: true, cost_unknown: true };
   const c = costOf(info, u);
-  return saneCall(c) ? { cost: c, estimated_cost: true } : { cost: 0, estimated_cost: true, cost_unknown: true };
+  return saneCall(c) ? { cost: c, estimated_cost: true, ...(info?.priceRef ? { cost_ref: 'openrouter', ref_model: info.priceRef } : {}) } : { cost: 0, estimated_cost: true, cost_unknown: true };
 }
 function costOf(info, u) {
   const c = info?.cost || {}, prompt = Number(u.prompt_tokens) || 0, out = Number(u.completion_tokens) || 0;

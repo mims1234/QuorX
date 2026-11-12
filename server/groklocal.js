@@ -93,7 +93,8 @@ async function handshake({ start = spawn, find = findOnPath } = {}) {
     if (methods.includes('cached_token')) {
       try { await send('authenticate', { methodId: 'cached_token' }); } catch { throw signIn(); }
     } else if (methods.length && !process.env.XAI_API_KEY) throw signIn();
-    return init || {};
+    // Signed in with grok login: a Grok plan. With XAI_API_KEY only: an API key, billed per call.
+    return { ...(init || {}), qxAuth: methods.includes('cached_token') || !process.env.XAI_API_KEY ? 'plan' : 'key' };
   } finally { if (proc.pid) killTree(proc.pid); running.delete(proc); }
 }
 
@@ -106,7 +107,7 @@ export async function grokModels(opts = {}) {
       id: `${GROK_ID}/${m.modelId}`, realId: m.modelId, providerID: 'x-ai', modelID: m.modelId, providerName: 'xAI', source: GROK_ID,
       name: m.name || m.modelId, kind: 'chat', ctx: Number(meta.totalContextTokens) || null, maxOut: null, created: 0,
       // Pictures can't reach it in the mode QuorX uses (see the top of this file).
-      in: ['text'], out: ['text'], price: [0, 0], listPrice: [0, 0], cost: {}, plan: 'plan', planLabel: 'Grok',
+      in: ['text'], out: ['text'], price: [0, 0], listPrice: [0, 0], cost: {}, ...(init.qxAuth === 'key' ? { plan: 'paid', priceFromApp: true } : { plan: 'plan', planLabel: 'Grok' }),
       tools: true, temp: false, reasoning: !!meta.supportsReasoningEffort, variants: meta.supportsReasoningEffort ? efforts : [],
       format: GROK_ID, status: null, canonical: null, desc: String(m.description || ''),
     };

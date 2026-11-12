@@ -61,7 +61,7 @@ test('a source model id says where its call goes, and its call costs what the so
     const est = sourcePriced({ plan: 'paid', cost }, { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 500 } });
     assert.ok(Math.abs(est.cost - (500 * 2 + 500 * 0.2 + 100 * 10) / 1e6) < 1e-12 && est.estimated_cost);
     assert.ok(Math.abs(sourcePriced({ plan: 'paid', cost }, { prompt_tokens: 300000, completion_tokens: 0 }).cost - 1.2) < 1e-9, 'past 200k tokens the higher tier applies');
-    assert.deepEqual(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0, opencode: { allowance: 0.0014 } }), { cost: 0, plan_cost: 0.0014 });
+    assert.deepEqual(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0, opencode: { allowance: 0.0014 } }), { cost: 0, plan_cost: 0.0014, plan_ref: 'list' });
     assert.equal(sourcePriced({ plan: 'plan', cost: { input: 1.4, output: 4.4 } }, { prompt_tokens: 1000, completion_tokens: 0, cost: 0.0014 }).cost, 0.0014, 'usage billed to credit past the plan counts');
   }
 });
@@ -798,7 +798,7 @@ test('Claude Code’s models follow its own names, priced by how the user signed
   const key = await claudeModels({ authInfo: { subscription: false } });
   assert.deepEqual([key[0].plan, key[0].priceFromApp], ['paid', true]);
   assert.deepEqual([effortFor({ effort: 'high' }, sub[1].variants), effortFor({ enabled: false }, sub[1].variants), effortFor({ effort: 'minimal' }, sub[1].variants), effortFor({ effort: 'high' }, [])], ['high', 'low', 'low', null]);
-  assert.deepEqual(sourcePriced({ plan: 'plan' }, { plan_cost: 0.02, prompt_tokens: 10 }), { cost: 0, plan_cost: 0.02 }, 'its own list-price figure is kept');
+  assert.deepEqual(sourcePriced({ plan: 'plan' }, { plan_cost: 0.02, prompt_tokens: 10 }), { cost: 0, plan_cost: 0.02, plan_ref: 'app' }, 'its own list-price figure is kept');
 });
 
 // ---------- Grok Build on this PC (groklocal.js), against scripts/fake-grok.mjs ----------
@@ -981,7 +981,7 @@ test('OpenCode Go calls go in the OpenAI chat format with its own ids, stream wi
     assert.deepEqual(r.toolCalls, [{ id: 'c1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }]);
     assert.deepEqual(r.passBack, { reasoning_content: 'Plan it.' });
     assert.equal(r.usage.completion_tokens, 100);
-    assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (1000 * 1.4 + 100 * 4.4) / 1e6 }, 'a plan call costs nothing; what it counted is at list price');
+    assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (1000 * 1.4 + 100 * 4.4) / 1e6, plan_ref: 'list' }, 'a plan call costs nothing; what it counted is at list price');
     const refused = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { type: 'server_error', message: 'Upstream request failed: Invalid credential' } }) });
     const e = await goStream({ model: 'opencode-go/glm-5.3', messages: [] }, new AbortController().signal, null, null, { info, key: 'bad-key-0123456789ab', fetchFn: refused }).catch((x) => x);
     assert.equal(failureKind(e), 'auth');
@@ -1117,7 +1117,7 @@ test('Command Code streams Claude over Messages and other models over chat into 
     assert.deepEqual(r.toolCalls, [{ id: 'toolu_1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }]);
     assert.deepEqual(r.passBack, { cc_thinking: [{ type: 'thinking', thinking: 'Plan it.', signature: 'sigX' }] });
     assert.deepEqual(r.usage, { prompt_tokens: 1050, completion_tokens: 200, prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 50 } });
-    assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (100 * 4 + 900 * 0.4 + 50 * 5 + 200 * 20) / 1e6 }, 'what it took from the credits, cache at its own prices');
+    assert.deepEqual(sourcePriced(info, r.usage), { cost: 0, plan_cost: (100 * 4 + 900 * 0.4 + 50 * 5 + 200 * 20) / 1e6, plan_ref: 'list' }, 'what it took from the credits, cache at its own prices');
     const declined = async () => ccSSE([{ type: 'message_start', message: { id: 'm', usage: { input_tokens: 5 } } }, { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { category: 'cyber' } }, usage: { output_tokens: 0 } }]);
     await assert.rejects(ccStream({ model: 'commandcode/claude-opus-5-5', messages: [] }, new AbortController().signal, null, null, { info, key: 'test-cc-key-0123456789', fetchFn: declined }), /declined to answer \(cyber\)/);
   }
@@ -1235,7 +1235,7 @@ test('Jev on Command Code: a decider seat on the plan, asked like OpenRouter’s
   assert.equal(seen.init.headers.Authorization, 'Bearer test-cc-key-0123456789');
   assert.deepEqual(seen.body, { model: 'typesafe/jev', state: 'state', questions }, 'its own model id, the state and the questions as they are');
   assert.deepEqual([r.answers, r.usage, r.provider, r.resolved], [answers, { prompt_tokens: 370, completion_tokens: 61 }, 'Command Code', 'typesafe/jev']);
-  assert.deepEqual(sourcePriced(list[0], r.usage), { cost: 0, plan_cost: (370 * 0.4) / 1e6 });
+  assert.deepEqual(sourcePriced(list[0], r.usage), { cost: 0, plan_cost: (370 * 0.4) / 1e6, plan_ref: 'list' });
   const off = async () => ({ ok: false, status: 403, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Upgrade required', code: 'upgrade_required' } }) });
   assert.equal(failureKind(await ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { key: 'test-cc-key-0123456789', fetchFn: off }).catch((x) => x)), 'auth');
   await assert.rejects(ccDecisions('commandcode/typesafe/jev', 's', questions, undefined, { fetchFn }), /no Command Code key/);

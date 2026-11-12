@@ -346,3 +346,80 @@ test('the Spending view totals what each provider was paid; absurd figures count
   assert.ok(Math.abs(u.OpenAI.days[13] - 0.55) < 1e-9, 'today is the last day');
   assert.equal(u['Google Gemini'], undefined, 'an absurd figure counts as nothing');
 });
+
+test('reference prices: a call without a money figure of its own counts at the same model on OpenRouter, list price', () => {
+  const or = [
+    { id: 'anthropic/claude-opus-5.5', kind: 'chat', created: 20, price: [5, 25], cachePrice: [0.5, 6.25] },
+    { id: 'anthropic/claude-opus-4.1', kind: 'chat', created: 10, price: [15, 75] },
+    { id: 'x-ai/grok-4.7-fast', kind: 'chat', price: [0.2, 0.5] },
+    { id: 'z-ai/glm-5.3', kind: 'chat', price: [0.6, 2.2] },
+    { id: 'z-ai/glm-5.3:free', kind: 'chat', price: [0, 0] },
+    { id: 'openai/gpt-oss-120b', kind: 'chat', price: [0.1, 0.5] },
+    { id: 'moonshotai/kimi-k2', kind: 'chat', price: [0.6, 2.5] },
+  ];
+  const m = (id, over) => ({ id, realId: id.split('/').slice(1).join('/'), modelID: id.split('/').pop(), source: id.split('/')[0], kind: 'chat', price: [0, 0], cost: {}, ...over });
+  const [claude, grok, rl, rlFree, ollamaCloud, ollamaLocal, copilot, lmstudio, go, unknownGo] = S.withRefPrices([
+    m('claude-local/opus', { providerID: 'anthropic', plan: 'plan' }),
+    m('grok-local/grok-4.7-fast-reasoning', { providerID: 'x-ai', plan: 'paid', priceFromApp: true }),
+    m('refuseless-api/glm-5.3-abliterated', { maker: 'refuseless', plan: 'paid', priceUnknown: true }),
+    m('refuseless-api/deepseek-v4.1-flash-abliterated-free', { plan: 'paid', priceUnknown: true }),
+    m('ollama-local/gpt-oss:120b-cloud', { providerID: 'ollama', plan: 'plan' }),
+    m('ollama-local/gpt-oss:120b', { providerID: 'ollama', plan: 'free' }),
+    m('opencode-local/github-copilot/kimi-k2', { providerID: 'github-copilot', providerName: 'GitHub Copilot', plan: 'free' }),
+    m('opencode-local/lmstudio/gpt-oss-120b', { providerID: 'lmstudio', plan: 'free' }),
+    m('opencode-go/glm-5.3', { plan: 'plan', listPrice: [0.4, 1.8], cost: { input: 0.4, output: 1.8 } }),
+    m('opencode-go/some-new-model', { plan: 'plan', listPrice: [1, 2], cost: { input: 1, output: 2 } }),
+  ], or);
+  assert.equal(claude.refFrom, 'anthropic/claude-opus-5.5', 'a Claude Code family is its newest model');
+  assert.equal(grok.refFrom, 'x-ai/grok-4.7-fast');
+  assert.deepEqual([rl.priceRef, rl.price, rl.priceUnknown], ['z-ai/glm-5.3', [0.6, 2.2], undefined], 'a Refuseless model is its base model, never the :free one');
+  assert.equal(rlFree.plan, 'free');
+  assert.equal(ollamaCloud.refFrom, 'openai/gpt-oss-120b');
+  assert.equal(ollamaLocal.ref, undefined, 'a model on this computer is free');
+  assert.deepEqual([copilot.plan, copilot.planLabel, copilot.refFrom], ['plan', 'GitHub Copilot', 'moonshotai/kimi-k2'], 'a subscription in OpenCode is a plan');
+  assert.equal(lmstudio.plan, 'free');
+  assert.deepEqual(go.listPrice, [0.6, 2.2], "Go shows OpenRouter's price, not models.dev's");
+  assert.deepEqual([unknownGo.ref, unknownGo.listPrice], [undefined, [1, 2]], 'no such model on OpenRouter: the list price stays');
+  assert.deepEqual(S.withRefPrices([claude], or), [claude], 'pricing again changes nothing');
+  const [nvidia, dated] = S.withRefPrices([
+    m('opencode-local/nvidia/openai/gpt-oss-120b', { providerID: 'nvidia', plan: 'free' }),
+    m('commandcode/claude-opus-4-1-20250805', { plan: 'plan', listPrice: [1, 2] }),
+  ], or);
+  assert.equal(nvidia.plan, 'free', "a $0 provider that isn't a subscription (NVIDIA's free API) stays free");
+  assert.equal(dated.refFrom, 'anthropic/claude-opus-4.1', 'a dated id finds its model');
+
+  const u = { prompt_tokens: 100000, completion_tokens: 10000, prompt_tokens_details: { cached_tokens: 80000 } };
+  assert.deepEqual(S.priced(claude, { ...u, plan_cost: 0.3 }), { cost: 0, plan_cost: 0.3, plan_ref: 'app' }, "Claude Code's own figure comes first");
+  assert.deepEqual(S.priced(claude, u), { cost: 0, plan_cost: 0.39, plan_ref: 'openrouter', ref_model: 'anthropic/claude-opus-5.5' }, 'else OpenRouter, cache reads at its cache price');
+  assert.deepEqual(S.priced({ ...go, source: 'opencode-go' }, { ...u, plan_cost: 0.01 }), { cost: 0, plan_cost: 0.082, plan_ref: 'openrouter', ref_model: 'z-ai/glm-5.3' }, "Go counts at OpenRouter's price even when the app gives a figure");
+  assert.deepEqual(S.priced(unknownGo, u), { cost: 0, plan_cost: 0.12, plan_ref: 'list' });
+  assert.deepEqual(S.priced(grok, u), { cost: 0.025, estimated_cost: true, cost_ref: 'openrouter', ref_model: 'x-ai/grok-4.7-fast' }, 'an API key without a figure: no cache price, so cache reads at the input price');
+  assert.deepEqual(S.priced(grok, { ...u, cost: 0.02 }), { cost: 0.02 }, 'with its own figure');
+  assert.deepEqual(S.priced(rl, u), { cost: 0.082, estimated_cost: true, cost_ref: 'openrouter', ref_model: 'z-ai/glm-5.3' });
+  assert.deepEqual(S.priced(rlFree, u), { cost: 0 });
+  assert.deepEqual(S.priced(lmstudio, u), { cost: 0 });
+});
+
+test("Refuseless: a call's real cost from the key's spend, when no other call overlapped it", async () => {
+  let spent = 1.0;
+  const fetchFn = async (url) => ({ ok: true, status: 200, json: async () => ({ key_spent: spent }), text: async () => JSON.stringify({ key_spent: spent }) });
+  const waits = [5, 5, 5];
+  { // one call alone: the difference
+    const w = D.spendStart('refuseless-api', 'k-solo', 'http://x', fetchFn, waits);
+    await new Promise((r) => setTimeout(r, 5));
+    spent = 1.0123;
+    assert.equal(await w.end(true), 0.0123);
+  }
+  { // two at once: neither can be told apart, each keeps its estimate
+    const a = D.spendStart('refuseless-api', 'k-two', 'http://x', fetchFn, waits), b = D.spendStart('refuseless-api', 'k-two', 'http://x', fetchFn, waits);
+    spent += 0.5;
+    assert.equal(a.end(true), null);
+    assert.equal(b.end(true), null);
+  }
+  { // a call that failed, or a spend that never moved: no figure
+    const f = D.spendStart('refuseless-api', 'k-fail', 'http://x', fetchFn, waits);
+    assert.equal(f.end(false), null);
+    const g = D.spendStart('refuseless-api', 'k-still', 'http://x', fetchFn, waits);
+    assert.equal(await g.end(true), null);
+  }
+});
