@@ -13,6 +13,7 @@
 //     thought signatures on its tool calls.
 //   - Any of these models can also be a decider: it is asked the typed questions in plain words and answers with
 //     probabilities in JSON, read into the shape OpenRouter's Decisions API answers in.
+import crypto from 'node:crypto';
 import { readChatStream } from './openrouter.js';
 import { goBody } from './opencodego.js';
 import { messagesBody, readMessagesStream } from './commandcode.js';
@@ -46,6 +47,47 @@ export const DIRECT = {
     name: 'Meta (Llama API)', short: 'Meta', wire: 'chat', base: 'https://api.meta.ai/v1', dev: 'meta', maker: 'meta', or: ['meta-llama', 'meta'],
     env: ['META_MODEL_API_KEY', 'LLAMA_API_KEY'], site: 'https://dev.meta.ai', keyUrl: 'https://dev.meta.ai', docs: 'https://dev.meta.ai/docs',
     keyHint: 'An API key from Meta’s developer platform. For the older Llama API, set the address to https://api.llama.com/compat/v1.',
+  },
+  'xai-api': {
+    name: 'xAI (Grok)', short: 'xAI', wire: 'chat', base: 'https://api.x.ai/v1', dev: 'xai', maker: 'x-ai', or: ['x-ai'],
+    env: ['XAI_API_KEY'], site: 'https://x.ai/api', keyUrl: 'https://console.x.ai', docs: 'https://docs.x.ai/docs/models',
+    keyHint: 'An API key from the xAI console (console.x.ai → API keys). It starts with xai-.',
+  },
+  'deepseek-api': {
+    name: 'DeepSeek', short: 'DeepSeek', wire: 'chat', base: 'https://api.deepseek.com', dev: 'deepseek', maker: 'deepseek', or: ['deepseek'],
+    env: ['DEEPSEEK_API_KEY'], site: 'https://platform.deepseek.com', keyUrl: 'https://platform.deepseek.com/api_keys', docs: 'https://api-docs.deepseek.com',
+    keyHint: 'An API key from the DeepSeek platform (platform.deepseek.com → API keys).',
+  },
+  'mistral-api': {
+    name: 'Mistral AI', short: 'Mistral', wire: 'chat', base: 'https://api.mistral.ai/v1', dev: 'mistral', maker: 'mistralai', or: ['mistralai'],
+    env: ['MISTRAL_API_KEY'], site: 'https://mistral.ai', keyUrl: 'https://console.mistral.ai/api-keys', docs: 'https://docs.mistral.ai/api/endpoint/chat',
+    keyHint: 'An API key from Mistral La Plateforme (console.mistral.ai → API keys).',
+  },
+  'zai-api': {
+    name: 'Z.AI (GLM)', short: 'Z.AI', wire: 'chat', base: 'https://api.z.ai/api/paas/v4', dev: 'zai', maker: 'z-ai', or: ['z-ai'],
+    env: ['ZAI_API_KEY', 'ZHIPU_API_KEY'], site: 'https://z.ai', keyUrl: 'https://z.ai/manage-apikey/apikey-list', docs: 'https://docs.z.ai/guides/overview/pricing',
+    keyHint: 'An API key from Z.AI (z.ai → API keys). For Zhipu BigModel (China), set the address to https://open.bigmodel.cn/api/paas/v4.',
+  },
+  'qwen-api': {
+    name: 'Alibaba Qwen', short: 'Qwen', wire: 'chat', base: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', dev: 'alibaba', maker: 'qwen', or: ['qwen'],
+    env: ['DASHSCOPE_API_KEY'], site: 'https://www.alibabacloud.com/en/product/modelstudio', keyUrl: 'https://modelstudio.console.alibabacloud.com/', docs: 'https://www.alibabacloud.com/help/en/model-studio/models',
+    keyHint: 'A DashScope API key from Alibaba Cloud Model Studio. For China, set the address to https://dashscope.aliyuncs.com/compatible-mode/v1.',
+  },
+  'minimax-api': {
+    name: 'MiniMax', short: 'MiniMax', wire: 'messages', base: 'https://api.minimax.io/anthropic/v1', dev: 'minimax', maker: 'minimax', or: ['minimax'],
+    env: ['MINIMAX_API_KEY'], site: 'https://platform.minimax.io', keyUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key', docs: 'https://platform.minimax.io/docs/guides/quickstart',
+    keyHint: 'An API key from the MiniMax platform. For China (minimaxi.com), set the address to https://api.minimax.cn/anthropic/v1 (or https://api.minimax.io/v1 for OpenAI format).',
+  },
+  // Fast open-weight inference clouds: not a single model maker, so OpenRouter's ids never route here (`or: []`).
+  'groq-api': {
+    name: 'Groq', short: 'Groq', wire: 'chat', base: 'https://api.groq.com/openai/v1', dev: 'groq', maker: 'groq', or: [],
+    env: ['GROQ_API_KEY'], site: 'https://groq.com', keyUrl: 'https://console.groq.com/keys', docs: 'https://console.groq.com/docs/openai',
+    keyHint: 'An API key from GroqCloud (console.groq.com → API Keys). It starts with gsk_.',
+  },
+  'cerebras-api': {
+    name: 'Cerebras', short: 'Cerebras', wire: 'chat', base: 'https://api.cerebras.ai/v1', dev: 'cerebras', maker: 'cerebras', or: [],
+    env: ['CEREBRAS_API_KEY'], site: 'https://www.cerebras.ai', keyUrl: 'https://cloud.cerebras.ai', docs: 'https://inference-docs.cerebras.ai/introduction',
+    keyHint: 'An API key from Cerebras Cloud (cloud.cerebras.ai → API Keys). It starts with csk-.',
   },
   // Not a maker: open-weight models (GLM and others) served with their refusals removed. No other source has the same
   // models, so OpenRouter's ids never run here. Its list names no prices; its balance comes from /credits.
@@ -104,21 +146,38 @@ export function modelsDev(fetchJSON) {
 const nice = (id) => String(id).replace(/^models\//, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 // A dated snapshot (claude-haiku-4-5-20251001, gpt-5-2025-08-07) takes its family's record when it has none of its own.
 const undated = (id) => String(id).replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').replace(/-(latest)$/, '');
-// What OpenAI's list has that answers no chat call: pictures, voices, embeddings, moderation, the Responses-only models.
-const NOT_CHAT = /embed|tts|whisper|dall-e|image|realtime|audio|transcribe|moderation|davinci|babbage|sora|computer-use|search|deep-research|live|lyria|veo|imagen|aqa/i;
+// What a provider's list has that answers no chat call: pictures, voices, embeddings, classifiers, moderation, the Responses-only models.
+const NOT_CHAT = /embed|tts|whisper|dall-e|image|realtime|audio|transcribe|moderation|davinci|babbage|sora|computer-use|search|deep-research|live|lyria|veo|imagen|aqa|cogview|cogvideo|asr|ocr|rerank|prompt-guard|safeguard|orpheus|multi-agent/i;
 const RESPONSES_ONLY = /(^|-)pro($|-)|codex/i; // OpenAI's that answer only on its Responses API
+const MAKER_NORM = { zhipuai: 'z-ai', alibaba: 'qwen', xai: 'x-ai', mistral: 'mistralai' };
+export function wireOf(src, base) {
+  const def = DIRECT[src], b = String(base || def?.base || '');
+  if (/\/anthropic(\/|$)/i.test(b)) return 'messages';
+  if (src === 'minimax-api' && b && !/\/anthropic(\/|$)/i.test(b)) return 'chat';
+  return def?.wire || 'chat';
+}
+export function devOf(src, base) {
+  const b = String(base || DIRECT[src]?.base || '');
+  if (src === 'zai-api' && /bigmodel\.cn/i.test(b)) return 'zhipuai';
+  if (src === 'qwen-api' && /^https:\/\/dashscope\.aliyuncs\.com/i.test(b)) return 'alibaba-cn';
+  if (src === 'minimax-api' && /minimax\.cn|minimaxi\.com/i.test(b)) return 'minimax-cn';
+  return DIRECT[src]?.dev;
+}
 
 /** One provider's model as a catalogue entry like the other sources' (`<source>/<model>`). */
-export function directEntry(src, live = {}, md = null) {
+export function directEntry(src, live = {}, md = null, base = '') {
   const def = DIRECT[src], id = String(live.id || md?.id || '').replace(/^models\//, '');
   const cost = saneCost(md?.cost);
   const opts = Array.isArray(md?.reasoning_options) ? md.reasoning_options : [];
   const effort = opts.find((o) => o?.type === 'effort' && Array.isArray(o.values));
   const canon = String(md?.canonical_model_id || '');
+  const rawMaker = canon.includes('/') ? canon.split('/')[0] : !def.or.length && id.includes('/') ? id.split('/')[0] : def.maker;
+  const maker = MAKER_NORM[rawMaker] || rawMaker;
+  const wire = wireOf(src, base);
   const created = Number(live.created) > 1e9 ? Number(live.created) : Date.parse(live.created_at || md?.release_date || '') / 1000 || 0;
   return {
-    id: `${src}/${id}`, realId: id, modelID: id, providerID: src, source: src, maker: canon.includes('/') ? canon.split('/')[0] : def.maker,
-    wire: def.wire, name: md?.name || live.display_name || live.displayName || nice(id), kind: 'chat',
+    id: `${src}/${id}`, realId: id, modelID: id, providerID: src, source: src, maker,
+    wire, name: md?.name || live.display_name || live.displayName || nice(id), kind: 'chat',
     ctx: md?.limit?.context || Number(live.inputTokenLimit) || Number(live.context_length) || Number(live.max_input_tokens) || null,
     maxOut: md?.limit?.output || Number(live.outputTokenLimit) || Number(live.max_tokens) || null, created: Math.floor(created) || 0,
     in: (md?.modalities?.input || ['text']).filter((x) => x === 'text' || x === 'image'), out: ['text'],
@@ -126,20 +185,20 @@ export function directEntry(src, live = {}, md = null) {
     price: cost ? [cost.input, cost.output] : [0, 0], cost: cost || {}, plan: 'paid', ...(cost ? {} : { priceUnknown: true }),
     tools: md ? md.tool_call !== false : true, temp: md ? md.temperature !== false : true, reasoning: !!md?.reasoning,
     efforts: effort ? effort.values.map(String) : [], budget: opts.some((o) => o?.type === 'budget_tokens'),
-    interleaved: md?.interleaved && typeof md.interleaved === 'object' ? md.interleaved.field || null : null,
+    interleaved: md?.interleaved && typeof md.interleaved === 'object' ? md.interleaved.field || null : (src === 'deepseek-api' && /reasoner/i.test(id) ? 'reasoning_content' : null),
     status: md?.status === 'deprecated' ? 'deprecated' : null, canonical: canon || null,
     desc: String(md?.description || live.description || '').replace(/\s+/g, ' ').slice(0, 220),
   };
 }
 // The provider's own list, with the key: OpenAI's shape ({ data: [{ id }] }) everywhere but Gemini (its own API names
 // each model's methods and limits) and Anthropic (paged, with display names).
-async function liveList(src, { key, base, fetchFn }) {
+async function liveList(src, { key, base, fetchFn, dev }) {
   const def = DIRECT[src], b = base || def.base;
   if (src === 'anthropic-api') {
     const out = [];
     let after = '';
     for (let page = 0; page < 10; page++) {
-      const j = await getJSON(`${b}/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { headers: authHeaders(src, key), fetchFn });
+      const j = await getJSON(`${b}/models?limit=1000${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { headers: authHeaders(src, key, b), fetchFn });
       out.push(...(Array.isArray(j?.data) ? j.data : []));
       if (!j?.has_more || !j.last_id) break;
       after = j.last_id;
@@ -151,7 +210,14 @@ async function liveList(src, { key, base, fetchFn }) {
     return (Array.isArray(j?.models) ? j.models : []).filter((m) => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes('generateContent'))
       .map((m) => ({ ...m, id: String(m.name || '').replace(/^models\//, '') }));
   }
-  const j = await getJSON(`${b}/models`, { headers: authHeaders(src, key), fetchFn });
+  if (src === 'minimax-api') {
+    const r = await fetchFn(`${b}/models`, { headers: { 'User-Agent': 'QuorX', ...authHeaders(src, key, b) }, signal: AbortSignal.timeout(20000) });
+    if (r.status === 401 || r.status === 403 || r.status === 402) throw await failure(r, b);
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    if (Array.isArray(j?.data) && j.data.length) return j.data;
+    return Object.values(dev?.[devOf(src, b)]?.models || {});
+  }
+  const j = await getJSON(`${b}/models`, { headers: authHeaders(src, key, b), fetchFn });
   return Array.isArray(j?.data) ? j.data : [];
 }
 /**
@@ -160,8 +226,9 @@ async function liveList(src, { key, base, fetchFn }) {
  */
 export async function directModels(src, { key, base, fetchFn = fetch, fetchJSON } = {}) {
   if (!key) throw Object.assign(new Error(`Add your ${DIRECT[src].name} key first.`), { kind: 'auth' });
-  const [live, dev] = await Promise.all([liveList(src, { key, base, fetchFn }), modelsDev(fetchJSON)]);
-  const info = dev?.[DIRECT[src].dev]?.models || {};
+  const dev = await modelsDev(fetchJSON);
+  const live = await liveList(src, { key, base, fetchFn, dev });
+  const info = dev?.[devOf(src, base)]?.models || dev?.[DIRECT[src].dev]?.models || {};
   const out = [], seen = new Set();
   for (const m of live) {
     const id = String(m?.id || '').replace(/^models\//, '');
@@ -169,9 +236,10 @@ export async function directModels(src, { key, base, fetchFn = fetch, fetchJSON 
     seen.add(id);
     const md = Object.hasOwn(info, id) ? info[id] : Object.hasOwn(info, undated(id)) ? info[undated(id)] : null;
     if (md && Array.isArray(md.modalities?.output) && !md.modalities.output.includes('text')) continue;
+    if (md && md.tool_call === false && src !== 'anthropic-api') continue;
     if (!md?.tool_call && NOT_CHAT.test(id) && src !== 'anthropic-api') continue;
     if (src === 'openai-api' && (NOT_CHAT.test(id) || RESPONSES_ONLY.test(id))) continue; // even with a record
-    try { out.push(directEntry(src, m, md)); } catch { /* one odd entry */ }
+    try { out.push(directEntry(src, m, md, base)); } catch { /* one odd entry */ }
   }
   return out;
 }
@@ -197,23 +265,25 @@ export async function directAccount(src, { key, base, fetchFn = fetch } = {}) {
 }
 
 // ---------- one call ----------
-function authHeaders(src, key) {
+function authHeaders(src, key, base) {
   if (src === 'anthropic-api') return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  if (wireOf(src, base) === 'messages') return { 'x-api-key': key, Authorization: `Bearer ${key}`, 'anthropic-version': '2023-06-01' };
   return { Authorization: `Bearer ${key}` };
 }
-// Their errors come as OpenAI's { error: { message, type, code } }, Anthropic's { type: "error", error }, or Google's
-// [{ error: { code, message, status } }].
-const CODE_KIND = { invalid_api_key: 'auth', authentication_error: 'auth', permission_error: 'auth', unauthenticated: 'auth', permission_denied: 'auth', insufficient_quota: 'quota', billing_error: 'quota',
+// Their errors come as OpenAI's { error: { message, type, code } }, Anthropic's { type: "error", error }, Google's
+// [{ error: { code, message, status } }], xAI's { code, error: "..." } or Mistral's { detail: "..." }.
+const CODE_KIND = { invalid_api_key: 'auth', wrong_api_key: 'auth', authentication_error: 'auth', permission_error: 'auth', unauthenticated: 'auth', permission_denied: 'auth', insufficient_quota: 'quota', billing_error: 'quota',
   rate_limit_exceeded: 'rate', rate_limit_error: 'rate', resource_exhausted: 'rate', model_not_found: 'model', not_found_error: 'model', not_found: 'model', overloaded_error: 'server', api_error: 'server', unavailable: 'server', internal: 'server' };
 export async function failure(r, where = '') {
   const t = await r.text().catch(() => '');
   let j = null; try { j = JSON.parse(t); } catch { /* not JSON */ }
   if (Array.isArray(j)) j = j[0];
   const e = j?.error && typeof j.error === 'object' ? j.error : {};
+  const strErr = typeof j?.error === 'string' ? j.error : typeof j?.detail === 'string' ? j.detail : '';
   // A web page instead of JSON (a gateway or firewall in front of the API) says nothing worth showing.
   const page = /^\s*<(!doctype|html)/i.test(t);
-  const msg = String(e.message || j?.message || (page ? '' : t.replace(/\s+/g, ' ').trim().slice(0, 300)) || `HTTP ${r.status}${page ? ' (it answered with a web page, not the API)' : ''}`).slice(0, 400);
-  const errorType = [e.code, e.type, e.status].find((x) => typeof x === 'string') || undefined;
+  const msg = String(e.message || j?.message || strErr || (page ? '' : t.replace(/\s+/g, ' ').trim().slice(0, 300)) || `HTTP ${r.status}${page ? ' (it answered with a web page, not the API)' : ''}`).slice(0, 400);
+  const errorType = [e.code, e.type, e.status, j?.code].find((x) => typeof x === 'string') || undefined;
   const kind = CODE_KIND[String(errorType || '').toLowerCase()]
     || (/api key not valid|incorrect api key|invalid (credential|api[ _-]?key|x-api-key|authentication)|unauthori[sz]ed/i.test(msg) ? 'auth'
       : /credit balance is too low|exceeded your current quota|billing/i.test(msg) ? 'quota' : undefined);
@@ -227,17 +297,28 @@ async function* quietLimit(body, ms, ac, name) {
   arm();
   try { for await (const c of body) { arm(); yield c; } } finally { clearTimeout(timer); }
 }
+// Mistral requires 9-character alphanumeric tool-call ids (`[a-zA-Z0-9]{9}`).
+const mistralCallId = (id) => (/^[a-zA-Z0-9]{9}$/.test(String(id || '')) ? String(id) : crypto.createHash('sha1').update(String(id || 'call')).digest('hex').slice(0, 9));
+function mistralMessages(msgs = []) {
+  return msgs.map((m) => {
+    if (!m || typeof m !== 'object') return m;
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) return { ...m, tool_calls: m.tool_calls.map((c) => ({ ...c, id: mistralCallId(c?.id) })) };
+    if (m.role === 'tool' && m.tool_call_id) return { ...m, tool_call_id: mistralCallId(m.tool_call_id) };
+    return m;
+  });
+}
 /** The chat-format request for one of QuorX's calls, with each provider's own differences. */
 export function directChatBody(src, body, info = {}) {
   // Gemini's thought signatures go back on the tool calls they came with.
-  const msgs = src !== 'gemini-api' ? body.messages : (body.messages || []).map((m) => {
+  const msgs = src === 'mistral-api' ? mistralMessages(body.messages) : src !== 'gemini-api' ? body.messages : (body.messages || []).map((m) => {
     const sig = m?.role === 'assistant' && m.qx_pass?.gemini_sigs;
     if (!sig || !Array.isArray(m.tool_calls)) return m;
     return { ...m, tool_calls: m.tool_calls.map((c) => (sig[c?.id] ? { ...c, extra_content: { google: { thought_signature: sig[c.id] } } } : c)) };
   });
   const out = goBody({ ...body, messages: msgs }, info);
   if (src === 'openai-api' && out.max_tokens !== undefined) { out.max_completion_tokens = out.max_tokens; delete out.max_tokens; }
-  if (src === 'gemini-api') { delete out.seed; delete out.parallel_tool_calls; }
+  if (src === 'gemini-api' || src === 'cerebras-api') { delete out.seed; delete out.parallel_tool_calls; }
+  if (src === 'mistral-api') { delete out.stream_options; if (out.seed !== undefined) { out.random_seed = out.seed; delete out.seed; } }
   if (src === 'moonshot-api' && out.temperature !== undefined) out.temperature = Math.max(0, Math.min(1, out.temperature));
   return out;
 }
@@ -251,9 +332,9 @@ export async function directStream(src, body, signal, onText, onThink, { info = 
   const ac = new AbortController();
   const stop = () => ac.abort(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
   if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
-  const t = Date.now(), b = base || def.base, messages = def.wire === 'messages';
+  const t = Date.now(), b = base || def.base, messages = (info.wire || wireOf(src, b)) === 'messages';
   const real = info.realId || String(body.model || '').slice(src.length + 1);
-  const post = (req) => fetchFn(`${b}${messages ? '/messages' : '/chat/completions'}`, { method: 'POST', signal: ac.signal, headers: { ...authHeaders(src, key), 'Content-Type': 'application/json', 'User-Agent': 'QuorX' }, body: JSON.stringify(req) });
+  const post = (req) => fetchFn(`${b}${messages ? '/messages' : '/chat/completions'}`, { method: 'POST', signal: ac.signal, headers: { ...authHeaders(src, key, b), 'Content-Type': 'application/json', 'User-Agent': 'QuorX' }, body: JSON.stringify(req) });
   const spend = def.credits ? spendStart(src, key, b, fetchFn) : null;
   try {
     let req = messages ? messagesBody(body, { ...info, realId: real }) : directChatBody(src, body, { ...info, realId: real });
@@ -271,8 +352,9 @@ export async function directStream(src, body, signal, onText, onThink, { info = 
     if (!out.seen) throw Object.assign(new Error(`${def.name} answered with an empty stream`), { kind: 'shape' });
     out.provider = def.name;
     out.model = body.model;
-    // Cached tokens as costOf reads them (Moonshot names them at the top of its usage).
-    if (out.usage && Number(out.usage.cached_tokens) > 0 && !out.usage.prompt_tokens_details?.cached_tokens) out.usage.prompt_tokens_details = { ...(out.usage.prompt_tokens_details || {}), cached_tokens: Number(out.usage.cached_tokens) };
+    // Cached tokens as costOf reads them (Moonshot names `cached_tokens`, DeepSeek names `prompt_cache_hit_tokens`).
+    const hit = Number(out.usage?.cached_tokens ?? out.usage?.prompt_cache_hit_tokens);
+    if (out.usage && hit > 0 && !out.usage.prompt_tokens_details?.cached_tokens) out.usage.prompt_tokens_details = { ...(out.usage.prompt_tokens_details || {}), cached_tokens: hit };
     // What the model needs back on its next step (agent.js qx_pass).
     const sigs = {};
     for (const c of out.toolCalls) { const g = c.extra_content?.google?.thought_signature; if (g && c.id) sigs[c.id] = g; delete c.extra_content; }
