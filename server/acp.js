@@ -358,6 +358,46 @@ function mergeUsage(acc, raw) {
   else if (Number.isFinite(Number(u.total_cost_usd ?? u.costUsd ?? u.cost_usd))) acc.usd = Number(u.total_cost_usd ?? u.costUsd ?? u.cost_usd);
 }
 
+// A web search the agent wanted, read through fetch_url: DuckDuckGo's plain HTML results read as text without a
+// browser (Google and Bing answer a plain fetch with a script or a consent page).
+export const SEARCH_PAGE = 'https://html.duckduckgo.com/html/?q=';
+/**
+ * The QuorX tool call that does what an agent's own built-in tool wanted (ACP `kind`, `title` and `rawInput`), when
+ * that QuorX tool is offered this step: [name, args], else null. It then runs under QuorX's approvals and checks like
+ * any other call, so a reply carries on instead of stopping on "reached for a built-in tool".
+ *   web search → fetch_url of a search page · a page → fetch_url · a command → shell · a file → read_file ·
+ *   a search of the files → search_files. Edits and anything else are never guessed.
+ */
+export function quorxFor(native, tools = []) {
+  if (!native) return null;
+  const offered = new Set((tools || []).map((x) => x?.function?.name).filter(Boolean));
+  const inp = native.input && typeof native.input === 'object' ? native.input : {};
+  const kind = String(native.kind || '').toLowerCase(), title = String(native.title || ''), names = `${native.tool || ''} ${title}`;
+  const str = (...ks) => { for (const k of ks) if (typeof inp[k] === 'string' && inp[k].trim()) return inp[k].trim(); return ''; };
+  const told = (title.match(/:\s*(.+)$/) || [])[1]?.trim() || ''; // "Web search: stock market news" → "stock market news"
+  if (offered.has('fetch_url')) {
+    const url = str('url', 'uri', 'href') || (/^https?:\/\/\S+$/i.test(told) ? told : '');
+    if (/^https:\/\//i.test(url)) return ['fetch_url', { url }];
+    if (/web[\s_-]?search|search[\s_-]?(the[\s_-]?)?web|internet search|google[\s_-]?search/i.test(names) || (kind === 'fetch' && !url)) {
+      const q = str('query', 'search_term', 'searchTerm', 'q', 'search_query') || told;
+      if (q) return ['fetch_url', { url: SEARCH_PAGE + encodeURIComponent(q.slice(0, 400)) }];
+    }
+  }
+  if (offered.has('shell') && (kind === 'execute' || /\b(terminal|shell|bash|run_?command|run_terminal_cmd)\b/i.test(native.tool || ''))) {
+    const command = str('command', 'cmd', 'commandLine');
+    if (command) return ['shell', { command }];
+  }
+  if (offered.has('read_file') && kind === 'read') {
+    const p = str('path', 'file_path', 'filePath', 'target_file', 'abs_path');
+    if (p) return ['read_file', { path: p }];
+  }
+  if (offered.has('search_files') && kind === 'search') {
+    const q = str('query', 'pattern', 'search_term', 'regex');
+    if (q) return ['search_files', { query: q }];
+  }
+  return null;
+}
+
 /**
  * One streamed call through an ACP source, read into openrouter.js chatStream's result shape. Retries once with a
  * reminder if the model reaches for one of the agent's own built-in tools instead of writing a <quorx_call> block.
@@ -400,8 +440,11 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
     else conn?.close();
   };
   const arm = () => { clearTimeout(idle); idle = setTimeout(() => { failure ||= err(`${def.appName} sent nothing for ${Math.round(idleMs / 1000)} s`, { name: 'TimeoutError', kind: 'timeout' }); stopTurn(); }, idleMs); };
-  const noteNative = (name, input) => {
-    native = { tool: String(name || native?.tool || 'tool'), input: input && typeof input === 'object' && Object.keys(input).length ? input : native?.input || null };
+  const noteNative = (name, input, { kind, title } = {}) => {
+    native = {
+      tool: String(name || native?.tool || 'tool'), input: input && typeof input === 'object' && Object.keys(input).length ? input : native?.input || null,
+      kind: kind || native?.kind || '', title: title || native?.title || '',
+    };
     stopTurn(200);
   };
 
@@ -413,7 +456,7 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
         const deny = optsList.find((o) => /^reject/i.test(String(o?.kind || ''))) || optsList.find((o) => /deny|reject|cancel|no/i.test(String(o?.optionId || o?.name || '')));
         reply({ result: { outcome: signal?.aborted || !deny ? { outcome: 'cancelled' } : { outcome: 'selected', optionId: deny.optionId } } });
         const tc = params.subject?.toolCall || params.toolCall || {};
-        noteNative(tc._meta?.claudeCode?.toolName || tc.name || tc.title || params.title || 'a built-in tool', tc.rawInput || null);
+        noteNative(tc._meta?.claudeCode?.toolName || tc.name || tc.title || params.title || 'a built-in tool', tc.rawInput || null, { kind: tc.kind, title: tc.title || params.title });
       } else reply({ error: { code: -32601, message: 'Method not found' } });
     },
     onNotify: (method, params) => {
@@ -438,7 +481,7 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
       } else if (u.sessionUpdate === 'agent_thought_chunk' && typeof u.content?.text === 'string') {
         thinking += u.content.text; outChars += u.content.text.length; onThink?.(u.content.text);
       } else if (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update') {
-        noteNative(u._meta?.claudeCode?.toolName || u.name || u.title || 'a built-in tool', u.rawInput || null);
+        noteNative(u._meta?.claudeCode?.toolName || u.name || u.title || 'a built-in tool', u.rawInput || null, { kind: u.kind, title: u.title });
       } else if (u.sessionUpdate === 'usage_update') {
         mergeUsage(usageAcc, u);
       }
@@ -497,10 +540,15 @@ async function acpOnce(id, body, signal, onText, onThink, { info = {}, idleMs = 
     const parsed = parseToolCalls(text.replace(EOS, ''), `call_${t.toString(36)}`, key);
     if (native && !parsed.calls.length) {
       const offered = (body.tools || []).some((x) => x?.function?.name === native.tool);
-      if (offered && native.input) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: native.tool, arguments: JSON.stringify(native.input) } }];
-      else throw err(`${def.appName} reached for a built-in tool (${native.tool}), which QuorX keeps off`, {
+      const as = offered && native.input ? [native.tool, native.input] : quorxFor(native, body.tools);
+      if (as) parsed.calls = [{ id: `call_${t.toString(36)}_n`, type: 'function', function: { name: as[0], arguments: JSON.stringify(as[1]) } }];
+      // A web search or page with no fetch_url this step: the chat's Browser tool is off, so there is no web to reach.
+      const web = !!quorxFor(native, [{ function: { name: 'fetch_url' } }]);
+      if (!as) throw err(`${def.appName} reached for a built-in tool (${native.tool}), which QuorX keeps off${web ? '. This chat has no web access: turn on Browser in the message box to let it read the web through QuorX' : ''}`, {
         kind: 'shape', native, firstCost: usageAcc.usd,
-        retryWith: `Your last answer tried to call a built-in agent tool (${native.tool}), which QuorX keeps off, so nothing ran. Write each tool call as a <quorx_call> text block on a line of its own, exactly as the instructions show.`,
+        retryWith: web
+          ? `Your last answer tried a built-in web search or fetch (${native.tool}), which QuorX keeps off, and this chat has no web access, so nothing ran. Answer from what you already know, say plainly that it may be out of date, and mention the user can turn on Browser in the message box for live results.`
+          : `Your last answer tried to call a built-in agent tool (${native.tool}), which QuorX keeps off, so nothing ran. Write each tool call as a <quorx_call> text block on a line of its own, exactly as the instructions show.`,
         partial: { outChars, ms: Date.now() - t },
       });
     }
