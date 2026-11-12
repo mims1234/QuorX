@@ -100,3 +100,18 @@ test('activity bar: ⟳ restarts the harness from just above ⚙, turns amber wh
   assert.match(ws, /\.ws-rail #wrRestart\.spinning svg \{ animation: ohSpin/);
   assert.equal((app.match(/id="wrRestart"/g) || []).length, 1);
 });
+
+test('restart needed: ⟳ lights up for server code in subfolders and for page files changed after the window opened', () => {
+  const srv = read('server.js');
+  // server.js, server/ and its subfolders (packs/…) count; the page's own files are reported with their time.
+  assert.match(srv, /function newestIn\(dir, want, out = \{ t: 0, file: '' \}\)/);
+  assert.match(srv, /const srv = newestIn\(path\.join\(ROOT, 'server'\), /);
+  assert.match(srv, /const page = newestIn\(PUBLIC, /);
+  assert.match(srv, /page: \{ at: Math\.round\(page\.t\), file: page\.file \}/);
+  // The page keeps the time its files had when it loaded, and a newer one lights ⟳ (and the status-bar note).
+  assert.match(app, /if \(pageAtLoad == null\) pageAtLoad = G\.cfg\?\.page\?\.at \|\| r\?\.page\?\.at \|\| null;/);
+  assert.match(app, /const stale = old \|\| r\?\.stale \|\| pageNew;/);
+  // Its tip goes back to normal once nothing is pending, and coming back to the window checks at once.
+  assert.match(app, /b\.title = stale \? `Restart needed: \$\{what\}\. Click to restart and reload\.` : RESTART_TIP\[b\.id\];/);
+  assert.match(app, /document\.addEventListener\('visibilitychange', \(\) => \{ if \(!document\.hidden\) checkStale\(\); \}\);/);
+});
