@@ -44,6 +44,7 @@ export const SHORTCUTS = [
   { id: 'zoom.reset', group: 'zoom', keys: 'Ctrl+0', label: 'Back to 100%', fixed: true },
   // The window: the menu bar's View and Edit menus read their keys from these rows, so the two never disagree.
   { id: 'view.sidebar', group: 'view', keys: 'Ctrl+B', label: 'Show or hide the sidebar' },
+  { id: 'view.panel', group: 'view', keys: 'Ctrl+J', label: 'Show or hide the bottom panel', help: 'Terminal, Checks and Debug, under the tabs. Works from inside a terminal too.' },
   // The activity bar's views (Search is chatsearch above). Pressed again while its view shows, a key hides the sidebar.
   { id: 'view.chats', group: 'view', keys: 'Ctrl+Shift+E', label: 'Chats view' },
   { id: 'view.running', group: 'view', keys: 'Ctrl+Shift+U', label: 'Running view', help: 'Everything running, in every project; what needs you on top.' },

@@ -20,6 +20,7 @@ import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
 import { SHORTCUTS, KEY_GROUPS, byId as keyDef, bindings, actionFor, checkCombo, clashWith, conflicts, comboParts, comboText, normCombo } from './keymap.js';
 import * as QF from './frame-model.js';
+import * as SS from './shell-status.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
 // body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
@@ -27,6 +28,10 @@ let AREA = { n: 0, el: null, st: { view: { id: null, src: false, files: false } 
 const AREA_IDS = /^#(paneTabs|paneTool|paneUrlWrap|artSelect|paneUrl|reloadBtn|copyUrlBtn|popBtn|appBar|paneBody|termRunning|runPane|termSrv)(?![\w-])/;
 const $ = (s, el = document) => (el === document && AREA.el && AREA_IDS.test(s) ? AREA.el : el).querySelector(s);
 const $$a = (s) => (AREA.el || document).querySelectorAll(s);
+// The bottom panel's state and the 🔔 list ("the bottom panel", "notifications" below), here because the area code reads them.
+const QP = { open: false, tab: 'terminal', h: SS.PANEL_DEFAULT, max: false, pid: null, a: null, using: false, sig: '' };
+const NOTES_KEY = 'qx-notes';
+const NOTES = { store: SS.createNotes((() => { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || '[]'); } catch { return []; } })()), seen: new Set() };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (c, d = 4) => `$${(Number(c) || 0).toFixed(d)}`;
 // How long something took, as people read it: 12.3s under a minute, then 21m 41s, 1h 2m 5s, 2d 3h 4m.
@@ -1204,6 +1209,7 @@ function budgetNotices() {
       <button type="button" class="bn-x" title="Hide until the next threshold" aria-label="Dismiss">✕</button>
     </div>`;
     if (old) old.outerHTML = html; else $('.chat-head', c.el.root).insertAdjacentHTML('afterend', html);
+    noteAdd({ kind: 'warn', title: `${c.title || 'A chat'} ${level === 'full' ? 'used its budget' : `used ${Math.round(share * 100)}% of its budget`}`, text: `$${spent.toFixed(4)} of $${b.budget.toFixed(2)}`, chatId: c.id, key: `budget:${c.id}:${level}:${b.budget}` }, { once: true });
     const el = $('.budget-notice', c.el.root);
     $('.bn-raise', el).onclick = () => editBudget(c, undefined, $('.cmp-budget', c.el.root));
     $('.bn-x', el).onclick = () => { (G.budgetSeen ??= {})[c.id] = { level, budget: b.budget }; savePrefs(); el.remove(); };
@@ -3209,7 +3215,7 @@ function placeChrome() {
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
   // The window frame (rows 1 and 2) takes over the top on wider screens: see qfPlace.
   const frame = qfPlace(desk && !POP);
-  if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...btns); if (upd) $('#qfRight').prepend(upd); return; }
+  if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...btns); if (upd) $('#wsbUpd')?.append(upd); return; } // ⬆ Update: the status bar's right end
   if (desk) { title.append(brand, ...(perm ? [perm] : []), ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
   top.prepend(brand);
@@ -7706,6 +7712,7 @@ function usedTags(m) {
 }
 function notifyRun(c, kind, tags = []) {
   if (POP) return; // the main window tells you, once
+  noteRun(c, kind, tags); // 🔔 keeps it, whatever the setting below
   const pref = uiOf(G.settings).notify;
   if (pref === 'off' || (pref === 'needs' && (kind === 'done' || kind === 'error'))) return;
   if (document.visibilityState === 'visible' && document.hasFocus()) return;
@@ -8209,12 +8216,14 @@ WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) to
 // Something came to the front: recorded for back / forward (‹ ›, Alt+← / Alt+→, the mouse's side buttons). A pane
 // tab or a file also names the chat it was in, so stepping back to it brings that chat back first.
 const wsSeen = (kind, id, extra) => { wsFrontFor(kind, id); if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
+// The bottom panel's terminal is an area too, outside the layout (see "the bottom panel").
+function areaLive(a) { return PA.list.includes(a) || (!!a && a === QP.a && a.el.isConnected); }
 function inArea(a, fn) {
   const was = AREA, wc = CTX.chat;
   if (!a) return fn();
-  if (a !== was && !PA.list.includes(a)) return undefined;
+  if (a !== was && !areaLive(a)) return undefined;
   AREA = a; CTX.chat = areaChat(a);
-  try { return fn(); } finally { AREA = PA.list.includes(was) ? was : PA.focus; CTX.chat = wc; }
+  try { return fn(); } finally { AREA = areaLive(was) ? was : PA.focus; CTX.chat = wc; }
 }
 // ---------- which chat a pane group belongs to ----------
 // A group follows the chat you use, unless it is pinned to one (its tab menu: "Pin to …"). With two chats on screen
@@ -8231,7 +8240,7 @@ function wsPin(a, chatId) {
   paneMarkAreas(); paneSave();
 }
 // Runs in each area in turn: what changes live (Steps, the Browser, the Terminal) changes in every area showing it.
-function eachArea(fn) { for (const a of [...PA.list]) inArea(a, () => fn(a)); }
+function eachArea(fn) { for (const a of [...PA.list, ...(qpTermShown() ? [QP.a] : [])]) inArea(a, () => fn(a)); }
 const paneSplit = () => PA.list.length > 1 && !isPhone();
 // The area you click or type in is the one the rest of the page means by "the pane".
 function paneFocus(a) {
@@ -9291,7 +9300,7 @@ function posBack(a) {
 // Page artifacts are hosted by the server (/art/<chat>/<id>), so the preview is always the newest version;
 // sites and apps reload by themselves when files in the project folder change.
 // What the area drew, then back to where you were reading in it.
-function renderPane() { return inArea(AREA, () => { const r = renderPaneNow(); posBack(AREA); return r; }); }
+function renderPane() { if (AREA.panel) return qpTermBody(); return inArea(AREA, () => { const r = renderPaneNow(); posBack(AREA); return r; }); }
 function renderPaneNow() {
   const c = focused();
   // Another chat brings back its own areas: the others are drawn too. The layout is the first chat's project's.
@@ -9759,6 +9768,8 @@ const KEY_RUN = {
   'nav.back': { inSettings: true, run: () => { wsStep(-1); } },
   'nav.forward': { inSettings: true, run: () => { wsStep(1); } },
   'view.sidebar': { run: () => qfToggleSidebar() },
+  // Caught first, so it works in a terminal too (as in an IDE, the key that opened the panel closes it).
+  'view.panel': { capture: true, run: () => { if (!panelOn() || document.querySelector('dialog[open]')) return false; panelToggle(); return true; } },
   // The activity bar's views (QF.VIEWS); Search is chatsearch above.
   ...Object.fromEntries([...QF.VIEWS, ...QF.VIEWS_BOTTOM].filter((v) => v.key !== 'chatsearch').map((v) => [v.key, { run: () => { avPick(v.id); } }])),
   ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.${i + 1}`, { run: () => wtJump(i + 1) }])),
@@ -10351,32 +10362,365 @@ function wsContextLeft(c) {
   const u = contextUse(c); if (!u.known) return null;
   return { pct: u.pct, tone: u.tone, text: ctxLabel(u), title: u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens). Click to open Steps: every model's context, and Compact.` : `${ctxK(u.used)} tokens used. Click to open Steps: every model's context, and Compact.` };
 }
+// This project's chats' cost (the sidebar's figure for it): the server's total, plus what replies running here have
+// spent since it was read.
+function projSpent(pid) {
+  const p = G.projects.find((x) => x.id === pid); if (!p) return 0;
+  const chats = G.chats.filter((x) => projOf(x) === pid), live = chats.reduce((s, x) => s + liveOf(G.open.get(x.id)), 0);
+  return p.spent != null ? p.spent + Math.max(0, live - (p.runningCost || 0)) : chats.reduce((s, x) => s + (x.cost || 0), 0) + live;
+}
+// The branch: the chat's own worktree's, else the project folder's (from git, cached for half a minute).
+const wsBranches = new Map(); // project id → { at, branch }
+function wsBranch(c, pid) {
+  if (c?.wt?.branch) return c.wt.branch;
+  const hit = wsBranches.get(pid);
+  if (!hit || Date.now() - hit.at > 30e3) {
+    wsBranches.set(pid, { at: Date.now(), branch: hit?.branch || '' });
+    gitOf(pid).then((g) => { const b = g?.git ? g.branch || '' : ''; wsBranches.set(pid, { at: Date.now(), branch: b }); if (b !== (hit?.branch || '')) wsStatusDraw(); });
+  }
+  return hit?.branch || '';
+}
+// The newest finished reply's checks: what verify and the reviewer found (the Checks panel shows the rest).
+function wsCheckState(c) {
+  const m = c && checksReply(c); if (!m) return null;
+  const s = m.stats || {}, v = s.verify, r = s.review;
+  if (!v && !r) return null;
+  const problems = (v && !v.ok ? v.problems?.length || 1 : 0) + (r && !r.pass ? r.bugs?.length || 1 : 0);
+  return { ok: !problems, problems };
+}
+const SB_ICO = {
+  sidebar: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>',
+  panel: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18"/></svg>',
+  project: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  branch: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/></svg>',
+  servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01"/></svg>',
+  running: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+  need: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>',
+  ctx: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12h8.5"/></svg>',
+  spend: '',
+  bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5h4"/></svg>',
+};
 function wsStatusDraw() {
   { const fc = focused(); if (fc) drawStepsTabRing(fc); }
-  const bar = $('#wsStatus'); if (!bar) return;
-  const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = ((c ? spaceOf(c) : pid) && G.srvUp?.[c ? spaceOf(c) : pid]) || 0, ctx = c ? wsContextLeft(c) : null;
-  const sig = JSON.stringify([need.map((x) => [x.c.id, x.kind]), work, procs, srv, pid, ctx, c?.id]);
+  const bar = $('#wsStatus'); if (!bar || !$('#wsbLeft')) return;
+  const c = focused(), pid = c ? projOf(c) : qfPid(), space = c ? spaceOf(c) : pid, p = G.projects?.find((x) => x.id === pid);
+  const facts = {
+    sidebar: !G.sideHidden, panel: !!QP.open,
+    project: p ? { id: p.id, name: p.name } : null, branch: wsBranch(c, pid),
+    check: wsCheckState(c), servers: (space && G.srvUp?.[space]) || 0,
+    running: replying().length + runTotal(),
+    need: needsYou().map((x) => ({ title: x.title, kind: x.kind, id: x.c.id })),
+    ctx: c ? wsContextLeft(c) : null, spend: p ? projSpent(pid) : 0, unread: NOTES.store.unread(),
+  };
+  const items = SS.statusItems(facts), sig = JSON.stringify([items, p?.color]);
   if (bar.dataset.sig === sig) return;
   bar.dataset.sig = sig;
-  bar.innerHTML = `${need.length ? `<button type="button" class="wsb-need" data-sb="need" title="${esc(need.map((x) => `${x.title}: ${x.kind === 'answer' ? 'a question' : x.kind === 'budget' ? 'its budget' : 'an approval'}`).join('\n'))}\nClick to go to ${need.length > 1 ? 'each in turn' : 'it'}">⏸ ${need.length} need${need.length === 1 ? 's' : ''} you</button>` : ''}
-    <button type="button" data-sb="run" class="${work ? 'wsb-live' : ''}" title="Running now, in every project: ${work} chat${work === 1 ? '' : 's'} replying, and ${procs} server${procs === 1 ? '' : 's'}, command${procs === 1 ? '' : 's'}, browser tab${procs === 1 ? '' : 's'} or Chrome / computer use">▶ ${n} running</button>
-    <button type="button" data-sb="srv" title="This project's servers that are up: run, stop and edit them">🖥 ${srv} server${srv === 1 ? '' : 's'}</button>
-    <span class="wsb-grow"></span>
-    ${ctx ? `<button type="button" data-sb="ctx" class="wsb-ctx" data-tone="${ctx.tone}" title="${esc(ctx.title || 'Context left in the chat on screen')}">◔ ${esc(ctx.text || `${ctx.pct}% left`)}</button>` : ''}`;
+  const btn = (it) => {
+    const tone = it.tone ? ` sb-${it.tone}` : '', label = esc(it.title.split('\n')[0]);
+    if (it.kind === 'toggle') return `<button type="button" class="wsb-tog" data-sb="${it.act}" aria-pressed="${it.on}" aria-label="${label}" title="${esc(it.title)}">${SB_ICO[it.id]}</button>`;
+    if (it.id === 'project') return `<button type="button" class="wsb-proj" data-sb="${it.act}" title="${esc(it.title)}"><i class="wsb-dot" style="${p ? projStyle(p) : ''}"></i><span class="wsb-pname">${esc(it.text)}</span>${it.branch ? `${SB_ICO.branch}<span class="wsb-mono">${esc(it.branch)}</span>` : ''}</button>`;
+    if (it.id === 'bell') return `<button type="button" class="wsb-bell${it.count ? ' has' : ''}" data-sb="bell" aria-haspopup="dialog" aria-expanded="${!!$('#qxNotes')}" aria-label="${label}" title="${esc(it.title)}">${SB_ICO.bell}${it.count ? `<b class="wsb-n">${it.count > 99 ? '99+' : it.count}</b>` : ''}</button>`;
+    if (it.kind === 'money') return `<button type="button" class="wsb-money" data-sb="${it.act}" title="${esc(it.title)}">${esc(it.text)}</button>`;
+    const ico = SB_ICO[it.id === 'check' ? (it.tone === 'green' ? 'check' : 'warn') : it.id] || '';
+    return `<button type="button" class="wsb-${it.id}${tone}" data-sb="${it.act}"${it.id === 'ctx' ? ` data-tone="${esc(it.tone || '')}"` : ''} title="${esc(it.title)}">${ico}<span>${esc(it.text)}</span></button>`;
+  };
+  const left = items.filter((x) => x.side === 'left'), right = items.filter((x) => x.side === 'right' && x.id !== 'bell');
+  $('#wsbLeft').innerHTML = left.map((it, i) => `${i === 2 ? '<i class="wsb-sep" aria-hidden="true"></i>' : ''}${btn(it)}`).join('');
+  $('#wsbRight').innerHTML = right.map(btn).join('');
+  $('#wsbBell').innerHTML = btn(items.find((x) => x.id === 'bell'));
 }
+// Where each item goes: the one home it is about.
+const SB_ACTS = {
+  sidebar: () => qfToggleSidebar(),
+  panel: () => panelToggle(),
+  source: () => (avOn() ? avShow('source') : null),
+  checks: () => panelShow('checks'),
+  servers: () => wrServers(),
+  running: () => wrRunning(true),
+  need: () => { const list = needsYou(); if (!list.length) return; const i = list.findIndex((x) => x.c.id === G.panes[0]); showChat(list[(i + 1) % list.length].c.id); },
+  // The context figure opens Steps, where every model's context and Compact are.
+  ctx: () => { const c = focused(), m = c?.agent.messages.findLast((x) => x.role === 'assistant' && x.runId); if (m) openTrace(c, m); },
+  spending: () => (avOn() ? avShow('spending') : openCosts()),
+  bell: () => notesToggle(),
+};
 function wsStatusWire() {
   $('#wsStatus').onclick = (e) => {
     const b = e.target.closest('[data-sb]'); if (!b) return;
-    if (b.dataset.sb === 'need') {
-      const list = needsYou(); if (!list.length) return;
-      const i = list.findIndex((x) => x.c.id === G.panes[0]);
-      showChat(list[(i + 1) % list.length].c.id);
-    }
-    // The context figure opens Steps, where every model's context and Compact are.
-    if (b.dataset.sb === 'ctx') { const c = focused(), m = c?.agent.messages.findLast((x) => x.role === 'assistant' && x.runId); if (m) openTrace(c, m); }
-    if (b.dataset.sb === 'run') wrRunning(true);
-    if (b.dataset.sb === 'srv') wrServers();
+    SB_ACTS[b.dataset.sb]?.();
+    delete $('#wsStatus').dataset.sig; wsStatusDraw();
   };
+}
+
+// ---------- the bottom panel: Terminal, Checks, Debug (Ctrl+J, ⬓ in the status bar, View › Bottom panel) ----------
+// Like an IDE's panel under the editor. Terminal is QuorX's own terminal (your shells, every command's and server's
+// output, Running and Servers sections), drawn by the same code as a Terminal tab: the panel holds one more copy of
+// the pane's markup (an "area" outside the layout), so renderTerm, the xterm screens and the live stream work in it
+// unchanged. Terminals can still open as tabs (＋ › Terminal). Checks shows what the newest reply's checks, reviewer
+// and /review found; Debug its errors, warnings and debugger steps (the Steps rows, filtered). Open or shut, height,
+// maximised and the tab in front are remembered per project.
+const QP_KEY = 'qx-panel';
+const qpAll = () => { try { return JSON.parse(localStorage.getItem(QP_KEY) || '{}') || {}; } catch { return {}; } };
+// Wider screens with the window frame on; a phone keeps its one-view-at-a-time layout, a pop-out window its own tab.
+function panelOn() { return !POP && !isPhone() && !!$('#qxPanel') && qfOn(); }
+function qpSave() { if (QP.pid) try { localStorage.setItem(QP_KEY, JSON.stringify(SS.setPanelPrefs(qpAll(), QP.pid, { open: QP.open, h: QP.h, max: QP.max, tab: QP.tab }))); } catch { /* storage off */ } }
+// The panel's own area: the pane's template once more, without its tab strip's extras (the panel has its own tabs).
+function qpArea() {
+  if (QP.a) return QP.a;
+  if (!PA.tpl) return null;
+  const el = PA.tpl.cloneNode(true);
+  el.classList.remove('on'); el.classList.add('qp-area'); el.dataset.area = 'panel';
+  for (const x of el.querySelectorAll('.pa-files, .pa-pages')) x.remove();
+  QP.a = { n: 99, panel: true, gid: 'panel', el, st: { view: { id: null, src: false, files: false, term: true } } };
+  $('#qpBody').prepend(el);
+  // While you click or type in it, it is the area the page means (its terminal takes the keys and Send to chat).
+  el.addEventListener('pointerdown', () => qpUse(true), true);
+  el.addEventListener('focusin', () => qpUse(true));
+  return QP.a;
+}
+// The panel's terminal panes: its own, remembered per project like the first Terminal tab's (ids qp1, qp2…).
+const qpTermKey = (pid) => `qx-panel-term:${pid}`;
+function qpTermLay(t) {
+  if (QP.termLay?.projectId !== t.projectId) {
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(qpTermKey(t.projectId)) || 'null'); } catch { /* storage off */ }
+    const panes = (Array.isArray(saved?.panes) && saved.panes.length ? saved.panes : [{ filter: 'u1', grow: 1 }]).slice(0, 6)
+      .map((q, i) => ({ id: `qp${i + 1}`, filter: String(q.filter || 'u1'), grow: Math.max(0.1, Number(q.grow) || 1) }));
+    QP.termLay = { projectId: t.projectId, panes, act: panes[0].id, nextPane: panes.length + 1, sec: ['term', 'run', 'srv'].includes(saved?.sec) ? saved.sec : 'term' };
+  }
+  return QP.termLay;
+}
+function qpTermSave(t) { try { localStorage.setItem(qpTermKey(t.projectId), JSON.stringify({ panes: qpTermLay(t).panes.map((q) => ({ filter: q.filter, grow: Math.round(q.grow * 1000) / 1000 })), sec: qpTermLay(t).sec })); } catch { /* storage off */ } }
+function qpUse(on) {
+  if (on) { QP.using = true; if (QP.a) AREA = QP.a; return; }
+  QP.using = false;
+  if (AREA === QP.a) AREA = PA.focus;
+}
+// A click or focus anywhere else gives "the pane" back to the group you used.
+for (const ev of ['pointerdown', 'focusin']) document.addEventListener(ev, (e) => { if (QP.using && !QP.a?.el.contains(e.target)) qpUse(false); }, true);
+function qpTermShown() { return !!(QP.a && QP.open && QP.tab === 'terminal' && panelOn()); }
+// The panel's Terminal, drawn like the pane's Terminal tab (runs inside the panel's area).
+function qpTermBody() {
+  const c = focused(), body = $('#paneBody'), bar = $('#appBar');
+  if (!body || !bar) return;
+  if (!c) { bar.hidden = true; body.innerHTML = '<div class="empty">Open a chat in this project to use its terminals here: your own shells, and the live output of every command and server.</div>'; return; }
+  G.view = paneView(c, 'term');
+  renderTerm(c);
+}
+function panelDraw() {
+  const box = $('#qxPanel'); if (!box) return;
+  const on = panelOn() && QP.open;
+  box.hidden = !on;
+  document.body.classList.toggle('qp-open', on);
+  document.body.classList.toggle('qp-max', on && QP.max);
+  if (!on) { if (QP.using) qpUse(false); QP.sig = ''; return; }
+  box.style.setProperty('--qp-h', `${SS.clampPanelH(QP.h, $('.ws-main')?.clientHeight || innerHeight)}px`);
+  const c = focused(), counts = { checks: c ? wsCheckState(c)?.problems || 0 : 0, debug: c ? qpDebugRows(c).n : 0, terminal: (c && G.runCount?.[spaceOf(c)]?.n) || 0 };
+  const tabs = `${SS.PANEL_TABS.map((t) => `<button type="button" role="tab" class="qp-tab ${t.id === QP.tab ? 'on' : ''}" data-qp="${t.id}" aria-selected="${t.id === QP.tab}" title="${esc(t.tip)}">${esc(t.label)}${counts[t.id] ? `<b class="qp-n ${t.id === 'checks' ? 'amber' : t.id === 'debug' ? 'red' : ''}">${counts[t.id]}</b>` : ''}</button>`).join('')}
+    <span class="qp-fill"></span>
+    <button type="button" class="qp-btn" data-qp="max" aria-pressed="${QP.max}" aria-label="${QP.max ? 'Back to its height' : 'Maximise the panel'}" title="${QP.max ? 'Back to its height' : 'Maximise the panel'}">${QP.max ? '⤡' : '⤢'}</button>
+    <button type="button" class="qp-btn" data-qp="close" aria-label="Close the panel" title="Close the panel (${esc(keyLabel('view.panel') || 'Ctrl+J')})">✕</button>`;
+  // Only when it changed: a row drawn again under the pointer would swallow the click.
+  const row = $('#qpTabs'); if (row.dataset.sig !== tabs) { row.dataset.sig = tabs; row.innerHTML = tabs; }
+  const a = qpArea(), page = qpPage();
+  if (a) a.el.hidden = QP.tab !== 'terminal';
+  page.hidden = QP.tab === 'terminal';
+  // Drawn again only when what it shows changes (the chat, the project, the tab); the terminal keeps itself live.
+  const sig = JSON.stringify([QP.tab, c?.id || null, c ? spaceOf(c) : null]);
+  if (QP.tab === 'terminal') { if (a && sig !== QP.sig) { QP.sig = sig; inArea(a, qpTermBody); } return; }
+  QP.sig = sig;
+  qpPageDraw(c, page);
+}
+const qpPage = () => { let p = $('#qpBody .qp-page'); if (!p) { p = document.createElement('div'); p.className = 'qp-page'; $('#qpBody').append(p); } return p; };
+// The project on screen changed (or the page loaded): its own panel comes back as you left it.
+function panelSync() {
+  if (!$('#qxPanel')) return;
+  const pid = qfPid();
+  if (QP.pid !== pid) { Object.assign(QP, SS.panelPrefs(qpAll(), pid), { pid, sig: '' }); }
+  panelDraw();
+}
+function panelToggle(open = !QP.open) {
+  if (!panelOn()) return;
+  QP.open = open; if (!open) QP.max = false;
+  qpSave(); QP.sig = ''; panelDraw(); qpResized();
+  if (open && QP.tab === 'terminal') qpFocusTerm();
+}
+function panelShow(tab, { focus = false } = {}) {
+  if (!panelOn()) return false;
+  QP.open = true; QP.tab = tab; QP.sig = '';
+  qpSave(); panelDraw(); qpResized();
+  if (focus && tab === 'terminal') qpFocusTerm();
+  return true;
+}
+// Opened on purpose: its terminal's screen moves here even if a Terminal tab showed it.
+function qpFocusTerm() {
+  const a = QP.a; if (!a) return;
+  qpUse(true);
+  inArea(a, qpTermBody);
+}
+// Where commands, servers and terminals open from the rest of QuorX (a server's Logs, Run › Terminal, a running
+// command's output): the panel's Terminal on wider screens, else a Terminal tab as before.
+function termHere(c, filter, sec = 'term') {
+  if (!c || !panelOn()) return openTerminal(c, filter, sec);
+  const t = termState(spaceOf(c));
+  QP.open = true; QP.tab = 'terminal'; QP.sig = 'x'; qpSave(); panelDraw();
+  const a = qpArea(); if (!a) return openTerminal(c, filter, sec);
+  qpUse(true);
+  inArea(a, () => {
+    if (filter) t.filter = t.terms.some((u) => u.id === filter) || filter === 'all' || filter === 'agent' ? filter : `srv:${filter}`;
+    t.sec = sec; termSave(t);
+    qpTermBody();
+  });
+  QP.sig = JSON.stringify(['terminal', c.id, spaceOf(c)]);
+  qpResized();
+}
+function qpResized() { WP.key = ''; wsPlace(); deskPlace(true); window.dispatchEvent(new Event('resize')); }
+function panelWire() {
+  const box = $('#qxPanel'); if (!box) return;
+  $('#qpTabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-qp]'); if (!b) return;
+    const k = b.dataset.qp;
+    if (k === 'close') return panelToggle(false);
+    if (k === 'max') { QP.max = !QP.max; qpSave(); panelDraw(); return qpResized(); }
+    panelShow(k, { focus: true });
+  });
+  $('#qpTabs').addEventListener('dblclick', (e) => { if (!e.target.closest('button')) { QP.max = !QP.max; qpSave(); panelDraw(); qpResized(); } });
+  const bar = $('#qpResize');
+  bar.onpointerdown = (e) => {
+    if (QP.max) return;
+    e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add('drag'); document.body.classList.add('resizing');
+    PA.drag = 'resize'; deskPlace(true);
+    const y0 = e.clientY, h0 = box.getBoundingClientRect().height, total = $('.ws-main')?.clientHeight || innerHeight;
+    bar.onpointermove = (ev) => { QP.h = SS.clampPanelH(h0 + y0 - ev.clientY, total); box.style.setProperty('--qp-h', `${QP.h}px`); };
+    bar.onpointerup = bar.onpointercancel = () => { bar.onpointermove = bar.onpointerup = bar.onpointercancel = null; bar.classList.remove('drag'); document.body.classList.remove('resizing'); PA.drag = null; qpSave(); qpResized(); };
+  };
+  bar.ondblclick = () => { QP.h = SS.PANEL_DEFAULT; qpSave(); panelDraw(); qpResized(); };
+  bar.onkeydown = (e) => {
+    const d = { ArrowUp: 24, ArrowDown: -24 }[e.key]; if (d == null) return;
+    e.preventDefault(); QP.h = SS.clampPanelH(QP.h + d, $('.ws-main')?.clientHeight || innerHeight); qpSave(); panelDraw(); qpResized();
+  };
+  addEventListener('resize', () => { if (QP.open) box.style.setProperty('--qp-h', `${SS.clampPanelH(QP.h, $('.ws-main')?.clientHeight || innerHeight)}px`); });
+  // A Checks or Debug tab follows the newest reply while it runs and when it ends.
+  setInterval(() => { if (QP.open && QP.tab !== 'terminal' && !document.hidden) { QP.sig = ''; panelDraw(); } }, 2500);
+}
+// The reply whose checks the panel and the status bar show: the newest one with a result (or still running).
+function checksReply(c) {
+  const ms = c?.agent?.messages || [];
+  for (let i = ms.length - 1; i >= 0; i--) { const m = ms[i]; if (m.role === 'assistant' && m.runId && (m.stats || m.live)) return m; }
+  return null;
+}
+function qpPageDraw(c, page) {
+  const html = QP.tab === 'checks' ? qpChecksHTML(c) : qpDebugHTML(c);
+  if (page.dataset.sig === html) return;
+  const top = page.scrollTop;
+  page.dataset.sig = html; page.innerHTML = html;
+  page.scrollTop = top;
+  for (const b of page.querySelectorAll('[data-qp-fix]')) b.onclick = () => { const m = checksReply(c), v = m?.trace?.findLast((e) => e.t === 'verify'), list = v?.problems || m?.stats?.verify?.problems || []; sendToChat(c, `Fix what the checks found:\n${list.map((x) => `- ${x}`).join('\n')}`, { quote: true, from: b }); };
+  for (const b of page.querySelectorAll('[data-qp-set]')) b.onclick = () => openSettings(b.dataset.qpSet);
+  const cr = c && c.agent.messages.findLast((x) => x.role === 'codereview' && !x.pending), slot = $('.qp-cr', page);
+  if (cr && slot) wireCodeReview(c, cr, slot);
+  const dv = $('[data-qp-dev]', page); if (dv) dv.onclick = () => window.ohDesktop?.nav(dv.dataset.qpDev, 'devtools');
+  const rp = $('[data-qp-report]', page); if (rp) rp.onclick = () => reportProblem();
+  const st = $('[data-qp-steps]', page); if (st) st.onclick = () => { const m = checksReply(c); if (m) openTrace(c, m); };
+}
+const qpEmpty = (t) => `<div class="empty qp-empty">${t}</div>`;
+function qpChecksHTML(c) {
+  if (!c) return qpEmpty('Open a chat: what the checks and the reviewer found in its newest reply shows here.');
+  const m = checksReply(c), cr = c.agent.messages.findLast((x) => x.role === 'codereview' && !x.pending);
+  if (!m && !cr) return qpEmpty('No replies in this chat yet. Before a reply that changed files ends, QuorX re-checks them and opens what was built; what it finds shows here.');
+  const v = m?.trace?.findLast((e) => e.t === 'verify'), sv = m?.stats?.verify;
+  let checks;
+  if (v || sv) {
+    const ok = v ? v.ok : sv.ok, list = (v?.problems || sv?.problems || []);
+    checks = ok ? `<div class="qp-line ok"><span class="check-ok">✓ Checked</span><span>${v?.files ? `${v.files} file${v.files === 1 ? '' : 's'} re-checked` : 'the changed files were re-checked'}${v?.pages?.length ? ` · opened ${v.pages.length} page${v.pages.length === 1 ? '' : 's'}` : ''} · no errors</span></div>`
+      : `<div class="qp-line"><span class="check-bad">⚠ ${list.length} problem${list.length === 1 ? '' : 's'} left</span><button type="button" class="pv-btn" data-qp-fix>↪ Fix in chat</button></div><ul class="qp-problems">${list.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul>`;
+  } else if (m?.live) checks = qpEmpty('The reply is still working. Its checks run before it ends.');
+  else if (G.settings?.verify === false) checks = `<div class="qp-line"><span>The checks before a reply ends are off.</span><button type="button" class="pv-btn" data-qp-set="loop">⚙ Agent loop</button></div>`;
+  else checks = qpEmpty('This reply changed no files, so there was nothing to check.');
+  const reviews = (m?.trace || []).filter((e) => e.t === 'review'), r = reviews.at(-1);
+  return `<section class="qp-sec"><h4>Checks before the reply</h4>${checks}</section>
+    <section class="qp-sec"><h4>Reviewer${reviews.length > 1 ? ` <small>${reviews.length} rounds</small>` : ''}</h4>${r ? reviewCardHTML(m, r, true) : qpEmpty('No reviewer on this reply (⚙ Agent loop → Reviewer).')}</section>
+    <section class="qp-sec"><h4>Code review</h4>${cr ? `<div class="qp-cr">${codeReviewHTML(cr, true)}</div>` : qpEmpty('Type /review in the message box for a reviewer model to read what changed.')}</section>`;
+}
+// The Steps rows of the newest reply that are about something going wrong: errors (with the call that failed),
+// warnings and the debugger.
+function qpDebugRows(c) {
+  const m = checksReply(c); if (!m?.trace?.length) return { m, rows: [], n: 0 };
+  if (m._qpDbg?.len === m.trace.length) return m._qpDbg.v;
+  const { rows } = traceRows(m), keep = [];
+  rows.forEach((r, i) => {
+    const bad = /data-k="err"/.test(r), hit = bad || /data-k="warn"/.test(r) || r.includes('🐞 debugger');
+    if (!hit) return;
+    if (bad && i && !keep.includes(rows[i - 1])) keep.push(rows[i - 1]);
+    keep.push(r);
+  });
+  const v = { m, rows: keep, n: keep.filter((r) => /data-k="err"/.test(r)).length };
+  Object.defineProperty(m, '_qpDbg', { value: { len: m.trace.length, v }, configurable: true, writable: true });
+  return v;
+}
+function qpDebugHTML(c) {
+  if (!c) return qpEmpty('Open a chat: what went wrong in its newest reply shows here.');
+  const { m, rows } = qpDebugRows(c), t = DESK && G.view ? activeBTab(c) : null;
+  const tools = `<div class="qp-line qp-tools">${m ? '<button type="button" class="pv-btn" data-qp-steps>🧭 All steps</button>' : ''}${t?.sid && t.url ? `<button type="button" class="pv-btn" data-qp-dev="${esc(t.sid)}" title="DevTools for ${esc(t.url)}">DevTools · ${esc(clip(pageLabel(t), 30))}</button>` : ''}<button type="button" class="pv-btn" data-qp-report>Report a problem…</button></div>`;
+  if (!m) return tools + qpEmpty('No replies in this chat yet.');
+  return tools + (rows.length ? `<div class="trace qp-trace">${rows.join('')}</div>` : qpEmpty(m.live ? 'Nothing has gone wrong in this reply so far.' : 'Nothing went wrong in the newest reply: no errors, warnings or debugger steps.'));
+}
+
+// ---------- 🔔 notifications: what happened while you looked elsewhere ----------
+// The bell at the right of the status bar collects what QuorX tells you: a reply that finished or stopped, a schedule
+// that ran, an update that is ready, a restart that is needed, a budget or a missing folder. Real warnings still show
+// where they always did (the chat's notice, the OS notification while QuorX is in the background); the bell keeps
+// them so nothing is missed. What needs you is live (approvals, questions, budgets) and heads the list. QuorX's own
+// housekeeping stays silent. Kept in this browser (localStorage), newest first, up to 60.
+function notesSave() { try { localStorage.setItem(NOTES_KEY, JSON.stringify(NOTES.store.toJSON())); } catch { /* storage off */ } }
+// once: a key noted already in this page (a notice drawn again) isn't noted again.
+function noteAdd(n, { once = false } = {}) {
+  if (POP) return; // the main window keeps the list
+  if (once && n.key) { if (NOTES.seen.has(n.key)) return; NOTES.seen.add(n.key); }
+  NOTES.store.add(n); notesSave();
+  wsStatusDraw(); notesRedraw();
+}
+// The other windows' lists (a pop-out reads, the main window writes) stay in step.
+addEventListener('storage', (e) => { if (e.key === NOTES_KEY) { NOTES.store = SS.createNotes((() => { try { return JSON.parse(e.newValue || '[]'); } catch { return []; } })()); wsStatusDraw(); notesRedraw(); } });
+const NOTE_ICO = { error: '✕', warn: '⚠', done: '✓', info: '⬆' };
+function notesToggle() { if ($('#qxNotes')) return notesClose(); notesOpen(); }
+function notesClose() { $('#qxNotes')?.remove(); const b = $('#wsbBell .wsb-bell'); if (b) b.setAttribute('aria-expanded', 'false'); }
+function notesOpen() {
+  const p = document.createElement('div');
+  p.id = 'qxNotes'; p.className = 'qx-notes'; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Notifications');
+  document.body.append(p);
+  notesRedraw();
+  // Seen now: the count goes; what was new keeps its mark until the list closes.
+  NOTES.store.readAll(); notesSave(); wsStatusDraw();
+  $('.qn-row, .qn-x, button', p)?.focus();
+}
+function notesRedraw() {
+  const p = $('#qxNotes'); if (!p) return;
+  const need = needsYou(), groups = SS.noteGroups(NOTES.store.list), now = Date.now();
+  const row = (n) => `<div class="qn-item k-${n.kind}${n.read ? '' : ' new'}"><button type="button" class="qn-row" data-note="${esc(n.id)}" ${n.chatId ? '' : 'data-nochat="1"'} title="${n.chatId ? 'Open the chat' : esc(n.title)}"><span class="qn-ico" aria-hidden="true">${NOTE_ICO[n.kind]}</span><span class="qn-t"><b>${esc(n.title)}</b>${n.text ? `<small>${esc(n.text)}</small>` : ''}</span><span class="qn-at">${SS.ago(n.at, now)}</span></button><button type="button" class="qn-x" data-drop="${esc(n.id)}" aria-label="Remove" title="Remove">✕</button></div>`;
+  p.innerHTML = `<div class="qn-head"><b>Notifications</b><span class="qn-fill"></span>${NOTES.store.list.length ? '<button type="button" class="pv-btn qn-clear">Clear all</button>' : ''}<button type="button" class="qn-close" aria-label="Close" title="Close">✕</button></div>
+    <div class="qn-body">
+      ${need.length ? `<h4>Needs you <b class="qn-n">${need.length}</b></h4>${need.map((x) => `<div class="qn-item k-need"><button type="button" class="qn-row" data-chat="${esc(x.c.id)}" title="Open the chat"><span class="qn-ico" aria-hidden="true">⏸</span><span class="qn-t"><b>${esc(x.title)}</b><small>${x.kind === 'answer' ? 'A question for you' : x.kind === 'budget' ? 'Its budget is used up' : 'Waiting for your approval'}</small></span></button></div>`).join('')}` : ''}
+      ${groups.map((g) => `<h4>${esc(g.label)} <b class="qn-n">${g.items.length}</b></h4>${g.items.map(row).join('')}`).join('')}
+      ${!need.length && !groups.length ? '<div class="empty">You’re all caught up.</div>' : ''}
+    </div>`;
+  p.onclick = (e) => {
+    if (e.target.closest('.qn-close')) return notesClose();
+    if (e.target.closest('.qn-clear')) { NOTES.store.clear(); notesSave(); wsStatusDraw(); return notesRedraw(); }
+    const d = e.target.closest('[data-drop]'); if (d) { NOTES.store.remove(d.dataset.drop); notesSave(); wsStatusDraw(); return notesRedraw(); }
+    const r = e.target.closest('.qn-row'); if (!r) return;
+    const id = r.dataset.chat || NOTES.store.list.find((n) => n.id === r.dataset.note)?.chatId;
+    if (id) { notesClose(); showChat(id); }
+  };
+}
+document.addEventListener('mousedown', (e) => { if ($('#qxNotes') && !e.target.closest('#qxNotes, #wsbBell')) notesClose(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#qxNotes')) { notesClose(); $('#wsbBell .wsb-bell')?.focus(); } });
+// A reply that finished or stopped (from notifyRun, before its own checks: the bell keeps them all). You saw it if
+// the chat is on screen and QuorX is in front.
+function noteRun(c, kind, tags) {
+  if (kind !== 'done' && kind !== 'error') return; // needs-you is live, at the top of the list
+  const seen = onScreen(c) && document.visibilityState === 'visible' && document.hasFocus();
+  noteAdd({ kind, title: `${c.title || 'A chat'} ${kind === 'done' ? 'finished' : 'stopped'}`, text: tags.filter(Boolean).join(' · '), chatId: c.id, key: `run:${c.id}`, read: seen });
 }
 
 // ---------- attention: the taskbar badge and the window title ----------
@@ -10408,7 +10752,7 @@ addEventListener('focus', () => { const id = G.panes?.[0]; if (id && G.unseen?.h
 // Everything above, drawn again: after the sidebar redraws (chat states), and when the Running list or servers change.
 function wsChrome() {
   if (!$('#wsTop')) return;
-  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw(); qfDraw(); wsSingleStrip();
+  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw(); qfDraw(); wsSingleStrip(); panelSync();
   const nb = $('#wsBack'), nf = $('#wsFwd');
   if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
   if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
@@ -10416,7 +10760,7 @@ function wsChrome() {
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
-  wrInit(); avWireTools(); wtWire(); wsSingleWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
+  wrInit(); avWireTools(); wtWire(); wsSingleWire(); wsStatusWire(); wsLayoutsWire(); qfInit(); panelWire();
   if (!WT.pid) wtLoad(G.landingProject || 'scratch');
   wrSync(); wsChrome();
 }
@@ -10447,7 +10791,8 @@ function qfPlace(on) {
     const main = $('.ws-main'); if (main && proj.parentElement !== main) main.prepend(proj);
     if (nav) $('#qfNav').append(nav);
     if (pal) { $('#qfCmdSlot').append(pal); const s = $('span', pal); if (s) s.textContent = 'Go to or run…'; }
-    for (const q of ['#staleNote', '#spend']) { const el = $(q); if (el) $('#qfRight').append(el); }
+    // ⟳ Restart needed and 💲 the key's balance: in the status bar, beside 🔔 (row 2's right end is for Layout).
+    for (const q of ['#staleNote', '#spend']) { const el = $(q); if (el) $('#wsbFixed')?.append(el); }
     qfOverlay();
     return true;
   }
@@ -10534,6 +10879,9 @@ const FRAME_ACTS = {
   // View
   palette: { run: () => openPalette() },
   toggleSidebar: { run: () => qfToggleSidebar(), on: () => !G.sideHidden },
+  togglePanel: { run: () => panelToggle(), ok: () => panelOn(), on: () => QP.open },
+  panelChecks: { run: () => panelShow('checks'), ok: () => panelOn() },
+  panelDebug: { run: () => panelShow('debug'), ok: () => panelOn() },
   maximise: { run: () => wsMaxToggle(PA.focus.gid), ok: () => !!focused() && !!PA.focus && !isPhone(), on: () => !!PA.focus && WK.max === PA.focus.gid },
   zoomIn: { run: () => zoomFor('app', 'in') },
   zoomOut: { run: () => zoomFor('app', 'out') },
@@ -10564,7 +10912,7 @@ const FRAME_ACTS = {
   // Run
   servers: { run: () => wrServers() },
   running: { run: () => $('#runAllBtn')?.click() },
-  terminal: { run: async () => { const c = await wrChat(); if (c) openTerminal(c); } },
+  terminal: { run: async () => { const c = await wrChat(); if (c) termHere(c); } },
   files: { run: () => wrFiles() },
   review: { run: qfCmd('review'), ok: () => !!focused() && !focused().running },
   schedules: { run: () => $('#schedBtn')?.click() },
@@ -11130,7 +11478,8 @@ function renderSpend() {
   // It floats over the page (the sidebar's list would cut it off): under 💲, and kept inside the window.
   if (G.balanceOpen) {
     const at = $('.sp-icon', el).getBoundingClientRect(), card = $('#spTip', el);
-    card.style.setProperty('top', `${Math.round(at.bottom + 6)}px`, 'important');
+    const below = at.bottom + 6 + card.offsetHeight <= innerHeight - 8; // in the status bar it opens upwards
+    card.style.setProperty('top', `${Math.round(below ? at.bottom + 6 : Math.max(8, at.top - 6 - card.offsetHeight))}px`, 'important');
     card.style.setProperty('left', `${Math.round(Math.max(8, Math.min(at.left, innerWidth - card.offsetWidth - 8)))}px`, 'important');
   }
   $('.sp-icon', el).onclick = () => { G.balanceOpen = !G.balanceOpen; renderSpend(); if (G.balanceOpen) refreshBalance(); };
@@ -11222,6 +11571,7 @@ async function scheduleNoticed(n) {
     if (n.kind !== 'done' && n.kind !== 'error') reattachRuns(c);
   }
   if (n.kind === 'start') return; // no notification for a run starting
+  if (n.kind === 'done' || n.kind === 'error') noteAdd({ kind: n.kind, title: `⏰ ${n.name} ${n.kind === 'done' ? 'finished' : 'stopped'}`, text: n.text || 'A scheduled chat', chatId: n.chatId || null, key: `sched:${n.scheduleId}` });
   // The desktop app shows these itself (the harness sends them), so only a browser notifies here.
   if (window.ohDesktop) return;
   const pref = uiOf(G.settings).notify;
@@ -14457,6 +14807,7 @@ function folderNotices() {
       <div class="bn-text"><b>“${esc(p.name)}” needs a folder of its own.</b><small>Its files sit inside QuorX itself (<code class="blurable">${esc(p.dir)}</code>). Pick a folder outside the app: the files are copied there and this chat can carry on.</small></div>
       <button type="button" class="bn-raise">Pick a folder…</button></div>`);
     $('.folder-notice .bn-raise', c.el.root).onclick = () => editProject(p, { reselect: true });
+    noteAdd({ kind: 'warn', title: p.missing ? `The folder of “${p.name}” is missing` : `“${p.name}” needs a folder of its own`, text: p.missing ? 'Reselect it to keep working' : 'Pick a folder outside QuorX', chatId: c.id, key: `folder:${p.id}:${p.missing ? 'missing' : 'inside'}` }, { once: true });
   }
 }
 // Folders can disappear while the app is in the background: look again when the window comes back.
@@ -14684,7 +15035,7 @@ async function renderServers(c) {
   if (r.code === 'FOLDER_MISSING' || r.error) {
     pop.innerHTML = `${head}<div class="srv-empty">⚠ ${esc(r.error)}${r.code === 'FOLDER_MISSING' ? '<br><button type="button" class="srv-btn start srv-reselect">Reselect folder…</button>' : ''}</div>`;
     const rs = $('.srv-reselect', pop); if (rs) rs.onclick = () => { closeServers(c); editProject(p, { reselect: true }); };
-    $('.srv-add', pop).onclick = () => {}; $('.srv-term', pop).onclick = () => { closeServers(c); openTerminal(c); };
+    $('.srv-add', pop).onclick = () => {}; $('.srv-term', pop).onclick = () => { closeServers(c); termHere(c); };
     return;
   }
   const rows = r.servers || [], jobs = (r.jobs || []), pages = r.pages || [];
@@ -14716,14 +15067,14 @@ async function renderServers(c) {
     <div class="srv-foot" title="Each server gets a free port as PORT / {PORT} unless it has a fixed one${rows.some((x) => x.from === '.claude/launch.json') ? '. .claude/launch.json is read too' : ''}.">Project servers: <code>.quorx/launch.json</code> · free port as <code>{PORT}</code> · Pages: always on, inside QuorX</div>${c.wt ? `<div class="srv-foot srv-wt" title="This chat has its own git worktree: its servers and pages run from that copy of the project, each server on a free port of its own (a fixed port in the launch file is left to the project folder's copy)."><span class="wt-branch-tag">⎇ ${esc(c.wt.branch)}</span> These run in this chat's worktree, on ports of their own</div>` : ''}`;
   wirePages(c, pop, pages);
   $('.srv-add', pop).onclick = () => editServer(c, {});
-  $('.srv-term', pop).onclick = () => { closeServers(c); openTerminal(c); };
+  $('.srv-term', pop).onclick = () => { closeServers(c); termHere(c); };
   for (const b of pop.querySelectorAll('[data-job]')) b.onclick = async () => { b.disabled = true; await postJ('/api/term/stop', { job: b.dataset.job }); renderServers(c); };
   for (const row of pop.querySelectorAll('.srv-row[data-i]')) {
     const s = rows[Number(row.dataset.i)];
     for (const b of row.querySelectorAll('[data-act]')) b.onclick = async () => {
       const act = b.dataset.act;
       if (act === 'edit') return editServer(c, s);
-      if (act === 'logs') { closeServers(c); return openTerminal(c, s.name); }
+      if (act === 'logs') { closeServers(c); return termHere(c, s.name); }
       if (act === 'open') { closeServers(c); return showServerInPane(c, s); }
       if (act === 'remove') {
         const live = s.status === 'running' || s.status === 'starting' || s.status === 'not listening';
@@ -14919,6 +15270,7 @@ function termState(projectId) {
 }
 // Another area's panes: one pane showing what was picked for it (Activity, or a server), with ids of its own.
 function termLay(t) {
+  if (AREA.panel) return qpTermLay(t); // the bottom panel's own panes (see "the bottom panel")
   if (!AREA.n) return t.main;
   const a = AREA.st;
   if (a.termLay?.projectId !== t.projectId) {
@@ -14930,6 +15282,7 @@ function termLay(t) {
 const termPane = (t) => t.panes.find((p) => p.id === t.act) || t.panes[0];
 const tpaneEl = (p) => $(`#paneBody .tpane[data-pane="${p.id}"]`);
 function termSave(t) {
+  if (AREA.panel) return qpTermSave(t);
   if (AREA.n) return paneSave();
   try { localStorage.setItem(termLayoutKey(t.projectId), JSON.stringify({ panes: t.panes.map((p) => ({ filter: p.filter, grow: Math.round(p.grow * 1000) / 1000 })), sec: t.sec })); } catch { /* storage off */ }
 }
@@ -15167,7 +15520,7 @@ function termActivate(t, p) {
 // A new pane above or below, with a fresh terminal in it; the two share the space this one had.
 function termSplit(t, p, where) {
   if (t.panes.length >= 6) return;
-  const q = { id: `${AREA.n ? `a${AREA.n}` : ''}p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
+  const q = { id: `${AREA.panel ? 'q' : AREA.n ? `a${AREA.n}` : ''}p${t.nextPane++}`, filter: termNew(t), grow: p.grow / 2 };
   p.grow /= 2;
   t.panes.splice(t.panes.indexOf(p) + (where === 'below' ? 1 : 0), 0, q);
   t.act = q.id; termSave(t); renderPane();
@@ -15218,13 +15571,14 @@ async function mountXterm(t, u, box, focus = true) {
   G.xt ||= new Map();
   let x = G.xt.get(k);
   // One screen per terminal: an area drawn in the background leaves it where it shows, and says so.
-  if (x && x.el.parentElement !== box && x.el.isConnected && AREA !== PA.focus) { box.innerHTML = '<div class="fx-empty">This terminal shows in another area of the pane. Click here to show it here.</div>'; box.onclick = () => { box.onclick = null; renderTermInput(t); }; return; }
+  if (x && x.el.parentElement !== box && x.el.isConnected && AREA !== PA.focus && !(AREA.panel && QP.using)) { box.innerHTML = '<div class="fx-empty">This terminal shows in another area of the pane. Click here to show it here.</div>'; box.onclick = () => { box.onclick = null; renderTermInput(t); }; return; }
   if (x) { if (x.el.parentElement !== box) box.replaceChildren(x.el); requestAnimationFrame(() => { try { x.fit.fit(); } catch { /* hidden */ } if (focus) x.term.focus(); }); return; }
   // The pane can redraw while this one is still being set up: only one terminal per tab.
   if ((G.xtBusy ||= new Set()).has(k)) return;
   G.xtBusy.add(k);
   box.innerHTML = '<div class="fx-empty">Starting the terminal…</div>';
-  try { await loadXterm(); } catch (e) { G.xtBusy.delete(k); u.plain = true; box.hidden = true; renderTermInput(t); return; }
+  // No xterm: the plain input instead, in every area showing this terminal (the bottom panel too), not only this one.
+  try { await loadXterm(); } catch (e) { G.xtBusy.delete(k); u.plain = true; box.hidden = true; eachArea(() => { if (G.view.term) renderTermInput(t); }); return; }
   const el = document.createElement('div'); el.className = 'xt-host';
   const term = new window.Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'Consolas, monospace', fontSize: (() => { try { return Number(localStorage.getItem('oh-term-font')) || 13; } catch { return 13; } })(), lineHeight: 1.15, scrollback: 5000, allowProposedApi: false, theme: xtermTheme(), convertEol: false, linkHandler: termLink });
   termLinks(term);
@@ -15540,7 +15894,7 @@ async function renderPulls(c, host = null) {
   if (!r.repo) { box.innerHTML = `${head()}<p class="prp-note">This project has no GitHub repository (no remote on github.com), so there are no pull requests to show.</p>`; return wireHead(); }
   if (!r.gh?.installed || !r.gh?.signedIn) {
     box.innerHTML = `${head()}<div class="prp-setup"><b>${r.gh?.installed ? 'Sign in to the GitHub CLI' : 'Install the GitHub CLI'}</b><p>${r.gh?.installed ? 'QuorX reads pull requests through the GitHub CLI. Sign in once: run <code>gh auth login</code> in a terminal, then press ↻.' : 'QuorX reads pull requests, checks and reviews through the GitHub CLI (gh). Install it from <a href="https://cli.github.com/" rel="noopener noreferrer" data-cl="1">cli.github.com</a> (or <code>winget install GitHub.cli</code>), run <code>gh auth login</code>, then press ↻.'}</p>${r.gh?.installed ? '<button type="button" class="prp-btn prp-term">Open a terminal</button>' : ''}</div>`;
-    const tb = $('.prp-term', box); if (tb) tb.onclick = () => openTerminal(c, null, 'term');
+    const tb = $('.prp-term', box); if (tb) tb.onclick = () => termHere(c, null, 'term');
     return wireHead();
   }
   const seg = `<span class="st-segmented prp-seg" role="radiogroup" aria-label="Which pull requests">${PR_STATES.map(([k, l]) => `<button type="button" class="st-seg-btn ${k === st ? 'active' : ''}" role="radio" aria-checked="${k === st}" data-prs="${k}">${l}</button>`).join('')}</span>`;
@@ -16191,7 +16545,7 @@ function drawRunningPane(c, r) {
     const killBtn = $('.run-kill', row);
     if (killBtn) killBtn.onclick = async () => { killBtn.disabled = true; killBtn.textContent = 'Killing…'; await killRow(spaceOf(c), x.id, () => { refreshRunning(c); pollDev(); }); };
     const out = $('.run-out', row);
-    if (out) out.onclick = () => openTerminal(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
+    if (out) out.onclick = () => termHere(c, x.kind === 'server' ? x.label : x.tab || (x.source === 'agent' ? 'agent' : 'all'));
     const op = $('.run-open', row); if (op) op.onclick = () => showServerInPane(c, { url: x.url });
     const ch = $('.run-chat', row); if (ch) ch.onclick = () => showChat(ch.dataset.chat);
   }
@@ -16926,6 +17280,7 @@ async function checkStale() {
   const old = r && r.error && /not found|404/i.test(r.error);
   const stale = old || r?.stale;
   el.hidden = !stale;
+  if (stale) noteAdd({ kind: 'warn', title: 'Restart the harness to load the latest changes', text: old ? 'It started before its latest server changes' : `${r.stale.file || 'Its server code'} changed after it started`, key: 'stale' }, { once: true });
   for (const b of ['#restartBtn', '#railRestart'].map((q) => $(q)).filter(Boolean)) { b.classList.toggle('stale', !!stale); if (stale) b.title = 'Restart needed: the harness has newer server code than it is running. Click to restart.'; }
   if (stale) el.title = old ? 'The harness was started before its latest server changes. Restart it (stop it, then run npm start) to load them; pages already load fresh.' : `${r.stale.file} changed after the harness started. Restart it (stop it, then run npm start) to load the latest server code; pages already load fresh.`;
 }
@@ -17296,6 +17651,8 @@ function fitUpdStrip(b) {
 }
 function drawUpdate(u) {
   const b = $('#updNote');
+  // 🔔 once per version that is out or ready (the button itself is in the status bar).
+  if (['available', 'store-available', 'ready'].includes(u.state)) noteAdd({ kind: 'info', title: updateText(u).replace(/^\S+\s/, ''), text: u.state === 'ready' ? 'Restart QuorX to finish' : 'Click ⬆ Update in the status bar', key: `update:${u.version || ''}:${u.state === 'ready' ? 'ready' : 'out'}` }, { once: true });
   if (b) {
     const t = updateText(u);
     // Short on the button (it shares the sidebar's footer with three icons); the whole sentence is in its tip.
