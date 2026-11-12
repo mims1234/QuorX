@@ -27,6 +27,7 @@ import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
+import { LOCAL_HTTP, LOCAL_HTTP_IDS, localHttpModels, localHttpStream, ensureLocalHttp, localHttpServer, findLocalApp } from './localhttp.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
 import { DIRECT, DIRECT_IDS, isDirect, cleanBase, directModels, directStream, directAccount, directDeciders, directDecisions, deciderReal } from './directapi.js';
 
@@ -65,6 +66,8 @@ export const SOURCES = {
     site: 'https://ollama.com', keyUrl: 'https://ollama.com/download', docs: 'https://docs.ollama.com/api/chat',
     keyHint: 'No key: QuorX uses the models you pulled into Ollama (ollama pull), and its cloud models once you sign in (ollama signin).', install: 'winget install Ollama.Ollama', appName: 'Ollama',
   },
+  // OpenAI-compatible local model servers on this computer (localhttp.js): LM Studio, Foundry Local and llama.cpp.
+  ...LOCAL_HTTP,
   // Grok Build on this computer (groklocal.js): the account it is signed in with (grok login).
   [GROK_ID]: {
     id: GROK_ID, name: 'Grok Build on this PC', short: 'Grok Build', app: 'grok', billing: 'mixed', local: true,
@@ -86,8 +89,14 @@ const APPS = {
   [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
-  // Ollama's server is started when it isn't running; listing its models is the check.
+  // Ollama's server is started when the user wants it; listing its models is the check.
   [OLLAMA_ID]: { list: () => ollamaModels(), stream: ollamaStream, check: () => ensureOllama(), server: ollamaServer },
+  ...Object.fromEntries(LOCAL_HTTP_IDS.map((id) => [id, {
+    list: () => localHttpModels(id, { base: baseFor(id) }),
+    stream: (b, sg, t, th, o) => localHttpStream(id, b, sg, t, th, { ...o, base: baseFor(id) }),
+    check: () => ensureLocalHttp(id, { base: baseFor(id) }),
+    server: () => localHttpServer(id, baseFor(id)),
+  }])),
   // Go's list is public; a call and the check need the key.
   [GO_ID]: { list: () => goModels(), stream: (b, sg, t, th, o) => goStream(b, sg, t, th, { ...o, key: keyFor(GO_ID)?.key }), check: async () => { const k = keyFor(GO_ID)?.key; if (!k) throw Object.assign(new Error('Add your OpenCode Go key first.'), { kind: 'auth' }); await goCheck(k, await goModels()); }, server: () => ({ api: true }),
     account: () => goAccount(keyFor(GO_ID)?.key) },
@@ -134,13 +143,14 @@ export function keyFor(id) {
   for (const e of def.envs || [def.env]) if (e && process.env[e]) return { key: process.env[e], from: 'env', env: e };
   return null;
 }
-/** The address a maker's API is called at: the one set in ⚙ Settings, else its own. */
-export const baseFor = (id) => (SOURCES[id]?.direct ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
+/** The address an API or local HTTP source with a configurable base is called at: the one set in ⚙ Settings, else its own. */
+export const baseFor = (id) => (SOURCES[id]?.base ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
 /** For a maker's API: whether its models also take the place of the same models on OpenRouter ('direct'), or not ('openrouter'). */
 export const routeOf = (id) => (SOURCES[id]?.direct && load()[id]?.route === 'direct' ? 'direct' : 'openrouter');
 const mask = (k) => (k.length > 16 ? `${k.slice(0, 6)}••••••••${k.slice(-4)}` : '••••••••');
-// Whether it can run at all: an app installed on this computer, or a key for an API.
-const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : !!findOnPath(d.app)); };
+// Whether it can run at all: an app installed on this computer, a local HTTP port server, or a key for an API.
+const localInstalled = (id, d) => !!(d.portServer || cleanBase(load()[id]?.base) || (id === 'foundry-local' && process.env.FOUNDRY_LOCAL_HOST) || findLocalApp(id) || findOnPath(d.app));
+const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : localInstalled(id, d)); };
 /** Whether a source's models show in the pickers: switched on, and its app installed (or its key in). */
 export const sourceOn = (id) => !!load()[id]?.on && ready(id);
 /** Why a source's models can't run now (no key, not installed, switched off), or ''. */
@@ -148,21 +158,22 @@ export function sourceOffWhy(id) {
   const d = SOURCES[id];
   if (!d) return 'no such source';
   if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → Providers)`;
-  if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Providers)`;
+  if (!d.needsKey && !localInstalled(id, d)) return `${d.name} is not installed (⚙ Settings → Providers)`;
   return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → Providers)`;
 }
-// What is kept: each source's switch, the key of one that takes a key, and a maker's API's own address and routing.
+// What is kept: each source's switch, the key of one that takes a key, and a configurable address / routing.
 // Anything else an older version saved here goes.
 const tidy = (all) => Object.fromEntries(Object.entries(all).filter(([k]) => Object.hasOwn(SOURCES, k)).map(([k, v]) => [k, { on: !!v?.on, ...(SOURCES[k].needsKey && typeof v?.key === 'string' && v.key ? { key: v.key, added: v.added || 0 } : {}),
-  ...(SOURCES[k].direct && cleanBase(v?.base) ? { base: cleanBase(v.base) } : {}), ...(SOURCES[k].direct && v?.route === 'direct' ? { route: 'direct' } : {}) }]));
+  ...(SOURCES[k].base && cleanBase(v?.base) ? { base: cleanBase(v.base) } : {}), ...(SOURCES[k].direct && v?.route === 'direct' ? { route: 'direct' } : {}) }]));
 /**
- * A maker's API's options: `base`, the address its calls go to ('' for its own), and `route`, whether OpenRouter's ids
- * of the same models run on it ('direct') or stay on OpenRouter ('openrouter').
+ * A source's options: `base`, the address its calls go to ('' for its own), and for a maker's API `route`, whether
+ * OpenRouter's ids of the same models run on it ('direct') or stay on OpenRouter ('openrouter').
  */
 export function setSourceOptions(id, { base, route } = {}) {
   known(id);
   const d = SOURCES[id];
-  if (!d.direct) throw new Error(`${d.name} has no options to set.`);
+  if (!d.direct && !d.base) throw new Error(`${d.name} has no options to set.`);
+  if (route !== undefined && !d.direct) throw new Error(`${d.name} has no routing switch.`);
   const s = tidy(load()), cur = { ...(s[id] || { on: false }) };
   if (base !== undefined) {
     const b = cleanBase(base);
@@ -181,7 +192,7 @@ export function setSourceOn(id, on) {
   known(id);
   const d = SOURCES[id];
   if (on && d.needsKey && !keyFor(id)) throw new Error(`Add your ${d.name} key first.`);
-  if (on && !d.needsKey && !findOnPath(d.app)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
+  if (on && !d.needsKey && !localInstalled(id, d)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
   const s = tidy(load());
   s[id] = { ...(s[id] || {}), on: !!on };
   save(s);
@@ -267,7 +278,7 @@ const LISTERS = Object.fromEntries(Object.entries(APPS).map(([id, a]) => [id, a.
 // Listing OpenCode, Claude Code or Grok Build starts the app, and Ollama may not be there at all, so opening QuorX
 // never lists them: their last list is kept on disk (data/source-lists.json) and the pickers show that. An app is
 // listed again when the user asks (Refresh, Test, switching it on) or right after a call to it (it is running then).
-const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID]);
+const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID, ...LOCAL_HTTP_IDS]);
 const SAVED_LISTS = path.join(DATA, 'source-lists.json');
 let savedLists = null;
 const fromDisk = new Set(); // sources whose list this session is the saved copy
@@ -651,7 +662,8 @@ export async function sourceStatus({ versions = true } = {}) {
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
       ...(APPS[id].account ? { account: true } : {}),
       ...(def.needsKey ? { needsKey: true, env: k?.env || def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
-      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), routable: def.routable, envs: def.envs } : {}),
+      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), routable: def.routable, envs: def.envs }
+        : def.base ? { hasBase: true, base: baseFor(id), defaultBase: def.base } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
