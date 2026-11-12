@@ -26,17 +26,22 @@ All calls return a promise.
 |---|---|---|---|
 | `available` | Always `true` (a value, not a call): the page is inside the desktop app | | `true` |
 | `open` | Opens a page in one of your browser tabs, making the tab if needed | `sid`, `url` (http or https only) | `true` |
-| `bounds` | Places a tab over the box the page drew for it (in the page's pixels) | `sid`, `{ x, y, width, height }` | `true`, or `false` for no such tab |
+| `bounds` | Places a tab over the box the page drew for it (in the page's pixels); from a pop-out window, the tab's view moves into that window first (its page isn't loaded again) | `sid`, `{ x, y, width, height }` | `true`, or `false` for no such tab |
 | `show` | Shows one tab and hides every other | `sid` (or nothing to hide all) | `true` |
-| `showSet` | Shows several tabs at once (one per pane area) and hides the rest | `[sid, ...]` | `true` |
+| `showSet` | Shows several tabs at once (one per pane area) and hides the rest of the calling window's tabs (a pop-out's tabs are its own) | `[sid, ...]` | `true` |
 | `hideAll` | Hides every tab | | `true` |
 | `nav` | Back, forward, reload, stop or DevTools for a tab | `sid`, `'back' \| 'forward' \| 'reload' \| 'stop' \| 'devtools'` | `true`, or `false` for no such tab |
 | `close` | Closes a tab (or forgets a sleeping one) | `sid` | `true` if there was one |
+| `find` | Ctrl+F in a tab's page: finds the text (the next or previous match), or stops and clears the marks; the count arrives as a `find` event | `sid`, `'find'`, text, `{ forward, findNext }` · `sid`, `'stop'` | `true`, or `false` for no such tab |
+| `device` | Lays one of your tabs out at a device's size (the Browser tab's 📱 menu), shown whole and scaled to fit its box; kept on every page it opens and after it sleeps. `null` goes back to the box's own size | `sid`, `{ width, height, mobile }` or `null` | `true`, or `false` for no such tab |
+| `popout` | Pop-out windows: a group, a tab or a chat in a light QuorX window of its own. `'open'`, `{ id, url, bounds, title }` opens one (the app's own address only; the box is kept on a screen that is there); `'list'` gives the ids open; from a pop-out, `'state'`, `id`, state keeps what it shows (handed back when it closes), `'dock'`, `id` closes it (Dock back), `'tell'`, `{ type: 'show-chat', id }` brings the main window forward with that message; `'focus'`, `id` brings a pop-out forward | per op: `true` / `false`, or the ids |
 | `snapshot` | A picture of a tab on screen, to stand in while something covers it | `sid` | a PNG data URL, or `null` |
 | `sound` | Volume and mute for every tab, the agent's tabs, or one tab | `'set'`, `{ volume, muted, agentMuted }` · `'tab'`, `{ sid, muted }` · nothing to read | the sound settings |
 | `tabs` | The Running list: every tab with its page and sound, or close one | nothing to list · `'close'`, `sid` | `[{ sid, agent, chatId, url, title, audible, muted, shown, asleep? }]` |
 | `loginItem` | Start QuorX with Windows: read it, or set it | nothing · `true \| false` | `true \| false` |
 | `closeAction` | What closing the window does: keep running in the tray, quit, or ask | nothing · `'tray' \| 'quit' \| 'ask'` | the choice |
+| `keepAwake` | Keep the PC awake while a reply or a command runs: read it, or set it | nothing · `true \| false` | `{ on, held }` (held: keeping it awake now) |
+| `summon` | The system-wide key that brings QuorX forward with the message box ready (off by default): read it, or set it; a key another app holds is refused and stays off | nothing · `{ on, key }` (key as the page writes it, e.g. `'Ctrl+Shift+Space'`) | `{ on, key, ok, error? }` |
 | `quit` | Quits the app | | `true` |
 | `update` | The app's own updates | `'state'` · `'check'` · `'download'` · `'install'` · `'setUrl'`, url · `'store'` | the update state |
 | `info` | Version, packaged or not, dev build, store, data folder, address, whether it runs the server | | `{ version, packaged, dev, store, home, origin, ownsServer }` |
@@ -44,11 +49,14 @@ All calls return a promise.
 | `storage` | Settings → Storage: measure, clear, and the app's own cleanup rules | `'measure'` · `'clear'`, `[parts]` · `'rules'`, `{ updateCleanup, agentCacheOnStart }` | per step |
 | `openHome` | Opens the data folder in File Explorer | | `true` |
 | `focusWindow` | Brings the window forward (a clicked notification) | | `true` |
-| `notify` | A Windows notification; clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `notify` | A Windows notification (a newer one for the same chat replaces the older); clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
+| `badge` | The taskbar icon's badge: how many chats need you, drawn by the page | count, a PNG data URL (nothing at 0) | `true` |
 | `zoom` | QuorX's own zoom, remembered between starts | `'in' \| 'out' \| 'reset' \| 'get'` | the zoom factor |
+| `frame` | The window frame (the page's menu bar is the title bar): the colours of the native − □ × over it, full screen, and the Edit menu's commands where the focus is | `'overlay', { color, symbolColor }` (#rrggbb) · `'fullscreen'` · `'edit', 'undo' \| 'redo' \| 'cut' \| 'copy' \| 'paste' \| 'selectAll'` | `true`; for full screen, whether it is on now |
 | `openExternal` | Opens a web address in your own browser | `url` (http or https only) | `true` |
 | `showFile` | Shows a downloaded file in File Explorer | a path inside Downloads | `true` |
 | `perf` | The performance readout: every process with memory and processor, each tab, lost 3D views | | `{ totalMb, appMb, gpuMb, tabsMb, cpu, gpuCpu, procs, tabs, webglLost }` |
+| `navButtons` | Always `true` (a value, not a call): the mouse's side buttons arrive as `ws-nav` events, so the page ignores its own | | `true` |
 | `on` | Listens to the shell's events (below) | `fn(event)` | a function that stops listening |
 
 ## Events
@@ -57,12 +65,17 @@ Sent on the `oh-desktop` channel; each has a `type`.
 
 | Event | When |
 |---|---|
+| `summon` | The summon key was pressed: the window is in front, and the page puts the cursor in the message box |
 | `state` | A tab's address, title, loading state or back/forward changed (`sid`, `url`, `title`, `loading`, `canBack`, `canForward`) |
 | `error` | A tab's page failed to load (`sid`, `url`, `message`) |
 | `favicon` | A tab's icon changed (`sid`, `icon`) |
 | `popup` | A page asked for a new window; the page opens it as a tab (`sid`, `url`) |
 | `zoom` | A tab's own zoom changed (`sid`, `factor`) |
 | `audio` | A tab started or stopped making sound (`sid`, `audible`) |
+| `find` | How many matches `find` found in a tab's page, and which one is current (`sid`, `at`, `of`) |
+| `popout-closed` | A pop-out window closed (✕ or Dock back): its last state and its box, so the main window docks its tabs back and remembers where it was (`id`, `state`, `bounds`). Its real tabs are back in the main window, hidden |
+| `popout-msg` | A pop-out asked the main window for something (`msg`, e.g. `{ type: 'show-chat', id }`) |
+| `find-open` | Ctrl+F was pressed inside a tab: the page opens its find bar for that tab's group (`sid`) |
 | `download` | A tab's download started, moved on or ended (`sid`, `state`, `name`, `file`, `received`, `total`) |
 | `sleep` | A hidden tab went to sleep to save memory (`sid`); it wakes by itself when placed, shown or reloaded |
 | `wake` | A sleeping tab opened again (`sid`) |
@@ -72,17 +85,18 @@ Sent on the `oh-desktop` channel; each has a `type`.
 | `notify-click` | A notification was clicked, or the extension asked to open a chat (`chatId`) |
 | `zoom-key` | Ctrl + / − / 0 was pressed in the window; the page decides what it zooms (`dir`) |
 | `zoom-wheel` | Ctrl+wheel in the window (`dir`) |
+| `ws-nav` | The mouse's back or forward button, with the pointer and focus outside your browser tabs: the page steps back or forward through the workspace (`dir`: `back` or `forward`). Inside a tab the shell takes that page back or forward itself |
 | `update` | The update state changed (the same object `update('state')` returns) |
 
 ## For another shell
 
 A replacement shell needs, roughly in order of effort:
 
-1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`,
+1. **Real browser tabs** placed over the page (`open`, `bounds`, `show`, `showSet`, `hideAll`, `nav`, `close`, `find`, `device`, `popout`,
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
-3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `quit`, `openExternal`,
+3. **Window and system** (`zoom`, `frame`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `summon`, `quit`, `openExternal`,
    `showFile`, `openHome`).
 4. **App updates and storage** (`update`, `storage`, `info`, `restartHarness`).
 5. **Readout** (`perf`): optional; the page shows its own numbers without it.

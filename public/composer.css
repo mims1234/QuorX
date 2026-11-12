@@ -109,14 +109,14 @@
 .composer-box.fold4 .cq-chip.cq-sum { display: inline-flex; }
 .composer-box.fold4 .cmp-q-slot .qx-pick-l, .composer-box.fold4 .cmp-q-slot .qx-chg { display: none; }
 .composer-box.fold4 .cmp-foot { gap: 6px; padding: 0 6px 6px; }
-/* 5. Narrowest: the squares go too (the Quorium's list still shows them); enhance hides */
-.composer-box.fold5 .cmp-q-slot .qx-strip { display: none; }
+/* 5. Narrowest: the Quorium's squares stay (each opens its role's model picker) but get smaller; enhance hides */
+.composer-box.fold5 .cmp-q-slot .qx-strip { gap: 2px; }
+.composer-box.fold5 .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10.5px; border-radius: 5px; }
 .composer-box.fold5 .enhBtn { display: none !important; }
-/* the Quorium button's own count of modules on, with their colours: shown once the squares have gone */
+/* the Quorium button's own count of modules on: no longer used, since the squares never fold into a count */
 .cmp-q-slot .qx-n { display: none; align-items: center; gap: 2px; }
 .cmp-q-slot .qx-n i { width: 7px; height: 7px; border-radius: 2px; background: var(--qk); }
 .cmp-q-slot .qx-n b { margin-left: 3px; font: 600 11.5px var(--mono); color: var(--muted); }
-.composer-box.fold5 .cmp-q-slot .qx-n { display: inline-flex; }
 /* the narrowest step also tightens the row: the model keeps its dot and the start of its name (the rest on hover) */
 .composer-box.fold5 .cmp-foot .cmp-model-slot { min-width: 56px; }
 .composer-box.fold5 .cmp-foot .cmp-control-rack { gap: 5px; }
@@ -124,7 +124,9 @@
 /* 6. Too narrow even then: the buttons take their own line under the setup, so nothing overlaps */
 .composer-box.fold6 .cmp-foot { flex-wrap: wrap; row-gap: 6px; }
 .composer-box.fold6 .cmp-foot .cmp-control-rack { flex: 1 0 100%; }
-.composer-box.fold6 .cmp-foot .cmp-model-slot { flex: 0 1 auto; min-width: 0; }
+.composer-box.fold6 .cmp-foot .cmp-model-slot { flex: 0 1 auto; min-width: 56px; }
+/* the Quorium's squares never shrink, so the model and the chips wrap under them instead of being squeezed away */
+.composer-v2 .composer-box.fold6 .cmp-foot .cmp-control-rack, .chatpane .composer-box.fold6 .cmp-control-rack { flex-wrap: wrap !important; row-gap: 6px; }
 .composer-box.fold6 .cmp-foot .cmp-bottom-bar { margin-left: auto !important; }
 .composer-box.fold6 .enhBtn { display: inline-grid !important; }
 /* the tray button's count sits in its corner, like the other badges */
@@ -167,3 +169,91 @@
 .cmp-quick .cq-mcp { max-height: min(320px, 45vh); }
 .cmp-quick .cq-mcp-foot { flex-wrap: wrap; row-gap: 4px; }
 .cmp-quick .cq-mcp-count { white-space: nowrap; }
+
+/* the context meter: a ring and "% left" by Send (amber at 25% or less, red at 8% or less); a click opens what is
+   used and Compact (app.js drawContextMeter) */
+.cmp-ctx-slot { position: relative; display: inline-flex; }
+.cmp-ctx-btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 7px; border-radius: 7px; border: 1px solid transparent;
+  background: transparent; color: var(--muted); font: 500 11.5px var(--mono); white-space: nowrap; cursor: pointer; }
+.cmp-ctx-btn:hover, .cmp-ctx-btn[aria-expanded="true"] { background: var(--panel-3); color: var(--text); }
+.cmp-ctx-btn[aria-expanded="true"] { border-color: var(--line-strong); }
+.cmp-ctx-btn[data-tone="amber"] .ctx-lbl { color: var(--amber); }
+.cmp-ctx-btn[data-tone="red"] .ctx-lbl { color: var(--bad); font-weight: 650; }
+.cmp-ctx-btn .ctx-ring { flex: none; }
+/* the label goes with ✨ at step 5, and comes back at step 6 when the buttons have a line of their own */
+.composer-box.fold5:not(.fold6) .cmp-ctx-btn .ctx-lbl { display: none; }
+.ctx-pop { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 70; width: min(290px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
+  font: 400 12.5px var(--font-ui); color: var(--text); animation: popFade .15s cubic-bezier(.16, 1, .3, 1); }
+.ctx-pop[hidden] { display: none; }
+.ctx-pop .ctx-head { display: flex; justify-content: space-between; align-items: baseline; }
+.ctx-pop .ctx-head b { color: var(--text-bright); }
+.ctx-pop .ctx-of { font: 500 12px var(--mono); color: var(--muted); }
+.ctx-pop .ctx-bar { display: flex; height: 8px; border-radius: var(--radius-xs); overflow: hidden; background: var(--panel-3); }
+.ctx-pop .ctx-bar span { display: block; height: 100%; }
+.ctx-pop .ctx-rows { display: flex; flex-direction: column; gap: 3px; }
+.ctx-pop .ctx-rows > div { display: flex; justify-content: space-between; gap: 10px; }
+.ctx-pop .ctx-rows .k { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.ctx-pop .ctx-rows .v { font: 500 12px var(--mono); color: var(--text); }
+.ctx-pop .ctx-rows .ctx-used .k { color: var(--text-bright); font-weight: 600; }
+.ctx-pop .ctx-rows .ctx-free { border-top: 1px solid var(--line-subtle); padding-top: 3px; }
+.ctx-pop .ctx-rows .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.ctx-pop .ctx-note { font-size: 11.5px; color: var(--dim); line-height: 1.4; }
+.ctx-pop .ctx-compact { align-self: flex-start; }
+.ctx-pop .ctx-err { font-size: 12px; color: var(--bad); }
+.ctx-pop .ctx-err.soft { color: var(--muted); }
+/* the note Compact leaves in the chat */
+.msg.usage.compacted { padding: 8px 30px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--violet); border-radius: var(--radius-md); background: var(--panel-2); font-size: 12.5px; color: var(--muted); }
+.msg.compacted .cp-cost { font: 500 11.5px var(--mono); color: var(--dim); }
+.msg.compacted .cp-sum summary { cursor: pointer; color: var(--dim); font-size: 12px; margin-top: 4px; }
+.msg.compacted .cp-body { white-space: pre-wrap; margin-top: 6px; color: var(--text); font-size: 12.5px; }
+
+/* files changed (app.js drawFilesChanged): a chip above the box for what the replies since your last message changed;
+   open, it lists each file with Undo / Redo, and Review all / Undo all beside the chip */
+.composer-v2 { position: relative; }
+.fc-slot { display: flex; flex-direction: column; gap: 6px; margin: 0 0 6px; }
+.fc-slot[hidden] { display: none; }
+.fc-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fc-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
+  background: var(--panel-2); color: var(--text); font: 600 12.5px var(--font-ui); cursor: pointer; }
+.fc-chip:hover, .fc-chip[aria-expanded="true"] { background: var(--panel-3); border-color: var(--accent-border); }
+.fc-chip.done { color: var(--muted); font-weight: 500; }
+.fc-chip .rv-add, .fc-row .rv-add { color: var(--ok); font: 600 12px var(--mono); }
+.fc-chip .rv-rem, .fc-row .rv-rem { color: var(--bad); font: 600 12px var(--mono); }
+.fc-caret { color: var(--dim); font-size: 10px; }
+.fc-bar > button:not(.fc-chip), .fc-row button, .fc-confirm button, .fc-toast button { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.fc-bar > button.danger, .fc-confirm button.danger { color: var(--bad); border-color: var(--bad-border); }
+.fc-bar > button.danger:hover:not(:disabled), .fc-confirm button.danger:hover { background: var(--bad); color: #fff; }
+.fc-slot button:disabled { opacity: .5; cursor: not-allowed; }
+.fc-list { display: flex; flex-direction: column; max-height: min(240px, 34vh); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.fc-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 8px; border-bottom: 1px solid var(--line-subtle); }
+.fc-row:last-child { border-bottom: 0; }
+.fc-row .rv-st { flex: none; }
+.fc-row .rv-st.und { color: var(--dim); }
+.fc-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); color: var(--text); }
+.fc-row.undone .fc-path { color: var(--dim); text-decoration: line-through; }
+.fc-nums { flex: none; }
+.fc-undone, .fc-dim { font: 500 11.5px var(--font-ui); color: var(--dim); }
+.fc-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 10px; border: 1px solid var(--bad-border); border-radius: var(--radius-md);
+  background: var(--bad-dim); color: var(--text); font-size: 12.5px; }
+.fc-confirm.fc-ask { margin: 2px 6px 6px; border-color: var(--amber-line, var(--line)); background: var(--amber-dim); }
+.fc-sp { flex: 1 1 auto; }
+.fc-result { padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-2); font-size: 12.5px; color: var(--text); }
+.fc-result summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.fc-result ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); }
+.fc-note { font-size: 12px; color: var(--muted); }
+.fc-toast { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); z-index: 80; display: inline-flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--line-strong); background: var(--panel); box-shadow: var(--shadow-pop);
+  font: 500 12.5px var(--font-ui); color: var(--text); white-space: nowrap; animation: popFade .15s ease-out; }
+.fc-toast .fc-tact { color: var(--accent); border-color: var(--accent-border); }
+.fc-toast .fc-tx { border: 0; background: none; color: var(--dim); padding: 0 4px; }
+
+/* ---- the message box in the IDE shell: Strict / YOLO as one square icon, the budget in the settings panel ---- */
+/* 🔒 Strict is quiet, ⚡ YOLO keeps its red; no word, the tooltip says which and what it means (app.js renderComposerBar) */
+.cq-chip.cq-mode-ico { width: 28px; padding: 0; justify-content: center; flex: none; }
+.cq-chip.cq-mode-ico .cq-ci { font-size: 13px; }
+.composer-box.fold5 .cq-chip.cq-mode-ico { padding: 0; }
+/* 💵 the chat's budget: its own line in the settings panel, the same chip as before */
+.cmp-quick .cq-sec[data-sec="budget"] .cmp-budget { height: 24px; font-size: 12px; }
+.composer-box .cmp-quick .cq-sec[data-sec="budget"] .cmp-budget .cb-of { display: inline; } /* the panel has room: the whole figure */

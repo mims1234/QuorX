@@ -212,3 +212,125 @@ test('Browser tabs belong to a project: a chat never shows another project’s t
   G.bLastBy = { A: ui.browserTabs(a2)[0].sid }; G.bActive = tb.sid;
   assert.equal(ui.activeBTab(a2).url, 'http://localhost:3001/again');
 });
+
+test('send to chat: a quote goes into the message box as Markdown, and the terminal still sends a chip', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cut = (from, to) => { const i = page.indexOf(from), j = page.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return page.slice(i, j); };
+  const src = cut('function sendToChat(', '// ---------- ❝ Quote') + cut('function termToChat(', 'function termHead(');
+  const tips = [], alerts = [];
+  let drawn = 0;
+  const mk = () => {
+    const ta = { value: '', events: [], dispatchEvent(e) { this.events.push(e.type); }, focus() { this.focused = true; }, setSelectionRange(a) { this.caret = a; } };
+    return { ta, c: { el: { root: {} }, ctx: [] } };
+  };
+  let cur = null;
+  const ui = new Function('$', 'uiAlert', 'flashTip', 'renderAttachments', 'focused', 'document', 'Event', `${src}; return { sendToChat, termToChat };`)(
+    () => cur.ta, (t) => alerts.push(t), (_, t) => tips.push(t), () => drawn++, () => cur?.c, { body: {} }, class { constructor(t) { this.type = t; } });
+  // A quote: each line marked, blank lines kept as ">", after what was typed, with room to answer under it.
+  cur = mk(); cur.ta.value = 'About this:  ';
+  assert.equal(ui.sendToChat(cur.c, '  The hero uses a dark gradient.\n\nAll buttons scroll down.  ', { quote: true }), true);
+  assert.equal(cur.ta.value, 'About this:\n\n> The hero uses a dark gradient.\n>\n> All buttons scroll down.\n\n');
+  assert.deepEqual([cur.ta.events, cur.ta.focused, cur.ta.caret], [['input'], true, cur.ta.value.length]);
+  assert.equal(cur.c.ctx.length, 0);
+  cur = mk(); ui.sendToChat(cur.c, 'one line', { quote: true });
+  assert.equal(cur.ta.value, '> one line\n\n');
+  // The terminal's ↪: a chip with its title, the text cut to its last 20000 characters, as before.
+  cur = mk();
+  ui.termToChat({ title: '$ npm test', text: `${'x'.repeat(25000)}END` }, null);
+  assert.equal(cur.c.ctx.length, 1);
+  assert.equal(cur.c.ctx[0].type, 'term'); assert.equal(cur.c.ctx[0].title, '$ npm test');
+  assert.equal(cur.c.ctx[0].text.length, 20000); assert.ok(cur.c.ctx[0].text.endsWith('END'));
+  assert.equal(drawn, 1); assert.equal(tips.at(-1), 'Added to your next message');
+  ui.termToChat({ title: 'x', text: '  ' }, null);
+  assert.equal(tips.at(-1), 'Nothing to send yet');
+  cur = null; ui.termToChat({ title: 'x', text: 'y' }, null);
+  assert.equal(alerts.at(-1), 'Open a chat first: the output goes with your next message there.');
+});
+
+test('Needs you: chats waiting on an approval, an answer or their budget, from every project, each with its card', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const cut = (from, to) => { const i = page.indexOf(from), j = page.indexOf(to, i); assert.ok(i >= 0 && j > i, from); return page.slice(i, j); };
+  const src = cut('const nextBudget = ', 'async function raiseChatBudget') + cut('const NEED_ICON', 'function drawRunCount(');
+  const chat = (id, projectId, waiting, m) => ({ id, title: `Chat ${id}`, projectId, running: { runId: `r${id}` }, waiting, agent: { messages: [{ role: 'user' }, { role: 'assistant', live: true, runId: `r${id}`, approvals: {}, questions: {}, ...m }] } });
+  const G = { projects: [{ id: 'a', name: 'Arcade' }, { id: 'b', name: 'Shop' }], open: new Map() };
+  const add = (c) => G.open.set(c.id, c);
+  add(chat('1', 'a', true, { approvals: { x: { card: { id: 'x', mode: 'strict', tool: 'shell', what: 'npm install howler' } } } }));
+  add(chat('2', 'b', 'answer', { questions: { q: { card: { id: 'q', question: 'Should prices include tax?' } } } }));
+  add(chat('3', 'b', 'budget', { budgetAsk: { card: { id: 'bud', budget: 0.5, spent: 0.52 } } }));
+  add(chat('4', 'a', false, {})); // running, not waiting
+  add(chat('5', 'a', true, { approvals: { y: { card: { id: 'y', mode: 'strict', tool: 'mcp_setup', what: 'Set up a server', buttonsOnly: true } } } }));
+  add({ ...chat('6', 'a', true, {}), running: null }); // ended
+  const needsYou = new Function('G', 'TOOL_NAME', 'money', `${src}; return needsYou;`)(G, { shell: '💻 Command' }, (n, d) => `$${n.toFixed(d)}`);
+  const list = needsYou();
+  assert.deepEqual(list.map((x) => [x.c.id, x.kind, x.id, x.project]), [['1', 'approval', 'x', 'Arcade'], ['2', 'answer', 'q', 'Shop'], ['3', 'budget', 'bud', 'Shop'], ['5', 'approval', 'y', 'Arcade']]);
+  assert.equal(list[0].what, '💻 Command: npm install howler'); assert.equal(list[0].open, false);
+  assert.equal(list[1].what, 'Should prices include tax?');
+  assert.equal(list[2].raiseTo, 1); // the card's own next step: twice the budget
+  assert.equal(list[3].open, true); // a card that needs more than yes or no opens its chat
+  // Answered cards are not waiting.
+  G.open.get('1').agent.messages[1].approvals.x.outcome = { approve: true };
+  assert.equal(needsYou().some((x) => x.c.id === '1'), false);
+});
+
+test('files changed: the chip covers the replies since your last message that changed files, once they end', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('function fcReplies('), j = page.indexOf('async function drawFilesChanged', i);
+  assert.ok(i >= 0 && j > i);
+  const { fcReplies, fcRun } = new Function(`${page.slice(i, j)}; return { fcReplies, fcRun };`)();
+  const changed = (runId, extra = {}) => ({ role: 'assistant', runId, stats: { changed: ['a.js'] }, ...extra });
+  const c = (messages) => ({ agent: { messages } });
+  // Before your last message: not covered. After it: each reply that changed files, the running one once it ends.
+  const msgs = [{ role: 'user' }, changed('r1'), { role: 'user' }, changed('r2', { stats: { changed: ['b.js'], undoId: 'r1x' } }), { role: 'assistant', runId: 'r3', stats: { changed: [] } }, changed('r4', { live: true })];
+  assert.deepEqual(fcReplies(c(msgs)).map((m) => m.runId), ['r2']);
+  assert.equal(fcRun(fcReplies(c(msgs))[0]), 'r1x'); // a resumed reply's undo copy is its first run's
+  assert.deepEqual(fcReplies(c([...msgs, { role: 'user' }])), []); // a new message starts over
+  assert.deepEqual(fcReplies(c([changed('r9')])).map((m) => m.runId), ['r9']); // no message of yours yet (a schedule)
+});
+
+test('@ mentions: terminals, pages, servers and this chat\'s changes, each read into a chip when picked', async () => {
+  const fs = await import('node:fs');
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const SNAP_CTX'), j = page.indexOf('function tokenAtCaret', i);
+  assert.ok(i >= 0 && j > i);
+  const term = { projectId: 'p1', terms: [{ id: 'u1', name: 'Terminal 1' }], order: ['j1'] };
+  const G = { term };
+  const calls = [];
+  const getJ = async (u) => {
+    calls.push(u);
+    if (u.startsWith('/api/servers/overview')) return { servers: [{ key: 'p1/dev', name: 'dev', status: 'running', url: 'http://localhost:5173' }, { key: 'p1/old', name: 'old', status: 'stopped' }] };
+    if (u.startsWith('/api/servers/log')) return { log: 'VITE ready\nlocal: http://localhost:5173' };
+    if (u.includes('&path=')) return { hunks: [{ lines: [['-', 1, null, 'const a = 1;'], ['+', null, 1, 'const a = 2;']] }] };
+    if (u.startsWith('/api/review')) return { files: [{ path: 'src/a.js', status: 'modified', added: 1, removed: 1 }, { path: 'logo.png', status: 'added', binary: true }], undone: [] };
+    return null;
+  };
+  const postJ = async (u, b) => (b.op === 'text' ? { url: 'http://localhost:5173/', title: 'Shop', text: 'Products\nCart (2)' } : null);
+  const termScreenText = (t, f) => ({ title: f === 'all' ? '⌨ Activity (last 1 command)' : '⌨ Terminal 1 (last 2 lines)', text: f === 'all' ? '$ npm test\nok' : 'PS> dir\nfoo' });
+  const browserTabs = () => [{ sid: 'agent-c1', agent: true, url: 'http://localhost:5173/', title: 'Shop' }, { sid: 'ub1', url: '', title: 'New tab' }];
+  const { mentionSources } = new Function('G', 'getJ', 'postJ', 'termScreenText', 'browserTabs', 'clip', 'DESK', `${page.slice(i, j)}; return { mentionSources };`)(
+    G, getJ, postJ, termScreenText, browserTabs, (s, n) => String(s).slice(0, n), false);
+  // Two replies changed the same files: each shows once.
+  const c = { id: 'c1', projectId: 'p1', agent: { messages: [{ role: 'user' }, { role: 'assistant', runId: 'r0', at: 0, stats: { changed: ['src/a.js'] } }, { role: 'assistant', runId: 'r1', at: 1, stats: { changed: ['src/a.js', 'logo.png'] } }] } };
+  // Nothing typed: one of each kind.
+  assert.deepEqual((await mentionSources(c, '')).map((x) => x.label), ['terminal · Terminal 1', "page · Agent's page · Shop", 'server · dev', 'changes · this chat']);
+  const all = [...await mentionSources(c, 'term'), ...await mentionSources(c, 'page'), ...await mentionSources(c, 'server'), ...await mentionSources(c, 'changes')];
+  // Typing the word narrows it to that kind.
+  assert.deepEqual((await mentionSources(c, 'serv')).map((x) => x.label), ['server · dev']);
+  assert.deepEqual((await mentionSources(c, 'term')).map((x) => x.label), ['terminal · Terminal 1', 'terminal · Activity']);
+  // What each puts in its chip.
+  const got = Object.fromEntries(await Promise.all(all.map(async (x) => { const r = await x.get(); return [r.type + (r.id === 'term-all' ? '-all' : ''), r]; })));
+  assert.equal(got.term.text, 'PS> dir\nfoo'); assert.equal(got.term.title, '⌨ Terminal 1 (last 2 lines)');
+  assert.match(got.page.text, /^Address: http:\/\/localhost:5173\/\nTitle: Shop\n\nProducts\nCart \(2\)$/);
+  assert.equal(got.page.id, 'page-agent-c1');
+  assert.match(got.server.text, /^Server "dev": running at http:\/\/localhost:5173\nVITE ready/);
+  assert.match(got.changes.text, /--- src\/a\.js \(modified, \+1 −1\)\n```diff\n@@\n-const a = 1;\n\+const a = 2;\n```/);
+  assert.match(got.changes.text, /--- logo\.png \(added\): binary/);
+  assert.equal(got.changes.title, 'Changes · 2 files');
+  assert.equal(got.changes.text.match(/--- src\/a\.js/g).length, 1);
+  // No terminal loaded for this project, no changed files: those kinds don't show.
+  G.term = { projectId: 'other', terms: [{ id: 'u1', name: 'Terminal 1' }], order: [] };
+  const bare = await mentionSources({ ...c, agent: { messages: [] } }, '');
+  assert.deepEqual(bare.map((x) => x.label), ["page · Agent's page · Shop", 'server · dev']);
+});

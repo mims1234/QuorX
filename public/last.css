@@ -27,7 +27,7 @@
 
 /* the chat column always keeps room; the artifact pane gives way first */
 .layout:not(.nopane) { grid-template-columns: minmax(340px, 1fr) 6px minmax(0, var(--pane-w, 42%)); }
-@media (max-width: 900px) { .layout:not(.nopane) { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .layout:not(.nopane) { grid-template-columns: minmax(0, 1fr); } }
 
 /* 🔓 always-allowed tools: a permissions control next to Strict/YOLO, not a strip in the chat */
 .allow-wrap { position: relative; display: inline-flex; }
@@ -249,7 +249,7 @@
 .pal-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pal-open svg, .pal-search svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; }
 .pal-open kbd, .pal-foot kbd { font: 10.5px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); background: var(--panel-3); color: var(--muted); }
-@media (max-width: 900px) { .pal-open span, .pal-open kbd { display: none; } .pal-open { padding: 0 8px; } }
+@media (max-width: 720px) { .pal-open span, .pal-open kbd { display: none; } .pal-open { padding: 0 8px; } }
 dialog.pal { padding: 0; border: 0; background: transparent; width: min(640px, calc(100vw - 32px)); max-height: none; margin: 12vh auto auto; overflow: visible; }
 dialog.pal::backdrop { background: rgb(0 0 0 / .45); }
 dialog.pal[open] .pal-box { animation: pal-in var(--dur-menu, .2s) var(--ease-out, ease) both; }
@@ -267,6 +267,41 @@ dialog.pal[open] .pal-box { animation: pal-in var(--dur-menu, .2s) var(--ease-ou
 .pal-empty { padding: 18px 12px; color: var(--muted); font-size: 13px; }
 .pal-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--dim); }
 .pal-foot span { display: inline-flex; align-items: center; gap: 4px; }
+/* Search inside chats: Ctrl+K's Messages rows, the Search chats window (Ctrl+Shift+F), and the message it opens */
+.pal-item.pal-msg { grid-template-columns: 22px minmax(0, 1fr) minmax(0, 36%); }
+.pal-item.pal-more .pal-label { color: var(--accent); }
+.pal-label mark, .cs mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--text-bright, var(--text)); border-radius: 3px; padding: 0 1px; }
+dialog.pal.cs { width: min(820px, calc(100vw - 32px)); margin-top: 8vh; }
+.cs .pal-box { max-height: 80vh; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+.cs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.cs-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.cs-seg-btn, .cs .lf-seg .st-seg-btn { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font: 600 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.cs-seg-btn:hover:not(:disabled), .cs .lf-seg .st-seg-btn:hover { color: var(--text); }
+.cs-seg-btn.active, .cs .lf-seg .st-seg-btn.active { background: var(--panel-3); border-color: var(--line-strong); color: var(--text-bright, var(--text)); }
+.cs-seg-btn:disabled { opacity: .45; cursor: default; }
+.cs-seg-btn:focus-visible, .cs .lf-seg .st-seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cs-proj { font-size: 12px; color: var(--muted); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-dates { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.cs-dates input { height: 28px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); font: 12px var(--font-ui); color-scheme: light dark; }
+.cs-narrow { padding: 8px 14px 0; }
+.cs-narrow[hidden] { display: none; }
+.cs .lf-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface-inset, var(--bg)); border: 1px solid var(--border-inset, var(--line)); }
+.cs .lf-none { margin: 0; color: var(--muted); font-size: 12px; }
+.cs-list.busy { opacity: .7; }
+.cs-chat-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 10px 2px; font-size: 12.5px; min-width: 0; }
+.cs-chat-head b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cs-chat-proj { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.cs-count { margin-left: auto; font: 600 10.5px var(--mono); color: var(--dim); white-space: nowrap; }
+.pal-item.cs-hit { grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; padding-left: 18px; }
+.cs-hit .pal-label { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+.cs-extra { padding: 0 10px 4px 50px; font-size: 11.5px; color: var(--dim); }
+.cs-loadmore .pal-label { color: var(--accent); }
+/* The message a search opened: outlined, its words lit, for a few seconds */
+/* (an outline: message rows set box-shadow: none !important; inset, as the chat's scroll box clips outside it) */
+.msgs .msg.msg-hit { outline: 2px solid var(--accent); outline-offset: -2px; animation: msg-hit 3.2s var(--ease-out, ease) both; }
+@keyframes msg-hit { 0%, 60% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+::highlight(qx-hit) { background-color: color-mix(in srgb, var(--accent) 40%, transparent); color: inherit; }
+@media (prefers-reduced-motion: reduce) { .msgs .msg.msg-hit { animation: none; } }
 /* Review changes (under a reply that changed files): files with + / − counts, a diff per file, Undo per file */
 .review-slot { margin-top: 10px; }
 .rv-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
@@ -1734,6 +1769,29 @@ html body .sidebar .sb-project.current .sb-pname { font-weight: 750 !important; 
 .srv-pop .srv-row[data-i] > .srv-top, .srv-pop .srv-row[data-i] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
 .srv-pop .srv-link { display: inline-flex !important; align-items: center; height: 22px !important; }
 
+/* ---------- two kinds of server: green PROJECT (the launch file) and violet PAGE (QuorX's pages server) ---------- */
+.kind-tag { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 6px; border-radius: 4px; font: 800 9px var(--font-ui); letter-spacing: .08em; line-height: 1; }
+.kind-tag.project { color: var(--ok); background: var(--ok-dim); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
+.kind-tag.page { color: var(--violet, #a78bfa); background: var(--violet-dim, color-mix(in srgb, #a78bfa 14%, transparent)); border: 1px solid var(--violet-line, color-mix(in srgb, #a78bfa 45%, transparent)); }
+.srv-pop .srv-kind { display: flex; align-items: center; gap: 7px; min-width: 0; margin-top: 4px; text-transform: none; letter-spacing: 0; font: 700 12px var(--font-ui); color: var(--text); }
+.srv-pop .srv-kind > span:not(.kind-tag) { flex: none; white-space: nowrap; }
+.srv-pop .srv-kind small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 11px var(--font-ui); color: var(--dim); }
+.srv-pop .srv-kind small code { font: 10.5px var(--mono); }
+.srv-pop .srv-dot.page { background: var(--violet, #a78bfa); box-shadow: 0 0 0 3px color-mix(in srgb, var(--violet, #a78bfa) 18%, transparent); }
+.srv-pop .page-row { border-color: color-mix(in srgb, var(--violet, #a78bfa) 28%, var(--line)) !important; }
+.srv-pop .srv-row[data-p] { grid-template-columns: minmax(0, 1fr) !important; grid-auto-flow: row !important; }
+.srv-pop .srv-row[data-p] > .srv-top, .srv-pop .srv-row[data-p] > .srv-meta { grid-column: 1 / -1 !important; width: 100%; }
+.srv-pop .srv-keep { flex: none; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); background: transparent; color: var(--ok); font: 650 11px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.srv-pop .srv-keep:hover:not(:disabled) { background: var(--ok-dim); border-color: var(--ok); }
+.srv-pop .srv-state.warn { color: var(--amber, #f59e0b); }
+.srv-pop .srv-pfilter { margin: 0 0 2px; }
+.urlbar .url-kind { margin-left: 2px; }
+.urlbar .url-kind[hidden] { display: none; }
+.pages-notice { --bn: var(--violet, #a78bfa); grid-template-columns: auto minmax(0, 1fr) auto auto auto; }
+.pages-notice .bn-raise { color: #fff; }
+.pages-notice .pn-undo { height: 28px; }
+@container (max-width: 520px) { .pages-notice > .pn-undo { grid-row: 2; grid-column: 3; } }
+
 /* ---------- what you sent: clickable pictures and files, and the large viewer ---------- */
 .msg .u-imgs img { cursor: zoom-in; }
 .msg .u-imgs img:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1932,7 +1990,7 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .zoomed-frame > iframe { flex: none !important; }
 
 /* ---------- the side panel hidden: chat only; the button at the top of the chat brings it back ---------- */
-@media (min-width: 901px) {
+@media (min-width: 721px) {
   .layout.pane-hidden { grid-template-columns: minmax(0, 1fr) !important; }
   .layout.pane-hidden .pane, .layout.pane-hidden #paneResizer { display: none !important; }
   .layout.pane-hidden .work { grid-column: 1 / -1; width: auto !important; max-width: none !important; }
@@ -1940,7 +1998,7 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 /* The side panel's toggle in the chat header, next to rename: lit (with a soft glow) while the panel is open. */
 .chat-head .ch-panel.on { color: var(--accent) !important; background: var(--accent-dim) !important; border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important; box-shadow: 0 0 10px -2px var(--accent-glow, rgba(31, 200, 219, .35)); }
 .chat-head .ch-panel.on:hover { box-shadow: 0 0 14px -2px var(--accent-glow, rgba(31, 200, 219, .45)); }
-@media (max-width: 900px) { .chat-head .ch-panel { display: none !important; } }
+@media (max-width: 720px) { .chat-head .ch-panel { display: none !important; } }
 /* 🧹 past the agent-folder limit: lit like ◧, in amber (a warning). */
 .chat-head .ch-space.over { color: var(--amber, #f59e0b) !important; background: color-mix(in srgb, var(--amber, #f59e0b) 16%, transparent) !important; border-color: color-mix(in srgb, var(--amber, #f59e0b) 45%, transparent) !important; box-shadow: 0 0 10px -2px color-mix(in srgb, var(--amber, #f59e0b) 45%, transparent); }
 .chat-head .ch-space.over:hover, .chat-head .ch-space.over[aria-expanded="true"] { box-shadow: 0 0 14px -2px color-mix(in srgb, var(--amber, #f59e0b) 60%, transparent); }
@@ -3067,6 +3125,8 @@ a.md-pathlink.md-path, .md-pathtext.md-path { color: var(--accent); }
 .sb-sched { flex: none; margin-left: 5px; font: 600 9.5px/14px var(--mono); padding: 0 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--text); }
 .sb-sched.on { border-color: color-mix(in srgb, var(--ok, #22c55e) 55%, var(--line)); }
 .sb-sched.off { color: var(--muted); }
+/* An unsent draft waits in the chat's box: a quiet italic tag, not a status colour or a button. */
+.sb-draft { flex: none; margin-left: 5px; font: italic 500 10px/14px var(--font, inherit); padding: 0 4px; border-radius: 4px; border: 1px dashed var(--line); color: var(--muted); }
 .u-fresh { margin-left: 6px; font: 10.5px var(--mono); padding: 0 5px; border-radius: 4px; border: 1px dashed var(--line); color: var(--muted); white-space: nowrap; }
 .stop-sched { color: var(--red, #ef4444); }
 /* ⚙ Models → Blocked providers */
@@ -3261,3 +3321,123 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 .rec.mk { position: relative; display: inline-flex; flex: none; width: 15px; height: 15px; vertical-align: -3px; font-size: 0; line-height: 0; cursor: help; }
 .mk-ava { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 4px; font: 700 9px/1 var(--mono); color: hsl(var(--h) 80% 82%); background: hsl(var(--h) 40% 24%); }
 .rec.mk.rec-r::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 1.5px var(--panel); }
+/* Needs you (app.js needsYou): chats waiting on you, in amber, apart from the green count of what runs; in the Running
+   list, their section sits on top with the answer buttons right on each row. */
+.sb-nav-sched .need { color: var(--amber); display: inline-flex; align-items: center; gap: 4px; }
+.sb-nav-sched .need::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+.sb-rail-btn.nav-running .rl-need { position: absolute; bottom: 3px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 4px; background: var(--amber); color: var(--amber-ink, #1a1000);
+  font: 700 9.5px/14px var(--mono); font-style: normal; text-align: center; }
+.sb-rail-btn.nav-running .rl-need[hidden] { display: none; }
+.tr-dot.wait { background: var(--amber); box-shadow: 0 0 5px var(--amber-glow, var(--amber)); }
+#rlBody .rl-sec[data-sec="need"] { border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-sec[data-sec="need"] > h4 { color: var(--amber); }
+#rlBody .rl-sec[data-sec="need"] .run-n { background: var(--amber-dim); color: var(--amber); }
+#rlBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
+#rlBody .rl-what { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rlBody .run-acts button.primary { background: var(--ok); color: var(--ok-ink); border-color: transparent; font-weight: 650; }
+
+/* Pinned chats (a small pin before the title) and the "Older" row that idle chats fold into: a quiet text row with a
+   chevron, not dashed like Show more, so the two read as different things. */
+.sb-chat-pin { display: inline-flex; flex: none; width: 11px; height: 11px; margin-right: 5px; color: var(--accent); vertical-align: -1px; }
+.sb-chat-pin svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.sb-older-btn { display: flex; align-items: center; gap: 5px; width: calc(100% - 14px); margin: 2px 0 4px 14px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); text-align: left; cursor: pointer; }
+.sb-older-btn svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
+.sb-older-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+.sb-older-btn small { margin-left: auto; font: 500 10.5px var(--mono); color: var(--dim); }
+.sb-older-btn:hover { color: var(--text); background: var(--accent-dim); }
+.sb-chat.sb-older { opacity: .82; }
+.sb-project.folded .sb-older-btn { display: none; }
+
+/* ⚙ About → Desktop app → the summon key: its ✓ box and key box side by side, and why Windows refused a key. */
+.sm-ctl { display: inline-flex; gap: 10px; align-items: center; }
+.sm-err { display: block; margin-top: 6px; font-size: 12px; color: var(--warn); }
+
+
+/* The Browser tab's device size (📱 menu): a dashed-outline picker beside back / forward, solid while a size is on.
+   With a size, the page shows whole in the middle of a dim stage, scaled down to fit (the picture, or the frame). */
+.pane-tool .bv-size { height: 26px; padding: 0 9px; border-radius: 7px; border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); font: 600 11.5px var(--mono); white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.pane-tool .bv-size:hover { color: var(--text); border-color: var(--accent); }
+.pane-tool .bv-size.on { border-style: solid; border-color: var(--accent-border, var(--accent)); color: var(--accent); background: var(--accent-dim); }
+.pane-tool .bv-size:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bstage.dev { background: color-mix(in srgb, var(--bg) 86%, #000); }
+.bstage.dev .ubview.dev { display: flex; align-items: center; justify-content: center; overflow: hidden; background: transparent; }
+.bstage.dev .ubview.dev .ub-shot { width: auto; height: auto; max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 6px 28px rgba(0, 0, 0, .45); }
+.bstage.dev .bdev { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); overflow: hidden; border-radius: 8px; box-shadow: 0 6px 28px rgba(0, 0, 0, .45); background: #fff; }
+.bstage.dev .bdev > iframe { position: absolute; left: 0; top: 0; border: 0; background: #fff; transform-origin: 0 0; }
+
+/* ⚙ Settings → Shortcuts: one row per shortcut; a changeable key is a chip you click (dashed while it waits for keys),
+   a fixed one is plain keycaps with no border; ↺ puts a changed one back. */
+.kc-filter { margin-bottom: 8px; }
+.kc-list { display: grid; }
+.kc-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; }
+.kc-what { display: grid; gap: 2px; min-width: 0; }
+.kc-keys { display: inline-flex; gap: 6px; align-items: center; justify-self: end; }
+.kc-keys kbd { display: inline-block; min-width: 18px; padding: 1px 6px; margin: 0 2px; border-radius: 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; background: var(--panel-2, var(--panel)); color: var(--text); font: 600 11.5px var(--mono); text-align: center; }
+.kc-chip { display: inline-flex; align-items: center; min-height: 30px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; cursor: pointer; color: var(--text); font: 600 12px var(--mono); }
+.kc-chip:hover { border-color: var(--accent); }
+.kc-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kc-chip.kc-rec { border-style: dashed; border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.kc-fixed { display: inline-flex; align-items: center; min-height: 30px; padding: 2px 8px; opacity: .8; }
+.kc-none { color: var(--dim); font: italic 500 11.5px var(--font-ui); }
+.kc-reset { width: 26px; height: 26px; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.kc-reset:hover { color: var(--text); border-color: var(--line-strong); }
+.kc-warn { grid-column: 1 / -1; font-size: 12px; color: var(--warn); }
+.kc-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* Context on the 🧭 Steps tab (drawStepsTabRing in app.js): a thin ring around the icon that fills with what the chat
+   model's context has used, amber and red near the end. Steps lists every model's context (traceContextHTML). */
+[data-tab="trace"] { position: relative; }
+[data-tab="trace"] .st-ctx-ring { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.trace-ctx { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+.trace-ctx .tc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.trace-ctx .tcx-sub { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.trace-ctx .tcx-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 70px auto; gap: 8px; align-items: center; font-size: 12px; }
+.trace-ctx .tcx-who { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-ctx .tc-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.trace-ctx .tcx-bar { height: 5px; border-radius: 3px; background: var(--panel-3); overflow: hidden; }
+.trace-ctx .tcx-bar i { display: block; height: 100%; background: var(--accent); }
+.trace-ctx .tcx-row[data-tone="amber"] .tcx-bar i { background: var(--amber); }
+.trace-ctx .tcx-row[data-tone="red"] .tcx-bar i { background: var(--bad); }
+.trace-ctx .tcx-n { font: 11.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trace-ctx .tcx-row[data-tone="red"] .tcx-n { color: var(--bad); font-weight: 650; }
+.trace-ctx .tcx-cache { font-size: 11.5px; color: var(--muted); }
+.trace-ctx .tcx-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.trace-ctx .tcx-compact { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; }
+.trace-ctx .tcx-compact:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.trace-ctx .tcx-compact:disabled { opacity: .55; cursor: default; }
+
+/* 🔊 read aloud asks PC voice or AI voice (speakChoice in app.js); ▾ next to 🔊 shows once a choice is remembered */
+.msg-tools .mt-speak-pick { display: none; width: 16px; margin-left: -4px; font-size: 10px; }
+html.speak-set .msg-tools .mt-speak-pick { display: inline-grid; }
+.speak-pop { position: fixed; z-index: 200; width: 320px; display: grid; gap: 6px; padding: 10px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); font: 400 12.5px var(--font-ui); color: var(--text); }
+.speak-pop .sp-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.speak-pop .sp-x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.speak-pop .sp-x:hover { background: var(--panel-3); color: var(--text); }
+.speak-pop .sp-opt { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.speak-pop .sp-opt:hover:not(:disabled), .speak-pop .sp-opt:focus-visible { border-color: var(--accent); }
+.speak-pop .sp-opt.on { border-color: var(--accent-border, var(--accent)); background: var(--accent-dim); }
+.speak-pop .sp-opt:disabled { opacity: .55; cursor: default; }
+.speak-pop .sp-ico { font-size: 15px; text-align: center; }
+.speak-pop .sp-t { display: flex; flex-direction: column; min-width: 0; }
+.speak-pop .sp-t small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speak-pop .sp-free { font: 600 10.5px var(--mono); color: var(--ok); text-transform: uppercase; letter-spacing: .04em; }
+.speak-pop .sp-price { font: 11px var(--mono); color: var(--money, #e8b04a); white-space: nowrap; }
+.speak-pop .sp-paid { font: 600 10.5px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.speak-pop .sp-remember { margin-top: 2px; font-size: 12px; color: var(--text); }
+.speak-pop .sp-note { margin: 0; font-size: 11px; color: var(--dim); }
+
+/* Steps: the Context and Cost blocks fold to their header line (▸ / ▾; setStepsFold in app.js, ui.stepsCtx / ui.stepsCost) */
+.trace-cost .tc-fold { width: 100%; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 4px; }
+.trace-cost .tc-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.trace-cost .tc-caret { display: inline-block; width: 1.1em; font-style: normal; color: var(--muted); }
+.trace-cost .tc-caret::before { content: "▾"; }
+.trace-cost .tc-sec.folded .tc-caret::before { content: "▸"; }
+.trace-cost .tc-fold:hover .tc-caret { color: var(--text); }
+.trace-cost .tc-sec.folded > .tc-body, .trace-cost .tc-sec.folded .tc-open-only, .trace-cost .tc-sec:not(.folded) .tc-fold-only { display: none; }
+.trace-ctx > .tc-body { display: flex; flex-direction: column; gap: 6px; }
+.trace-ctx.folded { gap: 0; padding-bottom: 6px; margin-bottom: 6px; }
+.trace-cost .tcx-key { font: 600 11.5px var(--mono); color: var(--muted); white-space: nowrap; }
+/* /context: the same rows as a card in the chat (contextCardHTML) */
+.ctx-card .trace-ctx { border-bottom: 0; padding-bottom: 0; margin: 8px 0 0; }
+.msg.usage .ctx-card .uc-head { padding-right: 30px; } /* room for ✕ */
+.trace-ctx .ctx-err { margin: 0; font-size: 11.5px; color: var(--bad); } /* under Compact, as the old meter had it */
+.trace-ctx .ctx-err.soft { color: var(--muted); }

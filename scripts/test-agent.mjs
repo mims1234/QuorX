@@ -510,6 +510,106 @@ test("records of earlier replies go to the system prompt, not into the agent's o
   assert.match(msgs[0].content, /recorded by the harness[\s\S]*- What I did: Read a\.js\. Checks passed\./);
 });
 
+// ---------- the context meter and Compact ----------
+test('each model call reports the tokens it sent, and the cache share where the source gives it', async () => {
+  const { events } = await run((body, i) => [
+    { ...reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), usage: { cost: 0.0001, prompt_tokens: 12000, completion_tokens: 300, prompt_tokens_details: { cached_tokens: 9000, cache_write_tokens: 1000 } } },
+    { ...reply('Done.'), usage: { cost: 0.0001, completion_tokens: 20 } },
+  ][i]);
+  const calls = of(events, 'llm_done');
+  assert.deepEqual([calls[0].tokensIn, calls[0].tokensOut, calls[0].cacheRead, calls[0].cacheWrite], [12000, 300, 9000, 1000]);
+  // A source that sends no prompt count: nothing is made up.
+  assert.equal(calls[1].tokensIn, undefined); assert.equal(calls[1].cacheRead, undefined);
+  // Each model keeps its newest call's context for the Steps pane; a call with no prompt count doesn't wipe it.
+  const last = Object.values(of(events, 'spend').at(-1).byModel)[0].last;
+  assert.deepEqual(last, { in: 12000, out: 300, read: 9000, write: 1000 });
+});
+
+const longChat = (n) => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `${i % 2 ? 'Built part' : 'Please build part'} ${i} ${'x'.repeat(3000)}${i % 2 ? '\n\n[What I did: Wrote part.js. Checks passed.]' : ''}`, at: 1000 + i }));
+
+test('the context meter: % left of the window, amber at 25% or less, red at 8% or less, cache rows only when known', () => {
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf('// This chat\'s figures', i);
+  assert.ok(i >= 0 && j > i);
+  const contextNumbers = new Function(`${page.slice(i, j)}; return contextNumbers;`)();
+  const u = contextNumbers({ in: 150000, out: 6000, read: 90000, write: 10000, model: 'm' }, 200000);
+  assert.deepEqual([u.used, u.pct, u.tone, u.free, u.cacheRead, u.cacheWrite, u.fresh], [156000, 22, 'amber', 44000, 90000, 10000, 50000]);
+  assert.equal(contextNumbers({ in: 60000, out: 0 }, 200000).tone, 'ok');
+  assert.equal(contextNumbers({ in: 50000, out: 1000 }, 200000).cacheRead, null); // no cache figures from this source
+  const red = contextNumbers({ in: 185000, out: 1000 }, 200000);
+  assert.deepEqual([red.pct, red.tone], [7, 'red']);
+  // No window in the model list: tokens used, no % and no colour.
+  assert.deepEqual([contextNumbers({ in: 9000, out: 100 }, 0).pct, contextNumbers({ in: 9000, out: 100 }, 0).tone, contextNumbers({ in: 9000, out: 100 }, 0).used], [null, 'none', 9100]);
+  assert.equal(contextNumbers(null, 200000).known, false);
+});
+
+test('the context ring fills with what is used, and Steps lists every model the reply used with its own context', () => {
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf('// The same summary a reply writes on a long chat', i);
+  assert.ok(i >= 0 && j > i);
+  const G = { byId: new Map([['main/m', { ctx: 1000000 }], ['rev/r', { ctx: 128000 }]]), settings: { ui: {} } };
+  const uiOf = (S) => ({ stepsCtx: true, stepsCost: true, ...(S.ui || {}) });
+  const doc = { addEventListener() {}, querySelectorAll: () => [] };
+  let saved = 0;
+  const api = new Function('G', 'short', 'esc', 'USAGE_KIND', 'focused', 'wsStatusDraw', 'uiOf', 'document', 'savePrefs', `${page.slice(i, j)}; return { contextNumbers, ctxRingSVG, contextModels, traceContextHTML, setStepsFold, contextCardHTML };`)(
+    G, (s) => s, (s) => String(s), { reviewer: ['🔍', 'Reviewer'], decider: ['⚖️', 'Deciders'] }, () => null, () => {}, uiOf, doc, () => { saved++; });
+  const dash = (svg) => Number(svg.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/g)[0].match(/"([\d.]+) ([\d.]+)"/).slice(1).reduce((a, b) => a / b));
+  // 45k of 1M used: a thin ring (the sliver minimum), not a full one.
+  const fresh = api.contextNumbers({ in: 45087, out: 241 }, 1000000);
+  assert.ok(dash(api.ctxRingSVG(fresh)) < 0.06, 'a fresh chat shows an almost empty ring');
+  assert.ok(dash(api.ctxRingSVG(api.contextNumbers({ in: 950000, out: 0 }, 1000000))) > 0.9, 'a nearly full chat shows a full ring');
+  assert.equal(dash(api.ctxRingSVG(api.contextNumbers(null, 1000000))), 0);
+  // The chat model first, then each other model of the newest reply with its newest call.
+  const c = { agent: { setup: { model: 'main/m' }, messages: [
+    { role: 'user' },
+    { role: 'assistant', ctxUse: { in: 45000, out: 200, model: 'main/m', at: 1 }, stats: { byModel: {
+      'main/m': { role: 'writer', calls: 3, last: { in: 45000, out: 200 } },
+      'rev/r': { role: 'reviewer', calls: 1, last: { in: 100000, out: 900 } },
+      'dec/d': { role: 'decider', calls: 2, last: { in: 3000, out: 10 } },
+      'old/x': { role: 'decider', calls: 1 }, // no newest-call figure (an older reply's record): left out
+    } } },
+  ] } };
+  const rows = api.contextModels(c);
+  assert.deepEqual(rows.map((r) => [r.role, r.model]), [['writer', 'main/m'], ['reviewer', 'rev/r'], ['decider', 'dec/d']]);
+  assert.equal(rows[1].u.tone, 'amber'); assert.equal(rows[1].u.max, 128000); // 21% left
+  assert.equal(rows[2].u.max, 0); // window not listed: tokens only
+  const html = api.traceContextHTML(c);
+  assert.match(html, /Context by model/); assert.match(html, /Reviewer/); assert.match(html, /101k \/ 128k · 79%/);
+  assert.match(html, /tcx-compact/);
+  // Open by default; ▸ folds it to its header, which still says the chat model's figure. Remembered in ui.stepsCtx.
+  assert.match(html, /class="trace-ctx tc-sec" data-fold="ctx"><button type="button" class="tc-head tc-fold" aria-expanded="true"/);
+  api.setStepsFold('ctx', false);
+  assert.equal(G.settings.ui.stepsCtx, false); assert.equal(saved, 1);
+  const folded = api.traceContextHTML(c);
+  assert.match(folded, /tc-sec folded/); assert.match(folded, /aria-expanded="false"/); assert.match(folded, /tcx-key tc-fold-only">main\/m · 5% used</);
+  api.setStepsFold('ctx', true);
+  // /context: the same rows and Compact, as a card, from the figures posted with it.
+  const card = api.contextCardHTML(c, { at: 1, ctx: { rows } });
+  assert.match(card, /Context for this chat/); assert.match(card, /101k \/ 128k · 79%/); assert.match(card, /Compact conversation/);
+  assert.match(api.contextCardHTML(c, { at: 1, ctx: { rows: [{ role: 'writer', model: 'main/m', u: api.contextNumbers(null, 0) }] } }), /Shows after the first reply/);
+});
+
+test('Compact by the context meter writes the same summary on demand, and says when there is nothing to compact', async () => {
+  const { saveChat: save } = await import('../server/store.js');
+  const { compactChat, COMPACT_KEEP } = await import('../server/agent.js');
+  const id = `cpt${Date.now()}`;
+  save(id, { id, title: 'Long one', projectId: 'scratch', agent: { setup: { model: 'z-ai/glm-test' }, summary: 'Earlier: the start.', messages: [...longChat(12), { role: 'usage', at: 2000 }], artifacts: {} } });
+  let asked = null;
+  const r = await compactChat(id, {}, async (body) => { asked = body; return { message: { content: '- summary now' }, usage: { cost: 0.0021 }, model: body.model }; });
+  assert.equal(asked.model, 'z-ai/glm-test'); // the chat's own model
+  assert.match(asked.messages[0].content, /^Summarise this conversation/);
+  assert.match(asked.messages[1].content, /^Earlier summary:\nEarlier: the start\./);
+  assert.doesNotMatch(asked.messages[1].content, /What I did/); // records stay out, as in a reply
+  assert.equal(r.summary, '- summary now');
+  assert.equal(r.turns, 12 - COMPACT_KEEP); assert.equal(r.kept, COMPACT_KEEP);
+  assert.equal(r.cutoffAt, 1000 + 12 - COMPACT_KEEP);
+  assert.equal(r.cost, 0.0021);
+  assert.ok(r.oldChars > 4 * 3000);
+  // After it, only the kept turns follow the summary: nothing more to compact.
+  save(id, { id, title: 'Long one', projectId: 'scratch', agent: { setup: { model: 'z-ai/glm-test' }, summary: r.summary, summaryAt: r.cutoffAt, messages: longChat(12), artifacts: {} } });
+  await assert.rejects(compactChat(id, {}, async () => assert.fail('no call')), (e) => e.nothing && /Nothing to compact yet/.test(e.message));
+});
+
 test('strict mode: parallel reads each ask, and "Always allow" on one answers the others', async () => {
   let runId, answered = false;
   const { events, bodies } = await run((body, i) => [
@@ -1516,7 +1616,7 @@ test('a planned build gets the longer step limit', async () => {
   assert.ok(of(events, 'note').some((e) => /from 4 to 10/.test(e.msg)));
 });
 
-test('preview_site runs the site from the launch file (.quorx/serve.mjs) and opens it as a server, not an artifact', async () => {
+test('preview_site shows the site as a page (the pages server, not the launch file) and opens it, not as an artifact', async () => {
   let b = 0;
   const { events, dir } = await run(() => [
     reply('', [['write_file', { path: 'index.html', content: PAGE }]]),
@@ -1525,9 +1625,9 @@ test('preview_site runs the site from the launch file (.quorx/serve.mjs) and ope
   ][b++]);
   const sv = of(events, 'server');
   assert.equal(sv.length, 1);
-  assert.equal(sv[0].name, 'site');
+  assert.equal(sv[0].page, true);
   assert.equal(sv[0].entry, 'index.html');
-  assert.ok(fs.existsSync(path.join(dir, '.quorx', 'serve.mjs')), 'the static server script is in the project');
+  assert.ok(!fs.existsSync(path.join(dir, '.quorx', 'launch.json')), 'nothing saved to the launch file (more in test-pages.mjs)');
   assert.equal(of(events, 'artifact').length, 0, 'no artifact for a live site');
 });
 
@@ -1650,4 +1750,23 @@ test('the stream reader reports each tool call as it streams in, for the prepari
   assert.deepEqual(seen.map((s) => s[1]), ['write_file', 'write_file', 'write_file']);
   assert.equal(seen.at(-1)[2], '{"path":"a.txt","content":"hi"}');
   assert.equal(r.toolCalls[0].function.name, 'write_file');
+});
+
+test('/btw: one call to the chat model with no tools, on the chat so far and the running reply, never in the chat', async () => {
+  const { sideQuestion } = await import('../server/agent.js');
+  let asked = null;
+  const r = await sideQuestion({ model: 'z-ai/glm-test', question: '  Chart.js or ECharts?  ', summary: 'Earlier: a weather app.',
+    history: [{ role: 'user', content: 'Build a weather dashboard' }, { role: 'assistant', content: 'Started.\n\n[What I did: Wrote app.js. Checks passed.]' }],
+    live: 'Fetching forecast data' }, async (body) => { asked = body; return { message: { content: ' Chart.js is enough here. ' }, usage: { cost: 0.0004 }, model: body.model }; });
+  assert.equal(asked.model, 'z-ai/glm-test');
+  assert.equal(asked.tools, undefined); // no tools
+  assert.match(asked.messages[0].content, /you have no tools/);
+  const u = asked.messages[1].content;
+  assert.match(u, /summary\):\nEarlier: a weather app\./);
+  assert.match(u, /User: Build a weather dashboard/);
+  assert.doesNotMatch(u, /What I did/); // the harness's records stay out, as in a reply
+  assert.match(u, /saying in its reply now:\nFetching forecast data/);
+  assert.match(u, /Side question: Chart\.js or ECharts\?$/);
+  assert.deepEqual(r, { answer: 'Chart.js is enough here.', model: 'z-ai/glm-test', cost: 0.0004 });
+  await assert.rejects(sideQuestion({ model: 'm', question: ' ' }, async () => assert.fail('no call')), /Ask a question after \/btw/);
 });

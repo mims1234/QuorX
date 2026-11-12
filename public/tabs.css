@@ -1,0 +1,71 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* Tabs everywhere (shell phase 3): browser pages as tabs in each group's strip, their owner, sound and ＋. Laid out
+   like the file tabs beside them (workspace.css); the page itself and its address bar are unchanged. */
+#pane .pane-tabs .pa-pages { display: inline-flex; align-items: stretch; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+#pane .pane-tabs .pa-pages:empty { display: none; }
+#pane .pane-tabs .pa-ptab { display: inline-flex; align-items: center; gap: 5px; min-width: 56px; flex: 0 1 auto; max-width: 230px; height: 34px; padding: 0 4px 0 9px; border-left: 1px solid var(--line); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+#pane .pane-tabs .pa-ptab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ptab.on { min-width: 90px; flex-shrink: 0; color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ptab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#pane .pane-tabs .pa-ptab .pp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Whose page it is, after its title in muted text; it goes first when the strip is short of room. */
+#pane .pane-tabs .pa-ptab .pp-own { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dim, var(--muted)); font-weight: 400; flex: 0 2 auto; }
+#pane .pane-tabs .pa-ptab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; line-height: 1; opacity: 0; cursor: pointer; }
+#pane .pane-tabs .pa-ptab:hover .pp-x, #pane .pane-tabs .pa-ptab.on .pp-x { opacity: 1; }
+#pane .pane-tabs .pa-ptab .pp-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+#pane .pane-tabs .pa-ptab .bt-snd { width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; flex: none; }
+#pane .pane-tabs .pa-ptab .bt-snd.off { color: var(--warn, #d9a441); }
+#pane .pane-tabs .pa-ptab .bt-snd:hover { background: var(--panel-3, var(--panel-2)); }
+#pane .pane-tabs .pa-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#pane .pane-tabs .pa-ptab .bt-dot { flex: none; }
+#pane .pane-tabs [data-tab="browser"][hidden] { display: none !important; }
+#pane .pane-tabs .pa-add { font-size: 15px; }
+/* The Browser view without its inner page strip: the page fills the body. */
+#paneBody .bwin > .bstage:first-child { border-top: 0; }
+#pane .pane-tabs .pa-ptab { max-width: 260px; }
+#pane .pane-tabs .pa-ptab .pp-name { flex: 0 1 auto; max-width: 140px; }
+
+/* ---------- Single: one row for every tab (wsSingleStrip) ---------- */
+.ws-top .wt-ptabs { display: flex; align-items: flex-end; gap: 2px; min-width: 0; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ws-top .wt-ptabs[hidden] { display: none; }
+.ws-top .wt-ptabs::-webkit-scrollbar { display: none; }
+body.ws-single .ws-top .wt-strip { flex: 0 0 auto; max-width: 40%; }
+/* The pane group's own strip steps aside: its tabs are in the row above. */
+body.ws-single #pane .pane-tabs { display: none !important; }
+.wt-ptab { position: relative; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; max-width: 240px; height: 33px; padding: 0 8px 0 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.wt-ptab:hover { background: var(--panel-2); color: var(--text); }
+.wt-ptab.on { background: var(--bg); color: var(--text); border-color: var(--line); }
+.wt-ptab.on::before { content: ""; position: absolute; left: 10px; right: 10px; top: -1px; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
+.wt-ptab.on::after { content: ""; position: absolute; left: -1px; right: -1px; bottom: -1px; height: 1px; background: var(--bg); }
+.wt-ptab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wt-ptab .wp-ico { flex: none; font-size: 12px; }
+.wt-ptab .pp-name { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.wt-ptab .pp-own { color: var(--dim, var(--muted)); font-size: 11.5px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.wt-ptab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; line-height: 1; opacity: 0; cursor: pointer; }
+.wt-ptab:hover .pp-x, .wt-ptab.on .pp-x { opacity: 1; }
+.wt-ptab .bt-snd { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; }
+.wt-ptab .bt-snd.off { color: var(--warn, #d9a441); }
+.wt-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wt-padd, .wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.wt-padd:hover, .wt-pmore:hover { background: var(--panel-2); color: var(--text); }
+/* With more tabs than fit, ＋ and ⋯ stay at the strip's right end and the tabs scroll under them. */
+.ws-top .wt-ptabs .wt-padd, .ws-top .wt-ptabs .wt-pmore { position: sticky; z-index: 1; background: var(--panel); box-shadow: -8px 0 8px -2px var(--panel); }
+.ws-top .wt-ptabs .wt-padd { right: 26px; margin-left: auto; }
+.ws-top .wt-ptabs .wt-pmore { right: 0; box-shadow: none; }
+.ws-top .wt-ptabs .wt-padd:hover, .ws-top .wt-ptabs .wt-pmore:hover { background: var(--panel-2); }
+
+/* ---------- a chat shown inside a pane group (split layouts) ---------- */
+/* The group keeps its strip on top; while its chat is in front, the rest of the group steps out of sight and lets the
+   chat (drawn under the strip, in the group's box) take the pointer. */
+#pane .pane-area.host-chat { background: transparent !important; pointer-events: none; box-shadow: none; }
+#pane .pane-area.host-chat > :not(.pane-tabs) { visibility: hidden; }
+#pane .pane-area.host-chat .pane-tabs { pointer-events: auto; }
+#pane .pane-area.host-chat .pane-tabs [data-tab].on, #pane .pane-area.host-chat .pane-tabs .pa-ptab.on, #pane .pane-area.host-chat .pane-tabs .pa-ftab.on { color: var(--muted); box-shadow: none; background: transparent; }
+#pane .pane-tabs .pa-host { display: inline-flex; align-items: stretch; flex: none; }
+#pane .pane-tabs .pa-ctab { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 34px; padding: 0 4px 0 10px; border-right: 1px solid var(--line); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+#pane .pane-tabs .pa-ctab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ctab.on { color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ctab .pp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#pane .pane-tabs .pa-ctab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; cursor: pointer; }
+#pane .pane-tabs .pa-ctab .pp-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+#chats > .chatpane.hosted { overflow: hidden; contain: paint; }

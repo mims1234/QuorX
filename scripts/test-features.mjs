@@ -8,6 +8,7 @@ import { reply, run, toolResults, of } from './agent-harness.mjs';
 import { videoBody, editCommand, ffmpegMajor } from '../server/video.js';
 import { primeCatalogue } from '../server/openrouter.js';
 import { stepMedia, madeMedia, mediaKind as chatMediaKind } from '../public/chat-media.js';
+import { putDraft, liveDrafts, cleanDraft, sameDraft, draftLine, DRAFT_MAX, DRAFT_DAYS } from '../public/drafts.js';
 import { mediaKind as serverMediaKind } from '../server/media.js';
 import { resultMedia } from '../server/mcpclient.js';
 import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine } from '../server/mediaopts.js';
@@ -1398,4 +1399,27 @@ test('servers: an unsaved server can be edited into the launch file, restarted w
     assert.equal(await forgetServer(pid, 'old'), true);
     assert.deepEqual(serverOverview(pid), []);
   } finally { await forgetServer(pid, 'game'); await forgetServer(pid, 'old'); forgetProject(pid); }
+});
+
+test('unsent drafts: kept per chat, cleaned, capped, expired, and gone when empty', () => {
+  // Text, @ context and read files are kept; a file still being read and page-only fields are not.
+  const d = cleanDraft({ text: 'make it blue', ctx: [{ type: 'file', path: 'a.js', title: 'a.js' }, { type: 'term', title: 'x' }], docs: [{ id: 'd1', name: 'spec.pdf', _el: 1 }, { key: 'u1', name: 'big.pdf', busy: 'reading' }] });
+  assert.deepEqual(d, { text: 'make it blue', ctx: [{ type: 'file', path: 'a.js', title: 'a.js' }], docs: [{ id: 'd1', name: 'spec.pdf' }] });
+  assert.equal(cleanDraft({ text: '   ', ctx: [], docs: [] }), null, 'nothing worth keeping');
+  // Saved, then cleared by an empty box (sent).
+  let all = putDraft({}, 'c1', { text: 'hi' }, 1000);
+  assert.deepEqual(all, { c1: { text: 'hi', at: 1000 } });
+  assert.deepEqual(putDraft(all, 'c1', { text: '' }), {});
+  assert.deepEqual(putDraft(all, 'c1', null), {});
+  assert.ok(sameDraft(all.c1, { text: 'hi', ctx: [] }) && !sameDraft(all.c1, { text: 'hi!' }) && sameDraft(undefined, { text: '' }));
+  // Past the cap the oldest go.
+  for (let i = 0; i < DRAFT_MAX + 3; i++) all = putDraft(all, `k${i}`, { text: 'x' }, 2000 + i);
+  assert.equal(Object.keys(all).length, DRAFT_MAX);
+  assert.ok(!all.c1 && !all.k0 && all[`k${DRAFT_MAX + 2}`]);
+  // Read back: old or broken entries are dropped.
+  const now = 10 * 864e5 + DRAFT_DAYS * 864e5;
+  assert.deepEqual(Object.keys(liveDrafts({ a: { text: 'new', at: now - 1000 }, b: { text: 'old', at: 1 }, c: 'junk', d: { text: '', at: now } }, now)), ['a']);
+  assert.deepEqual(liveDrafts(null), {});
+  assert.equal(draftLine({ text: 'one\n two   three' }), 'one two three');
+  assert.equal(draftLine({ text: '', docs: [{ id: 1 }] }), '1 attachment');
 });

@@ -15,11 +15,12 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
 import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
-import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown } from './server/keys.js';
+import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown, SECRET_FILES } from './server/keys.js';
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
-import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT } from './server/agent.js';
+import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, setRunLimitBack, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, nextStepsFor, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT, sideQuestion } from './server/agent.js';
+import { readAloudPiece } from './server/readaloud.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -33,21 +34,26 @@ import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
-import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose } from './server/pty.js';
+import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose, ptyList } from './server/pty.js';
+import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, staleWorktrees, listWorktrees, spaceInfo } from './server/worktrees.js';
+import { ghStatus, listPulls, checkLog } from './server/pulls.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
-import { listChats, chatPerms, sidebarChats, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage } from './server/store.js';
-import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace } from './server/workspace.js';
+import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage, knownFolder } from './server/store.js';
+import { searchChats } from './server/chatsearch.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace, redoFile } from './server/workspace.js';
+import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
-import { runningIn, runningAll, stopRunning, stopAllIn } from './server/running.js';
+import { runningIn, runningAll, stopRunning, stopAllIn, busyNow, addUsage, killRunning } from './server/running.js';
 import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
 import { startWork, endWork } from './server/workscreen.js';
 import { stopDesktopNow } from './server/uia.js';
 import { safetySettings, yoloOf } from './server/safety.js';
-import { readAudit } from './server/audit.js';
+import { readAudit, letThrough } from './server/audit.js';
 import { pickFolder } from './server/pickfolder.js';
+import { buildBundle, saveBundle } from './server/diagbundle.js';
 import { userBrowse, giveTab, givenTab, takeBackTab, takeBackSid, lentChromeTabs, closeChatChromeTabs } from './server/userbrowser.js';
 import { rewritePrompt } from './server/enhancer.js';
 import { extUpgrade, extKey, extInfo, onExtRequest, defaultBrowser, extPairing, extPair, extPush } from './server/extlink.js';
@@ -78,6 +84,7 @@ const PUBLIC = path.join(ROOT, 'public');
 const STARTED = Date.now();
 // The version shown in the sidebar and Settings (package.json; the desktop release script keeps it in step).
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '?'; } })();
+const diagBundles = new Map(); // ⚙ About → Report a problem: built bundles waiting to be saved, by id
 function codeChanged() {
   let latest = 0, file = '';
   for (const f of [path.join(ROOT, 'server.js'), ...fs.readdirSync(path.join(ROOT, 'server')).filter((x) => x.endsWith('.js')).map((x) => path.join(ROOT, 'server', x))]) {
@@ -200,8 +207,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, sidebarChats({ per: Math.max(1, Math.min(200, Number(url.searchParams.get('per')) || 30)), ids }));
     }
     if (url.pathname === '/api/chats' && req.method === 'GET') return json(res, 200, listChats());
+    // 📌 Pin or unpin a chat (the top of its project in the sidebar): { on }. Pins live apart from the chat files.
+    const pinm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/pin$/i);
+    if (pinm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); try { return json(res, 200, { pins: setChatPin(pinm[1], !!b.on) }); } catch (e) { return json(res, 400, { error: e.message }); } }
     // A page of chats: a project's older ones (Show more), or a search across every project.
     if (url.pathname === '/api/chats/page' && req.method === 'GET') return json(res, 200, chatPage({ project: url.searchParams.get('project') || '', q: url.searchParams.get('q') || '', offset: url.searchParams.get('offset'), limit: url.searchParams.get('limit') }));
+    // Search inside chats (server/chatsearch.js): Ctrl+K's Messages group and the Search chats window.
+    if (url.pathname === '/api/search/chats' && req.method === 'GET') {
+      const s = url.searchParams, project = s.get('project') || '', role = s.get('role') || '';
+      if (project && !validId(project)) return json(res, 400, { error: 'bad project id' });
+      if (role && role !== 'user' && role !== 'agent') return json(res, 400, { error: 'role is user or agent' });
+      if ((s.get('q') || '').length > 200) return json(res, 400, { error: 'search for 200 characters at most' });
+      return json(res, 200, await searchChats({ q: s.get('q') || '', project, role, from: s.get('from'), to: s.get('to'), archived: s.get('archived') === '1', offset: s.get('offset'), limit: s.get('limit'), perChat: s.get('per') }));
+    }
     if (url.pathname === '/api/costs' && req.method === 'GET') return json(res, 200, costSummary({ per: Number(url.searchParams.get('per')) || 5, sort: url.searchParams.get('sort') || 'cost', providerOf: providerOfModel }));
     // What each provider was paid (⚙ Settings → Providers): today, this month, all time, calls, models, 14 days.
     if (url.pathname === '/api/costs/providers' && req.method === 'GET') return json(res, 200, providerUsage({ providerOf: providerOfModel }));
@@ -212,6 +230,39 @@ const server = http.createServer(async (req, res) => {
     // A short brief of a whole chat (/fresh, and attaching a chat to another), cached until the chat changes.
     const brm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/brief$/i);
     if (brm && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); try { return json(res, 200, await briefForChat(brm[1], { model: b.model })); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // Compact, by the context meter: older turns become a summary now, with the chat's own model. Its cost goes to the
+    // ledger (and the page adds it to the chat) like a review's.
+    const cpm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/compact$/i);
+    if (cpm && req.method === 'POST') {
+      if (!validId(cpm[1])) return json(res, 400, { error: 'bad chat id' });
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      const st = budgetState(cpm[1]);
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to compact it.' });
+      try {
+        const r = await compactChat(cpm[1], { settings: { sourceFallback: b.sourceFallback, fallbackModel: b.fallbackModel } });
+        const id = `cp-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'compact', project: getChat(cpm[1])?.projectId || 'scratch', chatId: cpm[1], model: r.model, stop: 'compact', cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message, nothing: !!e.nothing }); }
+    }
+    // Suggested next steps under a finished reply: one short helper-model call, asked for by the page only when the
+    // setting is on.
+    if (url.pathname === '/api/next-steps' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 4e4) || '{}'); try { return json(res, 200, await nextStepsFor({ request: b.request, reply: b.reply, model: b.model, chatModel: b.chatModel })); } catch (e) { return json(res, 400, { error: e.message }); } }
+    // /btw: a side question on the chat so far, with no tools, never added to the chat. Its cost goes to the ledger and
+    // the chat's spend like a review's.
+    const btm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/btw$/i);
+    if (btm && req.method === 'POST') {
+      if (!validId(btm[1])) return json(res, 400, { error: 'bad chat id' });
+      const b = JSON.parse(await readBody(req, 4e6) || '{}');
+      const st = budgetState(btm[1]);
+      if (st?.budget != null && st.left <= 0) return json(res, 200, { error: 'This chat has reached its budget. Raise it with 💵 in the message box to ask a side question.' });
+      try {
+        const r = await sideQuestion({ model: b.model, question: b.question, history: Array.isArray(b.history) ? b.history : [], summary: String(b.summary || ''), live: String(b.live || ''), settings: { sourceFallback: b.sourceFallback, fallbackModel: b.fallbackModel } });
+        const id = `bw-${Date.now().toString(36)}`;
+        if (r.cost) recordRun({ ts: new Date().toISOString(), runId: id, kind: 'btw', project: getChat(btm[1])?.projectId || b.projectId || 'scratch', chatId: btm[1], model: r.model, stop: 'btw', cost: +r.cost.toFixed(6) });
+        return json(res, 200, { ...r, id });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     // An older reply's steps, kept apart from its chat (store.js splitTraces): the page asks when that reply is shown.
     const trm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/trace\/([\w-]+)$/i);
     if (trm && req.method === 'GET') { const t = getTrace(trm[1], trm[2]); return t ? json(res, 200, t) : json(res, 404, { error: 'no such steps' }); }
@@ -384,7 +435,7 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4) || '{}');
       const full = b.path && fullLocalPath(b.path);
       if (full === null) return json(res, 400, { error: 'that is a network path: QuorX only opens folders on this computer' });
-      if (!full && (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId))) return json(res, 400, { error: 'unknown project' });
+      if (!full && (!knownFolder(b.projectId))) return json(res, 400, { error: 'unknown project' });
       let dir = full ? '' : workspaceDir(b.projectId), file = null;
       if (b.path) {
         try { const t = full || safePath(dir, String(b.path)); if (fs.statSync(t).isDirectory()) dir = t; else { file = t; dir = path.dirname(t); } }
@@ -398,7 +449,7 @@ const server = http.createServer(async (req, res) => {
     // that show them in File Explorer. A path is inside the project (relative to it) or a full one.
     if (url.pathname === '/api/paths/check' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e5) || '{}');
-      const root = validId(b.projectId) && listProjects().some((p) => p.id === b.projectId) ? workspaceDir(b.projectId) : null;
+      const root = knownFolder(b.projectId) ? workspaceDir(b.projectId) : null;
       const found = {}, media = {};
       for (const p of (Array.isArray(b.paths) ? b.paths : []).slice(0, 200).map(String)) {
         try {
@@ -414,7 +465,7 @@ const server = http.createServer(async (req, res) => {
     // One file shown inline in a chat (server/media.js): ?project=<id>&path=<as named>[&chat=<id>].
     if (url.pathname === '/api/media' && (req.method === 'GET' || req.method === 'HEAD')) {
       const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat') || '';
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 404, { error: 'not found' });
+      if (!knownFolder(pid)) return json(res, 404, { error: 'not found' });
       const mf = mediaFile(workspaceDir(pid), validId(cid) ? cid : '', url.searchParams.get('path'));
       return mf ? serveMedia(req, res, mf) : json(res, 404, { error: 'not found' });
     }
@@ -422,7 +473,7 @@ const server = http.createServer(async (req, res) => {
     // /ws/ never serves (dot folders stay off the pages address). The last 2 MB of a longer one.
     if (url.pathname === '/api/command-log' && req.method === 'GET') {
       const pid = url.searchParams.get('project'), rel = String(url.searchParams.get('path') || '');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       if (!isCommandLog(rel)) return json(res, 404, { error: 'not found' });
       try {
         const file = safePath(workspaceDir(pid), rel), size = fs.statSync(file).size, from = Math.max(0, size - 2e6);
@@ -434,7 +485,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       try {
         const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
         if (fs.statSync(file).size > 60e6) return json(res, 200, { error: 'too big to preview (over 60 MB)' });
@@ -444,7 +495,7 @@ const server = http.createServer(async (req, res) => {
     // One text file of a project, in windows of up to 100k characters (for the MCP server's read_file).
     if (url.pathname === '/api/files/read' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(pid)) return json(res, 400, { error: 'unknown project' });
       try {
         const file = safePath(workspaceDir(pid), String(url.searchParams.get('path') || ''));
         const st = fs.statSync(file);
@@ -568,6 +619,13 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, undoFile(workspaceDir(b.projectId), String(b.runId), String(b.path || ''), { force: !!b.force })); }
       catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // Redo a file undone one at a time (the files-changed chip's toast): the reply's version comes back from .quorx/trash.
+    if (url.pathname === '/api/review/redo' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, redoFile(workspaceDir(b.projectId), String(b.runId), String(b.path || ''), { force: !!b.force })); }
+      catch (e) { return json(res, 200, { error: e.message }); }
+    }
     if (url.pathname === '/api/checkpoints/restore' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4));
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
@@ -586,7 +644,30 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/servers/overview' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid) }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [] }); }
+      // Pages first: the old previews leave the launch file (once) before the servers are read.
+      try { const pages = listPages(pid); return json(res, 200, { servers: serverOverview(pid), jobs: runningJobs(pid), pages: pages.pages, pagesNotice: pages.notice }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, servers: [], jobs: [], pages: [] }); }
+    }
+    // ---- pages (server/pages.js): previews and mockups on the pages address, apart from the project's servers ----
+    if (url.pathname === '/api/pages' && req.method === 'GET') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ...listPages(pid), pagePort: runtime.pagePort || null }); } catch (e) { return json(res, 200, { error: e.message, code: e.code, pages: [] }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try {
+        if (b.action === 'undo') return json(res, 200, { ok: true, restored: undoMove(b.projectId) });
+        if (b.action === 'dismiss') return json(res, 200, { ok: dismissMove(b.projectId) });
+        if (b.action === 'keep') return json(res, 200, { ok: true, config: keepAsServer(b.projectId, b.entry, b.name) });
+        if (b.action === 'add') return json(res, 200, { ok: true, ...addPage(b.projectId, { entry: b.entry, title: b.title }) });
+        return json(res, 400, { error: 'action must be undo, dismiss, keep or add' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    if (url.pathname === '/api/pages' && req.method === 'DELETE') {
+      const pid = url.searchParams.get('project');
+      if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: removePage(pid, url.searchParams.get('entry') || '') }); } catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (url.pathname === '/api/servers/log' && req.method === 'GET') return json(res, 200, { log: serverLog(url.searchParams.get('key')) });
     if (url.pathname === '/api/servers/stop' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4)); const r = await stopServerWait(b.key, 'you'); return json(res, 200, { ok: !!r, ...(r || {}) }); }
@@ -608,7 +689,9 @@ const server = http.createServer(async (req, res) => {
       const b = JSON.parse(await readBody(req, 1e4));
       if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
       try {
+        migrateProject(b.projectId, { create: true });
         const config = saveLaunchConfig(b.projectId, b);
+        if (isPreviewEntry(config)) ensureServeScript(workspaceDir(b.projectId));
         // A renamed server that isn't running leaves no row under its old name.
         if (b.oldName && b.oldName !== config.name && serverFor(b.projectId, b.oldName)?.status === 'stopped') await forgetServer(b.projectId, b.oldName, 'you');
         return json(res, 200, { ok: true, config });
@@ -621,6 +704,59 @@ const server = http.createServer(async (req, res) => {
       const name = url.searchParams.get('name');
       const forgot = await forgetServer(pid, name, 'you');
       return json(res, 200, { ok: removeLaunchConfig(pid, name) || forgot });
+    }
+
+    // ---- a chat's own git worktree (server/worktrees.js) ----
+    // GET ?project= → can a chat here have one ({ git, branch }); GET ?chat= → its worktree and what it holds;
+    // POST { projectId, chatId, title, from? } makes it; DELETE ?chat= | ?space= [&discard=1] removes it (refused while
+    // it has changes, unless discard); GET /stale → worktrees whose chat is gone, for ⚙ Storage.
+    if (url.pathname === '/api/worktrees/stale' && req.method === 'GET') {
+      try { return json(res, 200, { list: staleWorktrees() }); } catch (e) { return json(res, 200, { error: e.message, list: [] }); }
+    }
+    if (url.pathname === '/api/worktrees') {
+      const q = url.searchParams;
+      if (req.method === 'GET' && q.get('project')) {
+        const pid = q.get('project');
+        if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+        try { const g = gitInfo(workspaceDir(pid)); return json(res, 200, { git: g.git, branch: g.branch || (g.head ? g.head.slice(0, 7) : null), why: g.why || null }); } catch (e) { return json(res, 200, { git: false, why: e.message }); }
+      }
+      if (req.method === 'GET' && q.get('chat')) {
+        const w = worktreeOf(q.get('chat'));
+        return json(res, 200, w ? { ...w, ...worktreeStatus(w) } : { none: true });
+      }
+      if (req.method === 'POST') {
+        const b = JSON.parse(await readBody(req, 1e4) || '{}');
+        try { return json(res, 200, createWorktree({ projectId: b.projectId, chatId: b.chatId, title: String(b.title || ''), from: b.from ? String(b.from) : '' })); }
+        catch (e) { return json(res, 200, { error: e.message }); }
+      }
+      if (req.method === 'DELETE') {
+        const space = q.get('space') || worktreeOf(q.get('chat'))?.space;
+        if (!space) return json(res, 200, { ok: true, none: true });
+        // Servers, commands and terminals running in it hold its files open: they end first.
+        const beforeRemove = async (sp) => {
+          for (const s of listServers(sp)) await forgetServer(sp, s.name, 'you').catch(() => {});
+          await stopAllIn(sp).catch(() => {});
+          for (const t of ptyList(sp)) ptyClose(sp, t.tab);
+        };
+        try { return json(res, 200, await removeWorktree(space, { discard: q.get('discard') === '1', beforeRemove })); } catch (e) { return json(res, 200, { error: e.message }); }
+      }
+    }
+
+    // ---- the Pull requests tab (server/pulls.js): read only, through the GitHub command line ----
+    // GET ?project=&chat=&state=open|merged|closed|all → { repo, branch, gh, prs }; /log ?project=&run=&job= → { tail }.
+    if (url.pathname === '/api/pulls' || url.pathname === '/api/pulls/log') {
+      const q = url.searchParams, pid = q.get('project');
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      let dir, remote = null;
+      try { dir = workspaceDir(pid); remote = gitHubRemote(dir); } catch (e) { return json(res, 200, { error: e.message }); }
+      const repo = remote ? `${remote.owner}/${remote.repo}` : null;
+      if (url.pathname === '/api/pulls/log') return json(res, 200, repo ? await checkLog({ cwd: dir, repo, runId: q.get('run'), jobId: q.get('job') }) : { error: 'no GitHub repository' });
+      // This chat's branch: its own worktree's, else the project folder's current one.
+      const wt = q.get('chat') ? worktreeOf(q.get('chat')) : null;
+      const branch = wt?.projectId === pid ? wt.branch : (gitInfo(dir).branch || '');
+      if (!repo) return json(res, 200, { repo: null, branch, gh: await ghStatus(), prs: [] });
+      try { return json(res, 200, { repo, branch, ...(await listPulls({ cwd: dir, repo, state: q.get('state') || 'open', branch })) }); }
+      catch (e) { return json(res, 200, { repo, branch, gh: await ghStatus(), prs: [], error: e.message }); }
     }
 
     // ---- command permissions: the rules the rule engine applies, per project and everywhere ----
@@ -762,6 +898,11 @@ const server = http.createServer(async (req, res) => {
       const pid = url.searchParams.get('project');
       return json(res, 200, readAudit({ project: pid && validId(pid) ? pid : null, limit: Math.min(1000, Number(url.searchParams.get('limit')) || 200) }));
     }
+    // ⚡ What YOLO let through: the commands and actions the deciders allowed without asking, for a chat or a project.
+    if (url.pathname === '/api/let-through' && req.method === 'GET') {
+      const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat');
+      return json(res, 200, letThrough({ project: pid && validId(pid) ? pid : null, chat: cid && validId(cid) ? cid : null, limit: Math.min(1000, Number(url.searchParams.get('limit')) || 300) }));
+    }
     if (url.pathname === '/api/permissions/test' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 2e4));
       const root = b.projectId && validId(b.projectId) ? workspaceDir(b.projectId) : process.cwd();
@@ -788,7 +929,7 @@ const server = http.createServer(async (req, res) => {
     // project folder. The agent never uses this route: its run_command keeps the allow-list.
     if (url.pathname === '/api/term/run' && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 2e4));
-      if (!validId(b.projectId) || !listProjects().some((p) => p.id === b.projectId)) return json(res, 400, { error: 'unknown project' });
+      if (!knownFolder(b.projectId)) return json(res, 400, { error: 'unknown project' });
       const line = String(b.line ?? '').replace(/\r?\n/g, ' ');
       const tab = String(b.tab || '').replace(/[^\w-]/g, '').slice(0, 40) || 'u1';
       try { return json(res, 200, shellRun(b.projectId, tab, line, workspaceDir(b.projectId))); } catch (e) { return json(res, 200, { error: e.message }); }
@@ -798,7 +939,7 @@ const server = http.createServer(async (req, res) => {
       const op = url.pathname.slice(9);
       const b = req.method === 'POST' ? JSON.parse(await readBody(req, 200_000) || '{}') : {};
       const pid = String(b.projectId || url.searchParams.get('project') || ''), tab = String(b.tab || url.searchParams.get('tab') || '').replace(/[^\w-]/g, '').slice(0, 40);
-      if (!validId(pid) || !listProjects().some((p) => p.id === pid) || !tab) return json(res, 400, { error: 'unknown project or tab' });
+      if (!knownFolder(pid) || !tab) return json(res, 400, { error: 'unknown project or tab' });
       if (op === 'open' && req.method === 'POST') { try { const t = ptyOpen(pid, tab, workspaceDir(pid), b.cols, b.rows); return json(res, 200, { ok: true, shell: t.shell }); } catch (e) { return json(res, 200, { error: e.message, fallback: true }); } }
       if (op === 'input' && req.method === 'POST') return json(res, 200, { ok: ptyWrite(pid, tab, b.data ?? '') });
       if (op === 'resize' && req.method === 'POST') return json(res, 200, { ok: ptyResize(pid, tab, b.cols, b.rows) });
@@ -821,7 +962,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/running' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
       if (!validId(pid)) return json(res, 400, { error: 'bad project id' });
-      try { return json(res, 200, runningIn(pid)); } catch (e) { return json(res, 200, { error: e.message, items: [], elsewhere: [] }); }
+      try { const r = runningIn(pid); if (url.searchParams.get('usage')) await addUsage(r.items); return json(res, 200, r); } catch (e) { return json(res, 200, { error: e.message, items: [], elsewhere: [] }); }
     }
     if ((url.pathname === '/api/running/stop' || url.pathname === '/api/running/stop-all') && req.method === 'POST') {
       const b = JSON.parse(await readBody(req, 1e4));
@@ -830,9 +971,16 @@ const server = http.createServer(async (req, res) => {
       catch (e) { return json(res, 200, { error: e.message }); }
     }
 
+    // Kill: a row whose Stop left processes behind (or hangs) is ended by force.
+    if (url.pathname === '/api/running/kill' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4));
+      if (!validId(b.projectId)) return json(res, 400, { error: 'bad project id' });
+      try { return json(res, 200, { ok: true, ...(await killRunning(b.projectId, String(b.id || ''))) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
+
     // ---- the sidebar's Running list: what runs in every project, and the chats driving your Chrome or your desktop ----
     if (url.pathname === '/api/running/all' && req.method === 'GET') {
-      try { return json(res, 200, { items: runningAll(listProjects().map((p) => p.id)), control: controlNow() }); }
+      try { const items = runningAll([...listProjects().map((p) => p.id), ...listWorktrees().map((w) => w.space)]).map((x) => { const w = spaceInfo(x.projectId); return w ? { ...x, project: w.projectId, branch: w.branch } : x; }); if (url.searchParams.get('usage')) await addUsage(items); return json(res, 200, { items, control: controlNow() }); }
       catch (e) { return json(res, 200, { error: e.message, items: [], control: [] }); }
     }
     // Stop: the chat's reply ends (its Chrome or desktop use with it). Take back: a lent Chrome tab is yours again.
@@ -1046,6 +1194,23 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { error: e.message });
       }
     }
+    // ⚙ About → Report a problem: the cleaned log bundle (server/diagbundle.js). Preview builds it and keeps it for 15
+    // minutes; save writes that same bundle as a zip into the folder picked. Nothing is uploaded or sent.
+    if (url.pathname === '/api/diagnostics/preview' && req.method === 'POST') {
+      try {
+        const b = buildBundle({ home: HOME, desktopLog: process.env.OH_DESKTOP_LOG || '', versions: { quorx: VERSION, ...(process.env.OH_DESKTOP ? { desktop: VERSION } : {}) }, secretFiles: SECRET_FILES });
+        const id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        diagBundles.set(id, { b, at: Date.now() });
+        for (const [k, v] of diagBundles) if (Date.now() - v.at > 15 * 60e3) diagBundles.delete(k);
+        return json(res, 200, { id, name: b.name, found: b.found, files: b.files.map((f) => ({ name: f.name, size: f.size, kept: f.kept, cut: f.cut, found: f.found, preview: f.text.length > 24000 ? f.text.slice(-24000) : f.text, clipped: f.text.length > 24000 })) });
+      } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+    if (url.pathname === '/api/diagnostics/save' && req.method === 'POST') {
+      const q = JSON.parse(await readBody(req, 1e4) || '{}');
+      const held = diagBundles.get(String(q.id || ''));
+      if (!held) return json(res, 200, { error: 'That report is too old: build it again.' });
+      try { return json(res, 200, { file: saveBundle(held.b, q.folder) }); } catch (e) { return json(res, 200, { error: e.message }); }
+    }
     if (url.pathname === '/api/pick-folder' && req.method === 'POST') {
       const ip = req.socket.remoteAddress || '';
       if (!/^(127\.|::1$|::ffff:127\.)/.test(ip)) return json(res, 403, { error: 'the folder dialog opens on the computer running QuorX; type the path instead' });
@@ -1147,6 +1312,13 @@ const server = http.createServer(async (req, res) => {
       try { const r = await transcribe({ model, audio: String(b.audio || ''), format: 'wav' }); return json(res, 200, { text: r.text, cost: r.usage.cost || 0, ms: r.ms, model }); }
       catch (e) { return json(res, 200, { error: e.message }); }
     }
+    // 🔊 Read aloud with an AI voice: one piece of a reply, read by the chat's Voice model (server/readaloud.js).
+    if (req.method === 'POST' && url.pathname === '/api/read-aloud') {
+      if (!currentKey()) return json(res, 200, { error: 'AI voices run on OpenRouter: add a key in ⚙ Settings → Providers, or read with the PC voice.' });
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      try { return json(res, 200, await readAloudPiece({ text: b.text, model: b.model, voice: b.voice })); }
+      catch (e) { return json(res, 200, { error: e.message }); }
+    }
     if (req.method === 'POST' && url.pathname === '/api/approve') {
       const b = JSON.parse(await readBody(req, 1e5));
       return json(res, 200, { ok: answerApproval(b.runId, b.id, b) });
@@ -1176,7 +1348,7 @@ const server = http.createServer(async (req, res) => {
       if (!getRun(runId)) startRun({ runId, chatId: body.chatId, onEnd: (end) => body.chatId && settleReply(String(body.chatId), runId, end) }, (emit, signal) => runAgent(body, emit, signal));
       return stream(res, runId, 0);
     }
-    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log))?$/);
+    const rm = url.pathname.match(/^\/api\/runs\/([\w-]+)(?:\/(events|stop|mode|steer|reading|hold|brief|log|limit))?$/);
     if (rm && validRunId(rm[1])) {
       // A reply's events so far as one JSON list (the MCP server and run replay read this; the page streams /events).
       if (rm[2] === 'log' && req.method === 'GET') return json(res, 200, { ...runStatus(rm[1]), events: readLog(rm[1]) });
@@ -1186,6 +1358,8 @@ const server = http.createServer(async (req, res) => {
       if (rm[2] === 'stop' && req.method === 'POST') return json(res, 200, { ok: stopRun(rm[1]) });
       // While a reply runs: switch it between Strict and YOLO, or send it a note it reads at its next step.
       if (rm[2] === 'mode' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: b.access ? setRunAccess(rm[1], b.access) : setRunApproval(rm[1], b.approval) }); }
+      // The model-switch bar's "Switch back at <reset>" box, changed while the reply runs.
+      if (rm[2] === 'limit' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: setRunLimitBack(rm[1], !!b.back, !!b.now) }); }
       if (rm[2] === 'hold' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e4) || '{}'); return json(res, 200, { ok: holdCard(rm[1], String(b.id || '')) }); }
       if (rm[2] === 'video' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 1e3) || '{}'); return json(res, 200, { ok: setRunVideo(rm[1], b.on) }); }
       if (rm[2] === 'reading' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); return json(res, 200, { ok: setRunReading(rm[1], b.text) }); }
@@ -1193,6 +1367,11 @@ const server = http.createServer(async (req, res) => {
       if (!rm[2] && req.method === 'GET') return json(res, 200, runStatus(rm[1]));
     }
     if (url.pathname === '/api/runs' && req.method === 'GET') return json(res, 200, activeRuns());
+    // What works right now (replies, servers, commands), for the desktop app's keep-awake and quit prompt.
+    if (url.pathname === '/api/busy' && req.method === 'GET') {
+      const chatOf = (id) => { try { return id ? getChat(id) : null; } catch { return null; } };
+      return json(res, 200, busyNow(activeRuns().map((r) => { const c = chatOf(r.chatId); return { chatId: r.chatId, title: c?.title, scheduled: !!(c?.scheduled || c?.scheduledBy) }; })));
+    }
     // News (docs/news-format.md): What's new, articles and reports from news/, and the user's own numbers.
     if (url.pathname === '/api/news' || url.pathname.startsWith('/api/news/')) {
       const r = await newsRoute({ method: req.method, pathname: url.pathname, query: url.searchParams, body: req.method === 'POST' ? await readBody(req, 1e4) : '' });
@@ -1368,6 +1547,14 @@ if (!process.env.OH_NO_SCHEDULES) scheduler.start();
 const pageServer = http.createServer((req, res) => {
   let p = '';
   try { p = new URL(req.url, 'http://x').pathname; } catch { /* below */ }
+  // A page of a project that links from the root (/style.css, /about.html), as it would on a server of its own: sent
+  // on to the same path in its project, which its address (Referer) names. Only its own project, as below.
+  const from = String(req.headers.referer || '').match(/^https?:\/\/[^/]+\/ws\/([a-z0-9-]+)\//i);
+  if (from && isLoopback(req) && ['GET', 'HEAD'].includes(req.method) && p.startsWith('/') && !/^\/(ws|art|preview|wsf|api)(\/|$)/.test(p)) {
+    let q = ''; try { q = new URL(req.url, 'http://x').search; } catch { /* none */ }
+    res.writeHead(307, { Location: `/ws/${from[1]}${p}${q}`, 'Cache-Control': 'no-store' });
+    return res.end();
+  }
   if (!isLoopback(req) || !['GET', 'HEAD'].includes(req.method) || !/^\/(ws|art|preview\/page)\//.test(p)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not here'); }
   req.pageOrigin = true;
   server.emit('request', req, res);

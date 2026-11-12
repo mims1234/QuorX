@@ -8,7 +8,7 @@
 // Without either (PowerShell can't load the helper, or QX_NO_JOBHOST=1) commands still run, and Stop falls back to
 // killing the process tree, which can miss detached processes. jobHostStatus() says which mode is on.
 // The same host also parses PowerShell command lines for the rule engine (cmdpolicy.js).
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { lineSplitter } from './terminal.js';
 import { processGroups } from './procgroup.js';
@@ -127,6 +127,29 @@ export async function jobCount(job, { windows = false } = {}) {
   const r = await J.call('count', { job, windows });
   const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
   return { active: r.active || 0, pids: arr(r.pids), names: arr(r.names), windowed: arr(r.windowed), gui: arr(r.gui) };
+}
+/**
+ * What each job uses now, in one call for all of them: { [job]: { cpu: processor time so far in 100 ns units,
+ * mem: bytes held by its live processes, n: processes alive } }. Windows only (elsewhere, and without the job host,
+ * an empty object), so the Running list just shows no numbers there.
+ */
+export async function jobUsage(jobs) {
+  const list = [...new Set((jobs || []).filter(Boolean).map(String))];
+  if (G || !list.length || !(await jobsAvailable().catch(() => false))) return {};
+  const r = await J.call('usage', { jobs: list }, 4000);
+  return r?.usage && typeof r.usage === 'object' ? r.usage : {};
+}
+/** Ends what is left of a job by force: every process still in it is killed one by one (taskkill /F), for the
+ *  ones a Stop could not end. Resolves to what is left after that. */
+export async function forceKillJob(job) {
+  if (G) return { ...(await G.kill(job, 3000)), mode: 'groups' };
+  await J.call('kill', { job }).catch(() => {});
+  const c = await jobCount(job).catch(() => ({ active: 0, pids: [] }));
+  await Promise.all(c.pids.map((p) => new Promise((r) => execFile('taskkill', ['/pid', String(p), '/T', '/F'], { windowsHide: true }, () => r()))));
+  const t0 = Date.now();
+  let n = await jobCount(job).catch(() => ({ active: 0, pids: [], names: [] }));
+  while (n.active > 0 && Date.now() - t0 < 3000) { await new Promise((r) => setTimeout(r, 150)); n = await jobCount(job).catch(() => ({ active: 0, pids: [], names: [] })); }
+  return { left: n.active, pids: n.pids, names: n.names, mode: 'jobs' };
 }
 /** Keeps the job (Stop still ends it) but stops QuorX closing from ending it. */
 export const keepOnClose = (job) => (G ? Promise.resolve() : J.call('keep', { job }));

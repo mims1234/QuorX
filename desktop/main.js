@@ -7,7 +7,7 @@
 // The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
 // the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
 // alone, and this one starts server.js with Electron's own Node on the next free port.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut, powerSaveBlocker } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -15,6 +15,10 @@ const crypto = require('node:crypto');
 const { pngIcon } = require('./icon.js');
 const { createStorage, cleanAtStart } = require('./storage.js');
 const { pickSleepers, sleepOptions } = require('./tab-sleep.js');
+const { quitDialog } = require('./quit-prompt.js');
+const { POLL_MS: AWAKE_POLL_MS, keepAwakeOn, wantAwake, createAwake } = require('./keep-awake.js');
+const { SUMMON_DEFAULT, applySummon } = require('./summon.js');
+const { fitBox } = require('./popbox.js');
 const PKG = require('./package.json');
 
 // The harness's code: the repo while developing, the copy bundled in the installer once installed.
@@ -104,9 +108,10 @@ async function startServer() {
     if (!(await harnessAt(p))) { PORT = p; break; }
     if (await oursAt(p)) { PORT = p; return `http://localhost:${p}`; }
   }
-  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  // The harness's output: past 50 MB it starts afresh, the older part kept as server.1.log.
+  // The harness's output: past 50 MB it starts afresh, the older part kept as server.1.log. The harness is told where it
+  // is, so ⚙ About → Report a problem can put its end in the cleaned bundle.
   const logPath = path.join(app.getPath('userData'), 'server.log');
+  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', OH_DESKTOP: '1', OH_DESKTOP_LOG: logPath, AGENT_PORT: String(PORT), ...(HOME ? { OH_HOME: HOME } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   try { if (fs.statSync(logPath).size > 50e6) fs.renameSync(logPath, path.join(app.getPath('userData'), 'server.1.log')); } catch { /* none yet */ }
   const logFile = fs.createWriteStream(logPath, { flags: 'a' });
   return new Promise((resolve, reject) => {
@@ -127,20 +132,34 @@ const iconImage = (size = 32) => nativeImage.createFromBuffer(pngIcon(size));
 function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: DEV ? 'QuorX · DEV' : 'QuorX', icon: iconImage(64), autoHideMenuBar: true,
+    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: DEV ? 'QuorX · DEV' : 'QuorX', icon: iconImage(64),
+    // The window frame is the page's own (its menu bar is row 1); Windows still draws − □ × over its right end, so
+    // snap layouts and the native buttons keep working. The page colours them to match the theme (handle 'frame').
+    titleBarStyle: 'hidden', titleBarOverlay: { color: FRAME_BAR.color, symbolColor: FRAME_BAR.symbolColor, height: FRAME_BAR.height }, autoHideMenuBar: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
+  // The hidden menu keeps its keys (reload, DevTools, full screen) but never shows: Alt goes to the page's menu bar.
+  win.setMenuBarVisibility(false);
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
   countWebglWarnings(win.webContents);
   // The zoom you left QuorX at; Ctrl+wheel on the app goes through the same steps (the page handles the keys).
   win.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) win.webContents.setZoomFactor(z); });
   // The page (re)loaded (Restart harness, Ctrl+R): it starts with no tabs of yours, so the ones it had are gone from
   // its tab strip but kept running unseen, sound and all. Closed, except one lent to an agent that may still be using it.
-  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg) closeTab(k); sleeping.clear(); });
+  win.webContents.on('did-start-navigation', (e) => { if (!e.isMainFrame || e.isSameDocument) return; for (const [k, t] of [...tabs]) if (!t.agent && !t.onDbg && hostOf(t) === win) closeTab(k); sleeping.clear(); });
   // Zoom keys and Ctrl+wheel in the app go to the page, which knows what you're on: an artifact or a page preview
   // (inside a frame, which the page never hears keys from), the terminal, or QuorX itself (it calls back 'zoom').
   win.webContents.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); send({ type: 'zoom-key', dir }); } });
   win.webContents.on('zoom-changed', (_e, dir) => send({ type: 'zoom-wheel', dir }));
+  // The mouse's side buttons (Windows sends them to the window): back / forward in a real browser tab when the pointer
+  // or the keyboard focus is in one, else back / forward through the workspace (the page steps its own history).
+  win.on('app-command', (_e, cmd) => {
+    if (cmd !== 'browser-backward' && cmd !== 'browser-forward') return;
+    const dir = cmd === 'browser-backward' ? 'back' : 'forward';
+    const t = tabUnderPointer() || [...tabs.values()].find((x) => x.shown && !x.view.webContents.isDestroyed() && x.view.webContents.isFocused());
+    if (t) { const h = t.view.webContents.navigationHistory; if (dir === 'back' ? h.canGoBack() : h.canGoForward()) h[dir === 'back' ? 'goBack' : 'goForward'](); return; }
+    send({ type: 'ws-nav', dir });
+  });
   // Right-click, as in a browser: on a misspelled word, the spelling suggestions and Add to dictionary; in a text box,
   // undo, cut, copy, paste and select all; on selected text, copy. (A part of the page with its own menu keeps it.)
   win.webContents.on('context-menu', (_e, p) => {
@@ -179,16 +198,38 @@ function createWindow() {
     e.preventDefault();
     const act = closeAction();
     if (act !== 'quit' && STORE && update.state === 'store-available' && update.version !== skippedUpdate) return askUpdateOnClose(act);
-    if (act === 'quit') quitApp(); else if (act === 'tray') win.hide(); else askOnClose();
+    if (act === 'quit') confirmQuit(); else if (act === 'tray') win.hide(); else askOnClose();
   });
-  win.on('closed', () => { win = null; tabs.clear(); });
+  win.on('closed', () => { win = null; tabs.clear(); for (const w of popWins()) w.destroy(); });
+  win.on('hide', hidePops);
+  win.on('show', () => { if (!compact) showPops(); });
 }
 // What ✕ does: 'ask' (the notice, until you tick "Don't show this again"), 'tray' or 'quit'.
 const closeAction = () => (['tray', 'quit'].includes(readConfig().onClose) ? readConfig().onClose : 'ask');
 function setCloseAction(v) { writeConfig({ ...readConfig(), onClose: ['tray', 'quit'].includes(v) ? v : 'ask' }); return closeAction(); }
 function quitApp() { quitting = true; app.quit(); }
 let asking = false;
+// Quitting while a reply, server or command works: QuorX's own dialog names it first (desktop/quit-prompt.js), with
+// Quit anyway / Keep running in the tray / Cancel. Nothing working (or the harness can't be asked): it just quits.
+// Attached to a harness someone else runs, quitting stops nothing, so it never asks.
+async function confirmQuit() {
+  if (asking) return;
+  if (!server) return quitApp();
+  asking = true;
+  try {
+    const d = quitDialog(await fetchBusy(), { tray: !!tray });
+    if (!d) return quitApp();
+    const opts = { type: 'warning', title: 'QuorX', message: d.message, detail: d.detail, buttons: d.buttons, defaultId: d.defaultId, cancelId: d.cancelId, noLink: true };
+    // From the tray the window may be hidden: a dialog tied to a hidden window would not show.
+    const { response } = await (win?.isVisible() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts));
+    const act = d.actions[response];
+    if (act === 'quit') quitApp(); else if (act === 'tray') win?.hide();
+  } finally { asking = false; }
+}
 async function askOnClose() {
+  if (asking || !win) return;
+  // Something working: the named dialog instead of the notice (its Keep running is the same as the notice's).
+  if (quitDialog(await fetchBusy())) return confirmQuit();
   if (asking || !win) return;
   asking = true;
   const { response, checkboxChecked } = await dialog.showMessageBox(win, {
@@ -231,7 +272,7 @@ const trayTip = () => `QuorX${DEV ? ' DEV (from your folder)' : ''} is running �
 function createTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open QuorX', click: showWindow },
-    { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: quitApp },
+    { label: server ? 'Quit QuorX (stops the harness)' : 'Quit QuorX', click: confirmQuit },
     { type: 'separator' },
     { label: `Address: ${appOrigin()}`, enabled: false },
     ...(HOME ? [{ label: 'Open the data folder', click: () => shell.openPath(HOME) }] : []),
@@ -263,7 +304,69 @@ function browseSession() {
   return userSession;
 }
 function uniquePath(p) { if (!fs.existsSync(p)) return p; const { dir, name, ext } = path.parse(p); for (let i = 1; ; i++) { const q = path.join(dir, `${name} (${i})${ext}`); if (!fs.existsSync(q)) return q; } }
-function send(ev) { if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev); }
+// Events go to the main window; a tab's own events (its address, title, sound…) go to the pop-out windows too, as a
+// tab can be placed in one of them.
+function send(ev) {
+  if (win && !win.isDestroyed()) win.webContents.send('oh-desktop', ev);
+  if (ev?.sid) for (const p of popouts.values()) if (!p.win.isDestroyed()) p.win.webContents.send('oh-desktop', ev);
+}
+// ---------- pop-out windows: a group, a tab or a chat in a window of its own ----------
+// A pop-out is a light QuorX window (the same page, told what it shows), so both windows share one app: chats, replies,
+// approvals and Stop go through the server as in the main window. A real browser tab belongs to the window that places
+// it last: placing it from another window moves its view there (the page in it doesn't load again). A pop-out closing
+// puts its tabs back in the main window (hidden) and tells the main window, which docks its group back.
+const popouts = new Map(); // id → { win, state, key }
+let caller = null; // the window whose page made the current call
+const hostOf = (t) => (t.host && !t.host.isDestroyed() ? t.host : win);
+function moveTab(t, w, sid = '') {
+  const h = hostOf(t);
+  if (!w || w.isDestroyed() || h === w) return;
+  try { h?.contentView.removeChildView(t.view); if (t.cover) h?.contentView.removeChildView(t.cover); } catch { /* already gone */ }
+  w.contentView.addChildView(t.view); if (t.cover) w.contentView.addChildView(t.cover);
+  t.host = w; t.viewRect = null; t.bounds = null;
+  vlog('move', sid, w === win ? 'main' : 'pop-out');
+}
+const popWins = () => [...popouts.values()].map((p) => p.win).filter((w) => !w.isDestroyed());
+function hidePops() { for (const w of popWins()) w.hide(); }
+function showPops() { for (const w of popWins()) w.showInactive(); }
+function openPopout({ id, url, bounds, title } = {}) {
+  id = String(id || ''); if (!/^[\w-]{1,40}$/.test(id) || popouts.has(id)) return false;
+  let ok = false; try { ok = [origin, appOrigin()].includes(new URL(url).origin); } catch { /* not a URL */ }
+  if (!ok || !win || win.isDestroyed()) return false;
+  const box = fitBox(bounds, screen.getAllDisplays().map((d) => d.workArea), win.getBounds());
+  // Pop-outs get the same frame as the main window: the page's row 1 (menus, the window's name, Dock back) with
+  // Windows' − □ × over its right end, coloured from the page (handle 'frame', called by the pop-out page itself).
+  const pw = new BrowserWindow({ ...box, minWidth: 360, minHeight: 260, show: false, backgroundColor: '#070908', title: String(title || 'QuorX').slice(0, 120), icon: iconImage(64), autoHideMenuBar: true,
+    titleBarStyle: 'hidden', titleBarOverlay: { color: FRAME_BAR.color, symbolColor: FRAME_BAR.symbolColor, height: FRAME_BAR.height },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  pw.setMenuBarVisibility(false);
+  popouts.set(id, { win: pw, state: null });
+  pw.once('ready-to-show', () => { if (!compact && win?.isVisible()) pw.show(); });
+  pw.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) pw.webContents.setZoomFactor(z); });
+  pw.webContents.on('will-navigate', (e, u) => { let same = false; try { same = [origin, appOrigin()].includes(new URL(u).origin); } catch { /* not a URL */ } if (same) return; e.preventDefault(); if (/^(https?|mailto):/i.test(u)) shell.openExternal(offAppHost(u)); });
+  pw.webContents.setWindowOpenHandler(({ url: u }) => { if (/^(https?|mailto):/i.test(u)) shell.openExternal(offAppHost(u)); return { action: 'deny' }; });
+  pw.on('close', () => {
+    // Its real tabs go back to the main window, hidden, before the window goes.
+    for (const [k, t] of tabs) if (t.host === pw) { if (win && !win.isDestroyed()) { moveTab(t, win, k); setShown(k, t, false, ' (dock)'); } }
+    const rec = popouts.get(id);
+    if (!quitting) send({ type: 'popout-closed', id, state: rec?.state || null, bounds: pw.isMinimized() ? pw.getNormalBounds() : pw.getBounds() });
+  });
+  pw.on('closed', () => popouts.delete(id));
+  pw.loadURL(url);
+  return true;
+}
+
+// The real browser tab the mouse is over, if any (views are placed in the window's content coordinates).
+function tabUnderPointer() {
+  if (!win || win.isDestroyed()) return null;
+  const p = screen.getCursorScreenPoint(), c = win.getContentBounds(), x = p.x - c.x, y = p.y - c.y;
+  for (const t of tabs.values()) {
+    if (!t.shown || !t.viewRect) continue;
+    const [bx, by, bw, bh] = t.viewRect.split(',').map(Number);
+    if (x >= bx && x < bx + bw && y >= by && y < by + bh) return t;
+  }
+  return null;
+}
 function tabFor(sid) {
   let t = tabs.get(sid);
   if (t) return t;
@@ -271,12 +374,44 @@ function tabFor(sid) {
   const view = new WebContentsView({ webPreferences: { session: browseSession(), sandbox: true, contextIsolation: true, nodeIntegration: false, nodeIntegrationInSubFrames: true } });
   view.setBackgroundColor('#ffffff');
   view.setVisible(false);
-  win.contentView.addChildView(view);
-  t = { view, shown: false, hiddenAt: Date.now() };
+  const host = caller && !caller.isDestroyed() ? caller : win;
+  host.contentView.addChildView(view);
+  t = { view, shown: false, hiddenAt: Date.now(), host };
   tabs.set(sid, t);
   wireView(sid, view);
   applySound(t);
+  // A device size picked for this tab (deviceOf) holds on every page it opens, and after it wakes from sleep.
+  view.webContents.on('did-navigate', () => { const x = tabs.get(sid); if (x?.emu?.fixed) { x.sentEmu = null; applyEmu(x); } });
+  if (deviceOf.has(sid)) setImmediate(() => applyDevice(sid));
   return t;
+}
+// ---------- device sizes for your tabs (the Browser tab's 📱 menu) ----------
+// Phone, tablet, laptop or a size of your own: the real tab lays the page out at that size (and as a touch screen
+// for phones and tablets), shown whole in the middle of the pane, scaled down when it doesn't fit. Same emulation as
+// the agent's pages (applyEmu), through the tab's debugger, attached only while a size is set.
+const deviceOf = new Map(); // sid → { width, height, mobile }
+function applyDevice(sid) {
+  const t = tabs.get(sid); if (!t || t.agent) return false;
+  const d = deviceOf.get(sid), dbg = t.view.webContents.debugger, key = d ? JSON.stringify(d) : '';
+  if (t.devKey === key && (!d || dbg.isAttached())) return true; // the same again: no relayout
+  t.devKey = key;
+  if (!d) {
+    if (!t.emu?.fixed) return true;
+    t.emu = null; t.sentEmu = null;
+    if (dbg.isAttached()) {
+      dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {});
+      dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
+      if (!t.onDbg) { try { dbg.detach(); } catch { /* gone */ } } // still attached when lent or in 💬 comment mode
+    }
+    placeView(t);
+    return true;
+  }
+  try { if (!dbg.isAttached()) dbg.attach('1.3'); } catch { t.devKey = null; return false; }
+  t.emu = { width: d.width, height: d.height, deviceScaleFactor: 0, mobile: d.mobile, fixed: true };
+  t.sentEmu = null;
+  applyEmu(t);
+  dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: d.mobile, maxTouchPoints: d.mobile ? 5 : 1 }).catch(() => {});
+  return true;
 }
 
 // ---------- sleeping tabs (tab-sleep.js decides which) ----------
@@ -314,11 +449,11 @@ function wake(sid) {
     const cw = t.cover.webContents, still = JSON.stringify(info.still);
     cw.loadURL('data:text/html,<html style="margin:0;background:%23fff;overflow:hidden"><body style="margin:0"></body></html>')
       .then(() => cw.executeJavaScript(`{ const i = new Image(); i.alt = ''; i.style.cssText = 'display:block;width:100%'; i.src = ${still}; document.body.appendChild(i); }`, true)).catch(() => {});
-    win.contentView.addChildView(t.cover);
+    hostOf(t).contentView.addChildView(t.cover);
     t.cover.setVisible(false);
   }
   if (info.bounds) { t.bounds = info.bounds; t.cover?.setBounds(info.bounds); placeView(t); }
-  const uncover = () => { if (!t.cover || tabs.get(sid) !== t) return; win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; };
+  const uncover = () => { if (!t.cover || tabs.get(sid) !== t) return; hostOf(t)?.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; };
   wc.once('did-finish-load', async () => {
     if (info.zoom && info.zoom !== 1) wc.setZoomFactor(info.zoom);
     if (info.scroll && (info.scroll[0] || info.scroll[1])) await within(wc.executeJavaScript(`scrollTo(${Number(info.scroll[0]) || 0}, ${Number(info.scroll[1]) || 0})`, true), 800, 'the scroll').catch(() => {});
@@ -364,7 +499,18 @@ function wireView(sid, view) {
   // Ctrl + / − / 0 and Ctrl+wheel zoom the page in this tab only (QuorX itself keeps its size). Not the agent's
   // own tab: its page size is set for what the agent measures and screenshots.
   const zoomTab = (dir) => { const t = tabs.get(sid); if (!t || t.agent) return; wc.setZoomFactor(nextZoom(wc.getZoomFactor(), dir)); send({ sid, type: 'zoom', factor: wc.getZoomFactor() }); };
-  wc.on('before-input-event', (e, input) => { const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); } });
+  // Alt+← / Alt+→ go back and forward in the page, as in a browser.
+  wc.on('before-input-event', (e, input) => {
+    const dir = zoomKey(input); if (dir) { e.preventDefault(); zoomTab(dir); return; }
+    if (input.type === 'keyDown' && input.alt && !input.control && !input.meta && !input.shift && (input.key === 'ArrowLeft' || input.key === 'ArrowRight')) {
+      e.preventDefault(); const h = wc.navigationHistory;
+      if (input.key === 'ArrowLeft' && h.canGoBack()) h.goBack(); else if (input.key === 'ArrowRight' && h.canGoForward()) h.goForward();
+    }
+    // Ctrl+F: the page opens its find bar for this tab (it searches the page with find below).
+    if (input.type === 'keyDown' && (input.control || input.meta) && !input.alt && !input.shift && String(input.key).toLowerCase() === 'f') { e.preventDefault(); send({ sid, type: 'find-open' }); }
+  });
+  // Find in the page: how many matches, and which one is current.
+  wc.on('found-in-page', (_e, r) => send({ sid, type: 'find', at: r.activeMatchOrdinal || 0, of: r.matches || 0 }));
   wc.on('zoom-changed', (_e, dir) => zoomTab(dir));
   // A tab making sound gets a speaker on it in the pane.
   wc.on('audio-state-changed', (e) => send({ sid, type: 'audio', audible: !!e.audible }));
@@ -410,13 +556,28 @@ function zoomKey(input) {
 }
 // Only the app's own page may drive tabs.
 const fromApp = (e) => { try { return new URL(e.senderFrame.url).origin === appOrigin(); } catch { return false; } };
-function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); return fn(...a); }); }
+function handle(name, fn) { ipcMain.handle(`oh:${name}`, (e, ...a) => { if (!fromApp(e)) throw new Error('not allowed'); caller = BrowserWindow.fromWebContents(e.sender) || win; return fn(...a); }); }
+// What a pop-out window and the main window ask of each other (see "pop-out windows" above).
+handle('popout', (op, a, b) => {
+  if (op === 'open') return openPopout(a || {});
+  if (op === 'list') return [...popouts.keys()];
+  const rec = popouts.get(String(a || ''));
+  if (op === 'state') { if (rec) rec.state = b && typeof b === 'object' ? JSON.parse(JSON.stringify(b)) : null; return !!rec; }
+  if (op === 'dock') { if (rec && !rec.win.isDestroyed()) rec.win.close(); return !!rec; }
+  if (op === 'focus') { if (rec && !rec.win.isDestroyed()) { rec.win.show(); rec.win.focus(); } return !!rec; }
+  // A pop-out asks the main window for something (open a chat there): it comes to the front and is told.
+  if (op === 'tell') { showWindow(); send({ type: 'popout-msg', msg: a && typeof a === 'object' ? a : null }); return true; }
+  return false;
+});
 handle('open', (sid, url) => { if (!/^https?:\/\//i.test(String(url))) throw new Error('only http and https addresses'); sleeping.delete(sid); tabFor(sid).view.webContents.loadURL(url).catch(() => {}); return true; });
 handle('bounds', (sid, r) => {
   if (sleeping.has(sid)) { sleeping.get(sid).bounds = null; wake(sid); } // placed again: it is about to be seen
   const t = tabs.get(sid); if (!t) return false;
+  // Placed from another window (a pop-out, or back in the main one): the view moves there, its page as it is.
+  const w = caller && !caller.isDestroyed() ? caller : win;
+  moveTab(t, w, sid);
   // The page measures in its own pixels, which zooming QuorX scales; views are placed in the window's.
-  const z = win?.webContents.getZoomFactor() || 1;
+  const z = w?.webContents.getZoomFactor() || 1;
   const b = { x: Math.round(r.x * z), y: Math.round(r.y * z), width: Math.max(0, Math.round(r.width * z)), height: Math.max(0, Math.round(r.height * z)) };
   // The same place again (the page asks often): nothing to do, so the page isn't laid out again.
   if (t.bounds && t.bounds.x === b.x && t.bounds.y === b.y && t.bounds.width === b.width && t.bounds.height === b.height) { vlog('bounds skip', sid); return true; }
@@ -443,6 +604,9 @@ function fitEmu(t) {
   const e = t.emu, b = t.bounds;
   if (!e?.width || !e?.height) return null;
   if (!b?.width || !b?.height) return { ...e, scale: 1 };
+  // A device size you picked for one of your tabs (the Browser tab's 📱 menu): exactly that size, scaled down to fit
+  // the pane both ways, so a phone shows whole.
+  if (e.fixed) return { ...e, scale: Math.min(1, b.width / e.width, b.height / e.height) };
   const scale = Math.min(1, b.width / e.width);
   return { ...e, height: Math.max(e.height, Math.round(b.height / scale)), scale };
 }
@@ -452,7 +616,7 @@ function placeView(t) {
   let r = b;
   if (f) {
     const w = Math.max(1, Math.round(f.width * f.scale)), h = Math.max(1, Math.min(b.height, Math.round(f.height * f.scale)));
-    r = { x: b.x + Math.round((b.width - w) / 2), y: b.y, width: w, height: h };
+    r = { x: b.x + Math.round((b.width - w) / 2), y: b.y + (f.fixed ? Math.max(0, Math.round((b.height - h) / 2)) : 0), width: w, height: h };
   }
   const key = `${r.x},${r.y},${r.width},${r.height}`;
   if (t.viewRect === key) return; // already there
@@ -464,11 +628,12 @@ function placeView(t) {
 // Only views whose visibility changes are touched (setting it again on a shown view can make it flash).
 // A tab hidden is timed from then (tab-sleep.js); shown, it is awake for good until hidden again.
 function setShown(k, t, on, why = '') { vlog(on ? 'show' : `hide${why}`, k); t.shown = on; t.hiddenAt = on ? null : Date.now(); t.view.setVisible(on); t.cover?.setVisible(on); }
-handle('show', (sid) => { wake(sid); for (const [k, t] of tabs) { const on = k === sid; if (t.shown === on) continue; setShown(k, t, on); } return true; });
+const mine = (t) => hostOf(t) === (caller && !caller.isDestroyed() ? caller : win);
+handle('show', (sid) => { wake(sid); for (const [k, t] of tabs) { if (!mine(t)) continue; const on = k === sid; if (t.shown === on) continue; setShown(k, t, on); } return true; });
 // Several tabs at once, one per area of a split pane (each placed in its own box): every other tab is hidden.
-handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const s of on) wake(s); for (const [k, t] of tabs) { const v = on.has(k); if (t.shown === v) continue; setShown(k, t, v); } return true; });
+handle('showSet', (sids) => { const on = new Set(Array.isArray(sids) ? sids.map(String) : []); for (const s of on) wake(s); for (const [k, t] of tabs) { if (!mine(t) && !on.has(k)) continue; const v = on.has(k); if (t.shown === v) continue; setShown(k, t, v); } return true; });
 // Hidden again even when we think it is (the page's safety net); only a tab that was shown starts its hidden time now.
-handle('hideAll', () => { for (const [k, t] of tabs) { if (t.shown) setShown(k, t, false, ' (all)'); else { t.view.setVisible(false); t.cover?.setVisible(false); } } return true; });
+handle('hideAll', () => { for (const [k, t] of tabs) { if (!mine(t)) continue; if (t.shown) setShown(k, t, false, ' (all)'); else { t.view.setVisible(false); t.cover?.setVisible(false); } } return true; });
 handle('nav', (sid, op) => {
   if (sleeping.has(sid)) return op === 'reload' ? wake(sid) : false;
   const t = tabs.get(sid); if (!t) return false;
@@ -477,7 +642,22 @@ handle('nav', (sid, op) => {
   else if (op === 'devtools') wc.openDevTools({ mode: 'detach' });
   return true;
 });
-handle('close', (sid) => closeTab(sid));
+handle('close', (sid) => { deviceOf.delete(String(sid)); return closeTab(sid); });
+// Find in a real tab's page (the page's find bar): op 'find' with the text and { forward, findNext }, or 'stop'.
+handle('find', (sid, op, text, opts = {}) => {
+  const t = tabs.get(sid); if (!t || t.view.webContents.isDestroyed()) return false;
+  const wc = t.view.webContents;
+  if (op === 'stop' || !text) { wc.stopFindInPage('clearSelection'); return true; }
+  wc.findInPage(String(text).slice(0, 200), { forward: opts.forward !== false, findNext: !!opts.findNext, matchCase: false });
+  return true;
+});
+handle('device', (sid, d) => {
+  sid = String(sid);
+  const n = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));
+  if (d && Number(d.width) > 0 && Number(d.height) > 0) deviceOf.set(sid, { width: n(d.width, 200, 3840), height: n(d.height, 200, 3840), mobile: !!d.mobile });
+  else deviceOf.delete(sid);
+  return applyDevice(sid);
+});
 // The sidebar's Running list: every real tab (yours and each chat's agent tab) with its page and sound, and closing one.
 handle('tabs', (op, sid) => {
   if (op === 'close') return closeTab(String(sid || ''));
@@ -490,7 +670,8 @@ function closeTab(sid) {
   const asleep = sleeping.delete(sid);
   const t = tabs.get(sid); if (!t) return asleep;
   try { if (t.view.webContents.debugger.isAttached()) t.view.webContents.debugger.detach(); } catch { /* gone */ }
-  if (win && !win.isDestroyed()) { win.contentView.removeChildView(t.view); if (t.cover) win.contentView.removeChildView(t.cover); }
+  const h = hostOf(t);
+  if (h && !h.isDestroyed()) { h.contentView.removeChildView(t.view); if (t.cover) h.contentView.removeChildView(t.cover); }
   t.view.webContents.close(); t.cover?.webContents.close();
   tabs.delete(sid);
   return true;
@@ -593,7 +774,9 @@ handle('storage', async (op, arg) => {
 });
 handle('loginItem', (on) => (on === undefined ? loginItem() : setLoginItem(on)));
 handle('closeAction', (v) => (v === undefined ? closeAction() : setCloseAction(v)));
-handle('quit', () => { setImmediate(quitApp); return true; });
+handle('quit', () => { setImmediate(confirmQuit); return true; });
+handle('keepAwake', (on) => { if (on !== undefined) { writeConfig({ ...readConfig(), keepAwake: !!on }); awakeTick(); } return { on: keepAwakeOn(readConfig()), held: awake.held }; });
+handle('summon', (v) => (v === undefined ? (summonState || { on: false, key: readConfig().summon?.key || SUMMON_DEFAULT, ok: true }) : setSummon(v)));
 handle('info', () => ({ version: app.getVersion(), packaged: app.isPackaged, dev: DEV, store: STORE, home: HOME || ROOT, origin, ownsServer: !!server }));
 handle('openHome', () => { shell.openPath(HOME || ROOT); return true; });
 // The performance readout (⚙ Settings → Appearance → Under the hood) and the perf UI test: every process QuorX runs
@@ -637,17 +820,44 @@ handle('zoom', (dir) => {
   if (dir !== 'get') { win.webContents.setZoomFactor(f); writeConfig({ ...readConfig(), zoom: f }); }
   return f;
 });
+// The window frame (the page's row 1): the colours of the native − □ × over it, full screen, and the Edit menu's
+// commands run on what has the focus (Paste needs the app's own clipboard access, which a page doesn't have).
+const FRAME_BAR = { color: '#040605', symbolColor: '#83948c', height: 34 };
+const FRAME_EDIT = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+const hexColour = (v) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : null);
+handle('frame', (op, arg) => {
+  const w = caller || win; if (!w || w.isDestroyed()) return null;
+  if (op === 'overlay') {
+    const color = hexColour(arg?.color), symbolColor = hexColour(arg?.symbolColor);
+    if (color && symbolColor) { try { w.setTitleBarOverlay({ color, symbolColor, height: FRAME_BAR.height }); } catch { /* a window without the overlay (a pop-out) */ } }
+    return true;
+  }
+  if (op === 'fullscreen') { w.setFullScreen(!w.isFullScreen()); return w.isFullScreen(); }
+  if (op === 'edit' && FRAME_EDIT.has(arg)) { w.webContents[arg](); return true; }
+  throw new Error(`unknown frame step ${op}`);
+});
 handle('focusWindow', () => { showWindow(); return true; }); // a clicked notification brings the window back from the tray
+// The taskbar icon's badge: the count of chats that need you, drawn by the page (a small amber disc), none at 0.
+handle('badge', (n, png) => {
+  if (!win || win.isDestroyed() || process.platform !== 'win32') return false;
+  const k = Math.max(0, Number(n) || 0), img = k && /^data:image\/png;base64,/.test(String(png || '')) ? nativeImage.createFromDataURL(png) : null;
+  win.setOverlayIcon(img && !img.isEmpty() ? img : null, k ? `${k} chat${k === 1 ? '' : 's'} need${k === 1 ? 's' : ''} you` : '');
+  return true;
+});
 // Notifications from the app itself (not the page's own), so they carry QuorX's name and logo. Clicking one brings
-// the window back and opens that chat. Each is kept until it closes: one collected early loses its click.
-const notes = new Set();
+// the window back and opens that chat. Each is kept until it closes: one collected early loses its click. One per
+// chat at a time: a newer one for the same chat replaces the older, so a busy chat doesn't stack them up.
+const notes = new Set(), noteOf = new Map(); // chatId → its notification on screen
 handle('notify', (n = {}) => showNote(n));
 // Also sent by the harness itself over the link (scheduled chats), so it works while the window is hidden in the tray.
 function showNote(n = {}) {
   if (!Notification.isSupported()) return false;
   const x = new Notification({ title: String(n.title || 'QuorX').slice(0, 90), body: String(n.body || '').slice(0, 240), icon: iconImage(256), silent: !!n.silent });
+  const key = n.chatId ? String(n.chatId) : null, old = key && noteOf.get(key);
+  if (old) { notes.delete(old); try { old.close(); } catch { /* already gone */ } }
+  if (key) noteOf.set(key, x);
   notes.add(x);
-  const drop = () => notes.delete(x);
+  const drop = () => { notes.delete(x); if (key && noteOf.get(key) === x) noteOf.delete(key); };
   x.on('click', () => { drop(); showWindow(); send({ type: 'notify-click', chatId: n.chatId || null }); });
   x.on('close', drop); x.on('failed', drop);
   x.show();
@@ -698,7 +908,8 @@ function applyEmu(t) {
   if (t.sentEmu === key) { vlog('emu skip (pane)'); placeView(t); return; } // the same size again would make the page lay itself out (and flash) for nothing
   vlog('emu (pane)', key);
   t.sentEmu = key;
-  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', f).then(() => placeView(t), () => { t.sentEmu = null; placeView(t); });
+  const { fixed: _fixed, ...metrics } = f;
+  t.view.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', metrics).then(() => placeView(t), () => { t.sentEmu = null; placeView(t); });
   // A page with no background of its own still looks white to the agent (its checks judge what it sees).
   t.view.webContents.debugger.sendCommand('Emulation.setDefaultBackgroundColorOverride', { color: { r: 255, g: 255, b: 255, a: 1 } }).catch(() => {});
 }
@@ -768,6 +979,20 @@ const PHONE = 19.5 / 9;
 // While computer use runs, its stop shortcut works whichever window is in front: a system hotkey, besides the
 // screen glow's own keyboard watch (which Windows can drop, and which an app run as administrator doesn't reach).
 const STOP_KEYS = 'Control+Alt+Backspace';
+// The summon key (desktop/summon.js): saved in the desktop config as { on, key }, off until you turn it on.
+let summonState = null;
+function summonFire() {
+  if (!win || win.isDestroyed()) createWindow();
+  showWindow();
+  send({ type: 'summon' }); // the page puts the cursor in the message box
+}
+function setSummon(want) {
+  const cfg = readConfig().summon || {};
+  const next = { on: want?.on ?? cfg.on ?? false, key: String(want?.key || cfg.key || SUMMON_DEFAULT) };
+  summonState = applySummon(globalShortcut, next, summonState, summonFire);
+  writeConfig({ ...readConfig(), summon: { on: summonState.on, key: summonState.key } });
+  return summonState;
+}
 function stopShortcut(on) {
   try {
     if (on && !globalShortcut.isRegistered(STOP_KEYS)) globalShortcut.register(STOP_KEYS, () => postReply({ signal: 'stop' }));
@@ -787,6 +1012,7 @@ function computerUse({ on, work, chatId } = {}) {
     if (was.max) win.maximize();
     if (was.full) win.setFullScreen(true);
     send({ type: 'compact', on: false });
+    showPops();
     return true;
   }
   const win32 = process.platform === 'win32';
@@ -809,6 +1035,7 @@ function computerUse({ on, work, chatId } = {}) {
   win.setContentProtection(true);
   if (win.isMinimized()) win.restore();
   if (!win.isVisible()) win.showInactive();
+  hidePops();
   send({ type: 'compact', on: true, chatId: chatId || null });
   // Sharing the screen, the apps keep to the part left of QuorX.
   return { area: shared ? toPx({ x: workDip.x, y: workDip.y, width: Math.max(0, rect.x - gap - workDip.x), height: workDip.height }) : null };
@@ -877,10 +1104,10 @@ const COMMANDS = {
       t.cover = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
       t.cover.setBackgroundColor('#00000000');
       t.cover.webContents.loadURL(COVER);
-      win.contentView.addChildView(t.cover); // added after the page, so it sits on top
+      hostOf(t).contentView.addChildView(t.cover); // added after the page, so it sits on top
       if (t.bounds) t.cover.setBounds(t.bounds);
       t.cover.setVisible(t.shown);
-    } else if (!locked && t.cover) { win.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; }
+    } else if (!locked && t.cover) { hostOf(t)?.contentView.removeChildView(t.cover); t.cover.webContents.close(); t.cover = null; }
     send({ sid: tab, type: 'agent-lock', locked: !!locked });
     return true;
   },
@@ -899,6 +1126,7 @@ const COMMANDS = {
     const dbg = t.view.webContents.debugger;
     if (t.onDbg) { dbg.removeListener('message', t.onDbg); t.onDbg = null; }
     try { if (dbg.isAttached()) dbg.detach(); } catch { /* gone */ }
+    if (deviceOf.has(tab)) { t.devKey = null; applyDevice(tab); } // detaching dropped the device size
     return true;
   },
 };
@@ -933,11 +1161,35 @@ async function linkLoop() {
   }
 }
 
+// ---------- what the harness is working on (keep-awake, the quit prompt) ----------
+// { replies, servers, commands } from the harness (server/running.js busyNow), or null when it can't be asked
+// (restarting, or an older harness): then nothing is held awake and quitting asks nothing extra.
+async function fetchBusy() {
+  if (!origin) return null;
+  try {
+    const r = await fetch(`${origin}/api/busy`, { headers: keyed(), signal: AbortSignal.timeout(1500) });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+// The PC stays awake only while a reply or a command works (desktop/keep-awake.js); asked every few seconds.
+const awake = createAwake(powerSaveBlocker);
+let awakeAsking = false;
+async function awakeTick() {
+  if (awakeAsking) return;
+  awakeAsking = true;
+  try {
+    const on = keepAwakeOn(readConfig());
+    awake.set(on && wantAwake(await fetchBusy(), on));
+  } finally { awakeAsking = false; }
+}
+
 // The (hidden) menu, without Electron's zoom shortcuts: Ctrl + / − / 0 are QuorX's own (the app, each browser tab,
 // the terminal), and the menu's would zoom the app a second time.
 function appMenu() {
   const t = process.platform === 'darwin' ? [{ role: 'appMenu' }] : [];
-  t.push({ role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' });
+  // The Window menu without Ctrl+W: in QuorX that closes the chat tab on screen (the page handles it), not the window.
+  const windowMenu = process.platform === 'darwin' ? { role: 'windowMenu' } : { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close', registerAccelerator: false }] };
+  t.push({ role: 'editMenu' }, { label: 'View', submenu: [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'togglefullscreen' }] }, windowMenu);
   return Menu.buildFromTemplate(t);
 }
 app.whenReady().then(async () => {
@@ -950,6 +1202,8 @@ app.whenReady().then(async () => {
   createWindow();
   createTray();
   linkLoop();
+  setInterval(awakeTick, AWAKE_POLL_MS);
+  if (readConfig().summon?.on) setSummon({}); // the summon key you turned on (taken since: it stays off, Settings says so)
   setInterval(sleepTick, Math.min(10e3, Math.max(1000, (SLEEP_OPTS.after ?? 10e3) / 2)));
   // Installed update downloads go a little after start (⚙ Settings → Storage → Automatic cleanup).
   if (readConfig().storage?.updateCleanup !== false) setTimeout(() => getStorage().clear([{ id: 'desk:updates' }]).catch(() => {}), 30000);
@@ -961,5 +1215,5 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => { if (!server) app.quit(); });
 app.on('activate', () => (win ? showWindow() : createWindow()));
 app.on('before-quit', () => { quitting = true; });
-app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch { /* not ready */ } });
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch { /* not ready */ } awake.set(false); });
 app.on('quit', () => { if (server) { try { if (process.platform === 'win32') spawn('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true }); else server.kill(); } catch { /* gone */ } } });

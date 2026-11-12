@@ -7,6 +7,9 @@ QuorX runs on your computer. It has no account, no analytics and no telemetry, a
 - Your chats, projects, settings and keys (in `data/`, or the folder the installed app asks for).
 - Logs of runs, checks and costs (in `logs/`). The numbers in News that are about your computer are worked out from
   these logs on your computer and never uploaded.
+- A problem report (⚙ About → Report a problem). It is a zip of the end of those logs with API keys, tokens, emails,
+  your user name and local paths taken out, saved to a folder you pick. QuorX never sends it: you decide whether to
+  attach it to an issue.
 - Your project files. QuorX's own working files for a project (undo history, trash, snapshots) stay in its hidden
   `.quorx/` folder.
 

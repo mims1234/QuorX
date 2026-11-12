@@ -494,7 +494,9 @@ export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
   const wait = kind === 'auth' ? 10 * 60e3 : kind === 'quota' ? retryAfter || 15 * 60e3 : kind === 'rate' ? retryAfter || 30e3
     : kind === 'model' ? 30 * 60e3 : kind === 'shape' ? 5 * 60e3 : kind === 'free' ? Math.min(6 * 3600e3, retryAfter || 6 * 3600e3)
     : ['server', 'network', 'timeout', 'unknown', 'notinstalled'].includes(kind) ? Math.min(5 * 60e3, 20e3 * 2 ** (fails - 1)) : 0;
-  const rec = { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait && key ? now + wait : 0, model: scoped ? model || null : null, scoped, fails };
+  // When a usage limit really resets (Retry-After, uncapped): the switch card shows it, while skipping stops at `until`.
+  const asked = Math.max(0, Number(err?.retryAfter) || 0) * 1000, reset = ['quota', 'rate', 'free'].includes(kind) && asked && asked <= 7 * 24 * 3600e3 ? now + asked : 0;
+  const rec = { ok: false, at: now, kind, why: String(err?.message || kind).slice(0, 300), until: wait && key ? now + wait : 0, model: scoped ? model || null : null, scoped, fails, ...(reset ? { reset } : {}) };
   if (scoped && key) modelHealth.set(key, rec);
   // Settings shows the last result either way; only a source-wide one makes other models skip.
   health.set(id, scoped ? { ...rec, until: 0 } : rec);
@@ -507,6 +509,16 @@ export function sourceSkip(id, model, now = Date.now()) {
   const m = model ? modelHealth.get(`${id}|${model}`) : null;
   if (m && m.until && now < m.until) return skipWhy(id, m, now);
   return '';
+}
+
+/**
+ * The usage limit a source (or one of its models) is waiting out now: { kind, why, reset } (reset: when it resets, ms,
+ * or 0 when it didn't say), or null. A limit that is skipping calls now is what the model-switch card is about.
+ */
+export function sourceLimit(id, model, now = Date.now()) {
+  const lim = (h) => (h && !h.ok && h.until && now < h.until && ['quota', 'rate', 'free'].includes(h.kind) ? { kind: h.kind, why: h.why, reset: h.reset > now ? h.reset : h.until } : null);
+  const h = health.get(id);
+  return (h && !h.scoped ? lim(h) : null) || (model ? lim(modelHealth.get(`${id}|${model}`)) : null);
 }
 
 // ---------- decision models (Command Code's Jev) ----------

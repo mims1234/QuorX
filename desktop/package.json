@@ -28,12 +28,16 @@
       "buildResources": "build"
     },
     "files": [
+      "quit-prompt.js",
       "main.js",
       "preload.js",
       "sound.js",
       "icon.js",
       "storage.js",
       "tab-sleep.js",
+      "keep-awake.js",
+      "summon.js",
+      "popbox.js",
       "assets/**/*",
       "package.json"
     ],

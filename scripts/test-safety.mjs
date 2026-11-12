@@ -881,8 +881,94 @@ test('shell: in YOLO a build goes to the deciders (or, with them off, to you), a
   }
 });
 
+// Let through in ⚡ YOLO: what the deciders allowed without asking (or what ran with them off) is listed per chat, with
+// what they said and the card it was; a no, and anything you allowed yourself, are not.
+test('let through in YOLO: allowed commands are listed per chat with the reason and the card; a no and Strict are not', { skip: !WIN }, async () => {
+  const { letThrough } = await import('../server/audit.js');
+  const chat = `chat-lt-${Date.now().toString(36)}`;
+  const run = (settings, onEvent) => agentRun((b, i) => [reply('', [['shell', { command: 'node build.js' }]]), reply('Done.')][i], { chatId: chat, prep: buildJs, onEvent, settings: { safety: { yoloLevel: 'careful' }, ...settings } });
+  let card = null;
+  await withDeciders(voteAll({ needed: 0.95, other: 0.03 }), async () => {
+    const { events } = await run({ approval: 'yolo' });
+    card = of(events, 'approval').find((e) => e.mode === 'yolo');
+  });
+  let rows = letThrough({ chat });
+  assert.equal(rows.length, 1, JSON.stringify(rows));
+  assert.deepEqual([rows[0].tool, rows[0].by, rows[0].card, rows[0].chat], ['shell', 'deciders', card.id, chat]);
+  assert.match(rows[0].what, /node build\.js/);
+  assert.ok(rows[0].reason && rows[0].votes >= 2 && rows[0].run && rows[0].at > Date.now() - 600e3, 'what they said, how many voted, the reply and when');
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), () => run({ approval: 'yolo', yoloWaitSecs: 1 }));
+  assert.equal(letThrough({ chat }).length, 1, 'a no is not let through');
+  await run({ approval: 'strict', strictAsk: 'every' }, (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve: true }), 10); });
+  assert.equal(letThrough({ chat }).length, 1, 'what you allowed yourself is not either');
+  await withDeciders(voteAll({ needed: 0.05, other: 0.95 }), () => run({ approval: 'yolo', deciders: false, decidersOff: { commands: 'run' } }));
+  rows = letThrough({ chat });
+  assert.deepEqual(rows.map((r) => r.by), ['deciders off', 'deciders'], 'newest first; a command that ran with the deciders off is listed as no check');
+  assert.equal(letThrough({ chat: 'chat-lt-none' }).length, 0, 'another chat sees none of them');
+});
+
+test('let through in YOLO: an action the deciders allowed (not a command) is written to the log from its card', async () => {
+  const { tapLetThrough } = await import('../server/agent.js');
+  const { letThrough } = await import('../server/audit.js');
+  const chat = `chat-lt-act-${Date.now().toString(36)}`, seen = [];
+  const emit = tapLetThrough({ chatId: chat, runId: 'r-lt-1', projectId: null }, (o) => seen.push(o.t));
+  emit({ t: 'approval', id: 'a1', tool: 'schedule', mode: 'yolo', what: 'Create “Daily news” every day at 9:00' });
+  emit({ t: 'approval_done', id: 'a1', approve: true, by: 'deciders', reason: 'The user asked for a daily summary.', votes: [{ ok: true }, { ok: true }, { ok: false }] });
+  emit({ t: 'approval', id: 'a2', tool: 'image', mode: 'yolo', what: 'A picture' });
+  emit({ t: 'approval_done', id: 'a2', approve: false, by: 'deciders', reason: 'Not needed.' });
+  emit({ t: 'approval', id: 'a3', tool: 'image', mode: 'strict', what: 'Another picture' });
+  emit({ t: 'approval_done', id: 'a3', approve: true, by: 'user' });
+  assert.equal(seen.length, 6, 'every event still goes to the page');
+  const rows = letThrough({ chat });
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0].tool, rows[0].what, rows[0].by, rows[0].card, rows[0].votes, rows[0].run], ['schedule', 'Create “Daily news” every day at 9:00', 'deciders', 'a1', 2, 'r-lt-1']);
+});
+
 // ffmpeg and ffprobe come as "Allow always, everywhere" rules: in a YOLO video chat every render, loudness pass and
 // contact sheet went to a vote that timed out and skipped it. They are ordinary rules: off or deleted, they stay so.
+// Files that define what runs later (CI workflows, git hooks, dev containers): an agent edit always asks, in YOLO too.
+test('run later: which files count as CI, hooks or dev container setup', async () => {
+  const { runsLaterWhy } = await import('../server/editguard.js');
+  for (const f of ['.github/workflows/ci.yml', '.GitHub\\Workflows\\Release.YML', './.github/actions/setup/action.yml', '.gitlab-ci.yml', 'azure-pipelines.yml', '.circleci/config.yml', '.travis.yml', 'bitbucket-pipelines.yml', 'Jenkinsfile', '.buildkite/pipeline.yml', '.drone.yml', 'appveyor.yml', 'cloudbuild.yaml', '.husky/pre-commit', 'lefthook.yml', '.pre-commit-config.yaml', '.devcontainer/devcontainer.json', '.github/workflows./ci.yml']) {
+    assert.ok(runsLaterWhy(f), `${f} asks`);
+  }
+  for (const f of ['src/app.js', 'package.json', 'README.md', '.github/ISSUE_TEMPLATE/bug.md', '.github/CODEOWNERS', 'docs/.github/workflows-notes.md', 'workflows/ci.yml', 'my.gitlab-ci.yml.bak']) assert.equal(runsLaterWhy(f), '', `${f} doesn't`);
+  assert.match(runsLaterWhy('.github/workflows/ci.yml'), /GitHub Actions workflow.*every push/);
+});
+
+test('run later: in YOLO an edit to a CI workflow asks you with the reason; allowed it is written (once per file), refused or unanswered it is not', async () => {
+  const wf = '.github/workflows/ci.yml', yml = 'on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n';
+  const steps = (b, i) => [reply('', [['write_file', { path: wf, content: yml }]]), reply('', [['edit_file', { path: wf, find: 'ubuntu-latest', replace: 'windows-latest' }]]), reply('', [['write_file', { path: 'src/app.js', content: 'ok' }]])][i] || reply('Done.');
+  const answer = (approve) => (e, id) => { if (e.t === 'approval' && e.mode === 'strict') setTimeout(() => answerApproval(id, e.id, { approve }), 10); };
+  { // allowed: one card for the file, the edit after it doesn't ask again, an ordinary file never asks
+    const { events, dir } = await agentRun(steps, { settings: { approval: 'yolo' }, onEvent: answer(true) });
+    const cards = of(events, 'approval').filter((e) => e.mode === 'strict');
+    assert.equal(cards.length, 1, 'one card, for the workflow');
+    assert.deepEqual([cards[0].tool, cards[0].what, cards[0].noAlways], ['run_later', `Create ${wf}`, true]);
+    assert.match(cards[0].why, /GitHub Actions workflow.*always asks first, in ⚡ YOLO too/);
+    assert.match(fs.readFileSync(path.join(dir, wf), 'utf8'), /windows-latest/, 'written, then edited without a second card');
+    assert.equal(fs.readFileSync(path.join(dir, 'src/app.js'), 'utf8'), 'ok');
+  }
+  { // refused: nothing written, and the agent hears why
+    const { events, bodies, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: wf, content: yml }]])][i] || reply('OK.'), { settings: { approval: 'yolo' }, onEvent: answer(false) });
+    assert.equal(of(events, 'approval_done').at(-1).approve, false);
+    assert.equal(fs.existsSync(path.join(dir, wf)), false, 'not written');
+    assert.match(toolOut(bodies, 1), /declined.*GitHub Actions workflow.*it stays as it was/s);
+  }
+  { // nobody answers in YOLO: the change is skipped after the wait, and the reply goes on
+    const { events, dir } = await agentRun((b, i) => [reply('', [['write_file', { path: wf, content: yml }]])][i] || reply('OK.'), { settings: { approval: 'yolo', yoloWaitSecs: 1 } });
+    const done = of(events, 'approval_done').at(-1);
+    assert.deepEqual([done.approve, done.by], [false, 'timeout']);
+    assert.equal(fs.existsSync(path.join(dir, wf)), false);
+  }
+  { // deleting one asks too, and the card says so
+    const { events, dir } = await agentRun((b, i) => [reply('', [['delete_file', { path: '.husky/pre-commit' }]])][i] || reply('OK.'), { settings: { approval: 'yolo' }, prep: (d) => { fs.mkdirSync(path.join(d, '.husky')); fs.writeFileSync(path.join(d, '.husky/pre-commit'), 'npm test'); }, onEvent: answer(false) });
+    const card = of(events, 'approval').find((e) => e.mode === 'strict');
+    assert.deepEqual([card.what, card.yes, card.no], ['Delete .husky/pre-commit', 'Allow deleting it', 'Keep it']);
+    assert.ok(fs.existsSync(path.join(dir, '.husky/pre-commit')), 'kept');
+  }
+});
+
 test('rules: ffmpeg and ffprobe are built-in allow rules everywhere; turning one off or deleting it sticks', async () => {
   const rules = loadRules(null), ff = rules.find((r) => r.id === 'builtin-ffmpeg'), fp = rules.find((r) => r.id === 'builtin-ffprobe');
   assert.deepEqual([ff?.match, ff?.effect, ff?.scope, ff?.by, ff?.on], ['ffmpeg *', 'allow', 'everywhere', 'button', true]);
@@ -986,4 +1072,57 @@ test('shell: with the deciders off, a command they would approve in your place w
     assert.equal(of(events, 'approval_done').at(-1).by, 'user');
     assert.match(toolOut(bodies, 1), /hi-from-cmd/);
   });
+});
+
+// ---------- Approve all / Deny all (public/approve-all.js) ----------
+test('approve all: only cards of one kind and mode, never a risky one, and only two or more', async () => {
+  const { bulkGroups, bulkWords } = await import('../public/approve-all.js');
+  const card = (id, tool, extra = {}) => ({ id, tool, mode: 'strict', ...extra });
+  const r = bulkGroups([card('a', 'read_file'), card('b', 'read_file'), card('c', 'list_files'), card('d', 'read_file'), card('e', 'fetch_url'), card('f', 'fetch_url', { risk: 'danger' })]);
+  assert.deepEqual(r.groups.map((g) => [g.tool, g.ids]), [['read_file', ['a', 'b', 'd']]]);
+  assert.equal(r.alone, 3, 'list_files and fetch_url are alone; the risky fetch_url always needs its own click');
+  // Never swept in: risky, no "Allow always", buttons only, answered; another mode is another group.
+  const none = bulkGroups([card('a', 'shell', { risk: 'warn' }), card('b', 'shell', { noAlways: true }), card('c', 'shell'), card('d', 'mcp_setup', { buttonsOnly: true }), card('e', 'mcp_setup', { buttonsOnly: true }), card('f', 'shell', { answered: true })]);
+  assert.deepEqual(none.groups, []);
+  assert.equal(none.alone, 5);
+  const modes = bulkGroups([card('a', 'read_file'), card('b', 'read_file', { mode: 'yolo' })]);
+  assert.deepEqual(modes.groups, []);
+  // Paid cards add up their prices on the button.
+  const paid = bulkGroups([card('a', 'imagine', { est: 0.04 }), card('b', 'imagine', { est: 0.02 })]);
+  assert.equal(paid.groups[0].est.toFixed(2), '0.06');
+  assert.deepEqual(bulkWords(paid.groups[0], 'Make a picture'), { what: '2 waiting · Make a picture', yes: 'Approve all 2 · $0.060', no: 'Deny all 2' });
+  assert.deepEqual(bulkWords(r.groups[0], 'Read a file'), { what: '3 waiting · Read a file', yes: 'Allow all 3', no: 'Deny all 3' });
+  assert.deepEqual(bulkGroups(null), { groups: [], alone: 0 });
+});
+
+test('files changed: Undo one file, then Redo puts the reply\'s version back, for changed, added and deleted files', async () => {
+  const { checkpoint, sealCheckpoint, undoFile, redoFile, listCheckpoints } = await import('../server/workspace.js');
+  const dir = tmp('redo'), f = (n) => path.join(dir, n), read = (n) => fs.readFileSync(f(n), 'utf8');
+  fs.writeFileSync(f('a.txt'), 'before'); fs.writeFileSync(f('gone.txt'), 'old');
+  // A reply changes a.txt, adds new.txt and deletes gone.txt.
+  for (const n of ['a.txt', 'new.txt', 'gone.txt']) checkpoint(dir, 'run9', n);
+  fs.writeFileSync(f('a.txt'), 'after'); fs.writeFileSync(f('new.txt'), 'made'); fs.unlinkSync(f('gone.txt'));
+  sealCheckpoint(dir, 'run9');
+  // Changed file: undo, redo.
+  assert.equal(undoFile(dir, 'run9', 'a.txt').result, 'restored');
+  assert.equal(read('a.txt'), 'before');
+  assert.deepEqual(redoFile(dir, 'run9', 'a.txt'), { ok: true, result: 'redone', left: 3 });
+  assert.equal(read('a.txt'), 'after');
+  // It is in the undo copy again: it can be undone a second time.
+  assert.equal(undoFile(dir, 'run9', 'a.txt').result, 'restored');
+  assert.equal(redoFile(dir, 'run9', 'a.txt').result, 'redone');
+  // Deleted by the reply: undo brings it back, redo deletes it again.
+  undoFile(dir, 'run9', 'gone.txt'); assert.equal(read('gone.txt'), 'old');
+  assert.equal(redoFile(dir, 'run9', 'gone.txt').result, 'removed'); assert.equal(fs.existsSync(f('gone.txt')), false);
+  // Changed after the undo: redo asks first (force overwrites, the newer version goes to the trash).
+  undoFile(dir, 'run9', 'a.txt'); fs.writeFileSync(f('a.txt'), 'edited by you');
+  assert.deepEqual(redoFile(dir, 'run9', 'a.txt'), { conflict: true });
+  assert.equal(redoFile(dir, 'run9', 'a.txt', { force: true }).result, 'redone'); assert.equal(read('a.txt'), 'after');
+  // Every file undone: the copy is set aside, and a redo brings it back.
+  for (const n of ['a.txt', 'new.txt', 'gone.txt']) undoFile(dir, 'run9', n, { force: true });
+  assert.equal(listCheckpoints(dir).some((x) => x.runId === 'run9'), false);
+  assert.equal(fs.existsSync(f('new.txt')), false);
+  assert.equal(redoFile(dir, 'run9', 'new.txt').result, 'redone'); assert.equal(read('new.txt'), 'made');
+  assert.equal(listCheckpoints(dir).some((x) => x.runId === 'run9'), true);
+  assert.throws(() => redoFile(dir, 'run9', 'never.txt'), /nothing to redo/);
 });

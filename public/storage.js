@@ -4,7 +4,7 @@
 // desktop app adds its own caches (desktop/storage.js). Each part of QuorX's own data has its own button; "Clear safe
 // caches" clears the ones that come back by themselves, after a list where each can be unticked. Project folders are
 // only shown, with a way to open them. app.js hands in its helpers.
-let H = null; // { getJ, postJ, esc, ask, uiAlert, keep () → undo replies kept, desk (op, arg) → Promise | null, openCat (id) }
+let H = null; // { getJ, postJ, esc, ask, uiAlert, keep () → undo replies kept, desk (op, arg) → Promise | null, openCat (id), listFilter, removeWorktree (w) → Promise<bool> }
 const V = { items: null, at: 0, home: '', busy: false, open: new Set(), status: '', recent: [], focus: null };
 
 const GROUPS = {
@@ -56,12 +56,14 @@ export const safeParts = (items) => (items || []).filter((it) => it.safe && clea
 function measure() { return (V.pending ||= doMeasure().finally(() => { V.pending = null; })); }
 async function doMeasure() {
   V.busy = true; paint();
-  const [srv, desk, recent] = await Promise.all([
+  const [srv, desk, recent, wt] = await Promise.all([
     H.getJ(`/api/storage?keep=${H.keep()}`),
     H.desk ? H.desk('measure').catch(() => []) : [],
     H.getJ('/api/storage/log'),
+    H.getJ('/api/worktrees/stale'),
   ]);
   V.busy = false;
+  V.worktrees = Array.isArray(wt?.list) ? wt.list : [];
   if (!srv || srv.error) { V.items = null; V.status = `Couldn't measure: ${srv?.error || 'no answer from QuorX'}`; return paint(); }
   V.items = [...(desk || []), ...srv.items]; V.home = srv.home; V.at = Date.now();
   V.recent = Array.isArray(recent) ? recent.slice(0, 5) : [];
@@ -91,8 +93,11 @@ function paint() {
     if (list.length) html += `<section class="st-card"><div class="st-card-head"><div class="st-card-title">${esc(GROUPS[g][0])}</div><div class="st-card-subtitle">${esc(GROUPS[g][1])}</div></div>${list.map(row).join('')}</section>`;
   }
   html += projectsCard(items.filter((x) => x.group === 'projects'));
+  html += worktreesCard();
   box.innerHTML = html;
   wire(box);
+  const wf = box.querySelector('.sto-wt-filter');
+  if (wf && H.listFilter) H.listFilter(wf, { key: 'stale-worktrees', rows: () => box.querySelectorAll('.sto-wt-row'), placeholder: 'Find a worktree, branch or project', label: 'Project' });
   badge();
   if (V.focus) { const el = box.querySelector(`[data-fold="${CSS.escape(V.focus)}"].sto-proj`); V.focus = null; if (el) { el.scrollIntoView({ block: 'start' }); el.classList.add('sto-flash'); } }
 }
@@ -139,10 +144,29 @@ function projectsCard(parts) {
   return `<section class="st-card"><div class="st-card-head"><div class="st-card-title">${esc(GROUPS.projects[0])}</div><div class="st-card-subtitle">${esc(GROUPS.projects[1])}</div></div>${rows}</section>`;
 }
 
+// Worktrees of chats that are gone (deleted, or a worktree QuorX lost track of): each with what it still holds and
+// Remove, which asks first and refuses changes that aren't committed unless "Discard changes" is ticked.
+function worktreesCard() {
+  const { esc } = H, list = V.worktrees || [];
+  if (!list.length) return '';
+  const rows = list.map((w) => `<div class="st-row sto-row sto-wt sto-wt-row" data-lf-text="${esc(`${w.project} ${w.branch || ''} ${w.path}`.toLowerCase())}" data-lf-seg="${esc(w.project)}"><div class="st-row-info"><div class="st-row-label-wrap sto-wt-meta"><span class="wt-branch-tag">⎇ ${esc(w.branch || 'unknown branch')}</span><span class="st-row-label">${esc(w.project)}</span>${w.missing ? '<span class="sto-tag warn">folder gone</span>' : w.clean ? '<span class="sto-tag ok">all committed</span>' : `<span class="sto-tag warn">${w.count ? `${pl(w.count, 'change')} not committed` : 'can\'t read its changes'}</span>`}</div><div class="st-row-help">${w.orphan ? 'A folder in QuorX\'s worktree space that no chat names. ' : 'Its chat was deleted. '}<code class="blurable sto-path" title="${esc(w.path)}">${esc(w.path)}</code></div></div><div class="st-row-ctrl sto-ctrl"><button type="button" class="st-btn danger sm" data-wt-remove="${esc(w.space)}" title="Remove this worktree (its branch stays)">Remove…</button></div></div>`).join('');
+  return `<section class="st-card sto-wt-card"><div class="st-card-head"><div class="st-card-title">Worktrees left behind</div><div class="st-card-subtitle">Worktrees of chats that are gone. They live in QuorX's own folder, never in your projects; removing one keeps its branch.</div></div>${list.length > 4 ? '<div class="sto-wt-filter"></div>' : ''}${rows}</section>`;
+}
+async function removeStale(space) {
+  const w = (V.worktrees || []).find((x) => x.space === space);
+  if (!w || !H.removeWorktree) return;
+  if (!await H.removeWorktree(w)) return;
+  const r = await H.getJ('/api/worktrees/stale');
+  V.worktrees = Array.isArray(r?.list) ? r.list : V.worktrees.filter((x) => x.space !== space);
+  V.status = `Removed the worktree ${w.branch ? `(${w.branch} is kept)` : ''}`.trim();
+  paint();
+}
+
 function wire(box) {
   box.onclick = async (e) => {
-    const t = e.target.closest('[data-sto],[data-clear],[data-fold],[data-open]');
+    const t = e.target.closest('[data-sto],[data-clear],[data-fold],[data-open],[data-wt-remove]');
     if (!t || t.disabled) return;
+    if (t.dataset.wtRemove) return removeStale(t.dataset.wtRemove);
     if (t.dataset.open) return H.openFolder?.(t.dataset.open, '.quorx');
     if (t.dataset.fold) { const id = t.dataset.fold; if (V.open.has(id)) V.open.delete(id); else V.open.add(id); return paint(); }
     if (t.dataset.sto === 'measure') { V.status = ''; return measure(); }

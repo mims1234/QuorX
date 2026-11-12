@@ -1,8 +1,8 @@
 /* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
-/* Phones and small tablets (≤ 900px): a dedicated layout. One full-screen view at a time, picked from a bottom tab bar:
+/* Phones and small tablets (≤ 720px): a dedicated layout. One full-screen view at a time, picked from a bottom tab bar:
    Chats (projects and chats), Chat (the conversation), Preview (artifacts, explorer, trace), Settings. */
 .mnav { display: none; }
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   :root { --mnav-h: 58px; }
   .mnav { display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
     height: calc(var(--mnav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
@@ -39,7 +39,7 @@
   body[data-mview="preview"] .layout .pane, body[data-mview="preview"] .layout.nopane .pane { display: flex !important; height: 100% !important; min-height: 0; border-top: 0; }
 
 }
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   /* the content always ends at the top of the bar */
   .shell { height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)) !important; max-height: calc(100dvh - 48px - var(--mnav-h) - env(safe-area-inset-bottom)); min-height: 0 !important; flex: none !important; }
   .layout, .work, .chats, .chatpane { min-height: 0 !important; height: 100%; }
@@ -48,7 +48,7 @@
   .composer-v2 .composer-box { gap: 4px; padding: 6px 8px; }
   .cmp-textarea { min-height: 38px !important; }
 }
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   /* the Chats view always wins over the old drawer rules */
   body[data-mview="chats"] #sidebar.sidebar { transform: none !important; visibility: visible !important; transition: none !important; }
   body[data-mview="chats"] #sidebar.sidebar .sb-expanded { display: flex !important; }

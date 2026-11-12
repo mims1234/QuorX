@@ -49,7 +49,7 @@
 #settings .qx-role .sx-model { max-width: 100%; min-height: 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #settings .qx-role .sx-model small { color: var(--amber); font-family: var(--mono); }
 #settings .qx-role .st-stepper input.st-step-val { width: 44px; }
-@media (max-width: 900px) { .qx-role-grid { padding-left: 0; } }
+@media (max-width: 720px) { .qx-role-grid { padding-left: 0; } }
 
 /* ---------- Project settings → Hooks: the grouped When picker ---------- */
 .qx-ev-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
@@ -90,3 +90,10 @@
 .wu-not li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 .wu-not li::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--amber); transform: translateY(-1px); }
 @media (prefers-reduced-motion: reduce) { #settings .qx-lazy { transition: none; } }
+
+/* Suggested next steps under the newest finished reply: quiet outline buttons, so they read as offers, not actions taken. */
+.ns { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ns-lbl { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-right: 2px; }
+.ns-btn { font: inherit; font-size: 12.5px; line-height: 1.3; padding: 5px 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); cursor: pointer; max-width: 100%; text-align: left; }
+.ns-btn:hover { background: var(--accent-dim); border-color: var(--accent); }
+.ns-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

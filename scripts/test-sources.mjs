@@ -11,13 +11,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { answerApproval } from '../server/agent.js';
+import { answerApproval, answerQuestion } from '../server/agent.js';
 import http from 'node:http';
 import { DEFAULTS, sourceFallbackFor, announcesStep, planValue, planTotal } from '../server/agent.js';
 import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as mcpSignOut, tokenFor as mcpTokenFor } from '../server/mcpauth.js';
 import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList, connect as mcpConnect, callTool as mcpCall, toolsFor as mcpToolsFor, stopAll as mcpStopAll, MASK as MCP_MASK } from '../server/mcpclient.js';
 import { planOf, costSummary } from '../server/store.js';
-import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
+import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, sourceLimit, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
+import { isLimitHit, resetAt, fallbackCost, limitPlan, limitFallbackFor, limitChoice, limitPickedModel, waitOffered, untilWords, switchBackDue, LIMIT_SECS } from '../server/limitswitch.js';
 import { SECRET_FILES } from '../server/keys.js';
 import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, goAccount, effortFor as goEffort } from '../server/opencodego.js';
@@ -1460,4 +1461,172 @@ test('MCP sign-in: a server that answers 401 needs sign-in; QuorX finds its sign
     mcpSignOut('oauthy');
     await assert.rejects(mcpConnect('oauthy', { fresh: true }), /needs you to sign in/);
   } finally { mcpStopAll(); srv.close(); mcpSave([]); }
+});
+
+// ---------- switching models at a usage limit (server/limitswitch.js and the card in agent.js) ----------
+test('limit switch: what counts as a limit, what a fallback costs, countdown or ask, and the switch back', () => {
+  assert.deepEqual([isLimitHit('quota'), isLimitHit('free'), isLimitHit('rate', 60), isLimitHit('rate'), isLimitHit('server', 60), isLimitHit('auth')], [true, true, true, false, false, false], 'a rate limit only counts when it says how long');
+  assert.equal(resetAt(3600, 1000), 1000 + 3600e3);
+  assert.deepEqual([resetAt(0, 1), resetAt(undefined, 1), resetAt(30 * 86400, 1)], [0, 0, 0], 'no reset, or one too far away to believe');
+  assert.deepEqual([fallbackCost(goInfo()), fallbackCost({ plan: 'free' }), fallbackCost({ price: [0, 0] }), fallbackCost({ price: [0.6, 2.2] }), fallbackCost({ plan: 'paid', price: [0, 0] }), fallbackCost({ price: [0, 0], priceFromApp: true }), fallbackCost(null)],
+    ['plan', 'free', 'free', 'paid', 'paid', 'paid', 'paid'], 'a subscription, free, paid; unknown counts as paid');
+  const paid = { price: [0.6, 2.2] };
+  assert.deepEqual(limitPlan({ approval: 'strict', info: paid }), { cost: 'paid', ask: true, ms: 0, onTimeout: null }, 'Strict + paid: asks first, no countdown');
+  assert.deepEqual(limitPlan({ approval: 'yolo', info: paid }), { cost: 'paid', ask: false, ms: LIMIT_SECS * 1000, onTimeout: 'switch' }, 'YOLO: counts down, then switches');
+  assert.deepEqual(limitPlan({ approval: 'strict', info: goInfo() }), { cost: 'plan', ask: false, ms: LIMIT_SECS * 1000, onTimeout: 'switch' }, 'Strict + a subscription fallback: counts down');
+  assert.deepEqual(limitPlan({ approval: 'strict', info: { plan: 'free' }, secs: 3 }), { cost: 'free', ask: false, ms: 3000, onTimeout: 'switch' }, 'Strict + free: counts down');
+  assert.deepEqual(limitPlan({ approval: 'strict', info: paid, scheduled: true, schedMs: 9000 }), { cost: 'paid', ask: true, ms: 9000, onTimeout: 'cancel' }, 'nobody watching a scheduled run: it stops, never spends');
+  const S = { limitFallback: { 'grok-local': 'z-ai/glm-4.6', 'opencode-local': 'opencode-local/x/y', 'codex-local': 'commandcode/m' } };
+  assert.equal(limitFallbackFor('grok-local', 'grok-local/grok-5', S), 'z-ai/glm-4.6');
+  assert.equal(limitFallbackFor('codex-local', 'codex-local/gpt', S), 'commandcode/m', 'another source (a subscription) is fine');
+  assert.equal(limitFallbackFor('opencode-local', 'opencode-local/a/b', S), null, 'never the source that hit its limit');
+  assert.equal(limitFallbackFor('ollama-local', 'ollama-local/g', S), null, 'none chosen: the old behaviour');
+  assert.equal(limitFallbackFor('grok-local', 'z-ai/glm-4.6', S), null);
+  assert.deepEqual([limitChoice({ choice: 0 }), limitChoice({ choice: 1 }, { reset: 5 }), limitChoice({ choice: 1 }), limitChoice({ choice: 2 }), limitChoice({ text: 'hm' }), limitChoice({ timedOut: true }), limitChoice({ timedOut: true }, { onTimeout: 'cancel' })],
+    ['switch', 'wait', 'cancel', 'cancel', 'cancel', 'switch', 'cancel'], 'Wait needs a known reset');
+  assert.deepEqual([switchBackDue({ back: true, until: 10 }, 11), switchBackDue({ back: true, until: 10 }, 9), switchBackDue({ back: false, until: 10 }, 11), switchBackDue({ back: true, until: 0 }, 11), switchBackDue(null)], [true, false, false, false, false]);
+  forgetSourceHealth();
+  const now = Date.now(), L = 'opencode-local', M = 'opencode-local/opencode-go/glm-5.3';
+  noteSourceResult(L, M, Object.assign(new Error('5-hour usage limit reached.'), { status: 429, errorType: 'GoUsageLimitError', retryAfter: 4 * 3600 }), { now });
+  assert.deepEqual(sourceLimit(L, M, now + 1000), { kind: 'quota', why: '5-hour usage limit reached.', reset: now + 4 * 3600e3 }, 'the real reset, though skipping stops sooner');
+  assert.equal(sourceLimit(L, 'opencode-local/opencode-go/kimi-k3', now + 1000), null);
+  noteSourceResult(L, 'opencode-local/x/y', Object.assign(new Error('bad gateway'), { status: 502 }), { now });
+  assert.equal(sourceLimit(L, 'opencode-local/x/y', now + 1000), null, 'an outage is not a limit');
+  forgetSourceHealth();
+});
+
+test('limit switch in a reply: YOLO counts down and switches, Strict asks for a paid fallback, Wait carries on at the reset, Cancel stops like ■, the switch back', async () => {
+  const SRC = 'opencode-local/opencode-go/glm-5.3', FB = 'z-ai/glm-5.3';
+  const limited = (secs = 3600) => Object.assign(new Error('5-hour usage limit reached.'), { status: 429, errorType: 'GoUsageLimitError', retryAfter: secs });
+  const steps = (body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('', [['write_file', { path: 'b.txt', content: 'b' }]]), reply('Done on the fallback.')][i];
+  const settings = (over) => ({ sourceFallback: 'off', limitFallback: { 'opencode-local': FB }, limitSwitchSecs: 1, ...over });
+  const answerWith = (choice) => (e, id) => { if (e.t === 'question' && e.gate === 'limit') setTimeout(() => answerQuestion(id, e.id, { choice }), 20); };
+  { // ⚡ YOLO: the card counts down, then the rest of the reply runs on the fallback; the source isn't asked again
+    forgetSourceHealth();
+    let n = 0;
+    const sourceStream = async () => { n++; throw limited(); };
+    const t0 = Date.now();
+    const { events, bodies, done } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream, settings: settings({ approval: 'yolo' }) });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.ok(q, 'the card shows');
+    assert.deepEqual([q.limit.from, q.limit.to, q.limit.kind, q.limit.cost, q.limit.ask, q.wait.secs, q.wait.then], [SRC, FB, 'quota', 'paid', false, 1, 'switch']);
+    assert.ok(q.limit.reset >= t0 + 3600e3 && q.limit.reset <= Date.now() + 3600e3, 'it says when the limit resets');
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.by]), [[0, 'timeout']]);
+    const sw = of(events, 'limit_switch')[0];
+    assert.deepEqual([sw.from, sw.to, sw.back, sw.by], [SRC, FB, true, 'timeout']);
+    assert.equal(n, 1, 'the source was asked once');
+    assert.deepEqual(bodies.map((b) => b.model), [FB, FB, FB], 'every step after it ran on the fallback');
+    assert.equal(of(events, 'source_fallback').length, 0, 'not the old fallback path');
+    assert.equal(of(events, 'llm_done')[0].fellBackFrom, SRC);
+    assert.equal(done.reply, 'Done on the fallback.');
+  }
+  { // 🔒 Strict with a paid fallback: no countdown; nothing moves until the user picks Switch now
+    forgetSourceHealth();
+    let asked = 0;
+    const { events, bodies, done } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(); }, settings: settings({ approval: 'strict' }),
+      onEvent: (e, id) => { if (e.t === 'question' && e.gate === 'limit') { asked++; setTimeout(() => answerQuestion(id, e.id, { choice: 0 }), 1500); } } });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.deepEqual([q.limit.ask, q.limit.cost, 'wait' in q], [true, 'paid', false], 'it asks, with no countdown');
+    assert.equal(asked, 1);
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.by]), [[0, undefined]], 'waited past the countdown for the user');
+    assert.equal(bodies[0].model, FB);
+    assert.equal(done.reply, 'Done on the fallback.');
+  }
+  { // 🔒 Strict with a subscription fallback: it counts down like YOLO
+    forgetSourceHealth();
+    const cat = [...SRC_CAT, goInfo({ id: 'opencode-local/opencode-go/kimi-k3' })];
+    const ev = [];
+    await run(steps, { setup: { model: 'grok-local/grok-5' }, catalogue: cat, settings: settings({ approval: 'strict', limitFallback: { 'grok-local': 'opencode-local/opencode-go/kimi-k3' } }), onEvent: (e) => ev.push(e),
+      sourceStream: async (b) => { if (b.model.startsWith('grok-local/')) throw limited(); return srcReply(b === null ? '' : 'Done on Go.'); } });
+    const q = ev.find((e) => e.t === 'question' && e.gate === 'limit');
+    assert.deepEqual([q.limit.cost, q.limit.ask, q.wait?.secs], ['plan', false, 1]);
+    assert.equal(of(ev, 'limit_switch')[0].to, 'opencode-local/opencode-go/kimi-k3');
+  }
+  { // Wait for reset: the reply holds, then carries on on the same source once the limit resets
+    forgetSourceHealth();
+    let n = 0;
+    const sourceStream = async () => { if (++n === 1) throw limited(1); return srcReply('Back on Go.'); };
+    const { events, bodies, done } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream, settings: settings({ approval: 'strict' }), onEvent: answerWith(1) });
+    assert.deepEqual(of(events, 'answer').map((a) => a.choice), [1]);
+    assert.equal(of(events, 'limit_wait').length, 1);
+    assert.equal(of(events, 'limit_resumed')[0].model, SRC);
+    assert.deepEqual([n, bodies.length], [2, 0], 'asked again after the reset, nothing paid');
+    assert.equal(done.reply, 'Back on Go.');
+  }
+  { // Cancel: the reply stops the way ■ stops it (so ▶ Continue can pick it up), and nothing goes to the fallback
+    forgetSourceHealth();
+    const ev = [];
+    const err = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(); }, settings: settings({ approval: 'yolo', limitSwitchSecs: 30 }),
+      onEvent: (e, id) => { ev.push(e); answerWith(2)(e, id); } }).catch((e) => e);
+    assert.equal(err.message, 'Stopped.');
+    assert.deepEqual(of(ev, 'answer').map((a) => a.choice), [2]);
+    assert.equal(of(ev, 'limit_switch').length, 0);
+  }
+  { // no fallback chosen for the source: the old behaviour, with no card
+    forgetSourceHealth();
+    const { events, done } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, settings: { sourceFallback: 'off', approval: 'yolo' },
+      sourceStream: async () => { throw limited(); } }).catch((e) => ({ events: [], done: { reply: e.message } }));
+    assert.equal(of(events, 'question').length, 0);
+    assert.match(done.reply, /out of credit or plan usage/);
+  }
+  { // a chat already switched: the reply runs on the fallback, and goes back once the reset passed and "Switch back" is ticked
+    forgetSourceHealth();
+    let n = 0;
+    const src = async () => { n++; return srcReply('On Go again.'); };
+    const on = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: src, settings: settings({ approval: 'yolo' }), limitSwitch: { from: SRC, to: FB, until: Date.now() + 3600e3, back: true } });
+    assert.deepEqual([n, on.bodies.length], [0, 3], 'before the reset: the fallback');
+    const back = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: src, settings: settings({ approval: 'yolo' }), limitSwitch: { from: SRC, to: FB, until: Date.now() - 1, back: true } });
+    assert.deepEqual([n, back.bodies.length, of(back.events, 'limit_back').length], [1, 0, 1], 'after it: back on the source, and the page hears it');
+    const stay = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: src, settings: settings({ approval: 'yolo' }), limitSwitch: { from: SRC, to: FB, until: Date.now() - 1, back: false } });
+    assert.deepEqual([n, stay.bodies.length], [1, 3], '"Switch back" unticked: it stays on the fallback');
+    forgetSourceHealth();
+  }
+});
+
+test('limit switch details: wait offered only near the reset, another model picked on the card, a chat that waits limits out, and a failed turn that says when it resets', async () => {
+  const now = 1e12;
+  assert.deepEqual([waitOffered(now + 3600e3, 6, now), waitOffered(now + 7 * 3600e3, 6, now), waitOffered(0, 6, now), waitOffered(now - 1, 6, now), waitOffered(now + 7 * 3600e3, 8, now), waitOffered(now + 60e3, 0, now)],
+    [true, false, false, false, true, false], 'a reset more than the set hours away is not waited for');
+  assert.deepEqual([untilWords(now + 134 * 60e3, now), untilWords(now + 45 * 60e3, now), untilWords(now + 120 * 60e3, now), untilWords(now + 10e3, now)], ['in about 2h 14m', 'in about 45m', 'in about 2h', 'in under a minute']);
+  assert.deepEqual([limitPickedModel({ text: 'model:z-ai/glm-5' }), limitPickedModel({ text: 'model:' }), limitPickedModel({ text: 'hi' }), limitPickedModel(null)], ['z-ai/glm-5', '', '', '']);
+  assert.deepEqual([limitChoice({ text: 'model:z/x' }), limitChoice({ choice: 1 }, { reset: 5, canWait: false }), limitChoice({ choice: 0 }, { hasTo: false }), limitChoice({ timedOut: true }, { onTimeout: 'wait' })],
+    ['switch', 'cancel', 'cancel', 'wait'], 'a picked model switches; Wait needs waiting offered; Switch needs a fallback');
+  assert.deepEqual(limitPlan({ approval: 'yolo', info: { price: [1, 2] }, secs: 2, mode: 'wait', canWait: true }), { cost: 'paid', ask: false, ms: 2000, onTimeout: 'wait' }, 'a chat that waits limits out counts down to waiting');
+  assert.deepEqual(limitPlan({ approval: 'yolo', info: { price: [1, 2] }, secs: 2, mode: 'wait', canWait: false }).onTimeout, 'switch', 'too far to wait: the app setting');
+
+  const SRC = 'opencode-local/opencode-go/glm-5.3', FB = 'z-ai/glm-5.3', OTHER = 'test/model';
+  const limited = (secs = 3600) => Object.assign(new Error('5-hour usage limit reached.'), { status: 429, errorType: 'GoUsageLimitError', retryAfter: secs });
+  const steps = (body, i) => [reply('', [['write_file', { path: 'a.txt', content: 'a' }]]), reply('Done.')][i];
+  { // the reset is 10 hours away: the card offers no waiting, and says so
+    forgetSourceHealth();
+    const { events } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(10 * 3600); }, settings: { sourceFallback: 'off', limitFallback: { 'opencode-local': FB }, limitSwitchSecs: 1, approval: 'yolo' } });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.deepEqual([q.limit.waitOk, q.limit.waitHours], [false, 6]);
+  }
+  { // "Another model…": the reply moves to the model picked on the card, not the provider's fallback
+    forgetSourceHealth();
+    const { events, bodies } = await run(steps, { setup: { model: SRC }, catalogue: SRC_CAT, sourceStream: async () => { throw limited(); }, settings: { sourceFallback: 'off', limitFallback: { 'opencode-local': FB }, approval: 'strict' },
+      onEvent: (e, id) => { if (e.t === 'question' && e.gate === 'limit') setTimeout(() => answerQuestion(id, e.id, { text: `model:${OTHER}` }), 20); } });
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.to]), [[0, OTHER]]);
+    assert.equal(of(events, 'limit_switch')[0].to, OTHER);
+    assert.ok(bodies.every((b) => b.model === OTHER), 'every step ran on the picked model');
+  }
+  { // the chat waits limits out: with no fallback chosen it still gets a card, which counts down to waiting
+    forgetSourceHealth();
+    let n = 0;
+    const { events, bodies, done } = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, limitMode: 'wait',
+      sourceStream: async () => { if (++n === 1) throw limited(1); return srcReply('Waited it out.'); }, settings: { sourceFallback: 'off', limitSwitchSecs: 1, approval: 'yolo' } });
+    const q = of(events, 'question').find((e) => e.gate === 'limit');
+    assert.deepEqual([q.limit.to, q.limit.mode, q.wait.then], ['', 'wait', 'wait']);
+    assert.deepEqual(of(events, 'answer').map((a) => [a.choice, a.by]), [[1, 'timeout']]);
+    assert.deepEqual([n, bodies.length, done.reply], [2, 0, 'Waited it out.']);
+  }
+  { // no fallback and no waiting: the failed turn says which provider, and when it resets, for the Retry / Switch to… / Wait row
+    forgetSourceHealth();
+    const err = await run(() => { throw new Error('OpenRouter must not be called'); }, { setup: { model: SRC }, catalogue: SRC_CAT, settings: { sourceFallback: 'off', approval: 'yolo' }, sourceStream: async () => { throw limited(); } }).catch((e) => e);
+    assert.equal(err.limit?.source, 'opencode-local');
+    assert.equal(err.limit?.kind, 'quota');
+    assert.ok(err.limit.reset > Date.now() && err.limit.waitOk, 'a reset within the hours set can be waited for');
+    forgetSourceHealth();
+  }
 });

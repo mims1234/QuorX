@@ -29,8 +29,35 @@
 <link rel="stylesheet" href="harness.css">
 <link rel="stylesheet" href="chatflow.css">
 <link rel="stylesheet" href="perf.css">
+<link rel="stylesheet" href="worktrees.css">
+<link rel="stylesheet" href="pulls.css">
+<link rel="stylesheet" href="workspace.css">
+<link rel="stylesheet" href="frame.css">
+<link rel="stylesheet" href="settings-tab.css">
+<link rel="stylesheet" href="tabs.css">
+<link rel="stylesheet" href="panel.css">
+<link rel="stylesheet" href="shell-polish.css">
 </head>
 <body>
+<!-- The window frame, row 1: the QuorX mark, the menu bar and room for the window's own controls (in the desktop app the
+     window has no title bar of its own; Windows draws − □ × over the right end, so snap layouts keep working). The
+     empty part drags the window. Filled by "the window frame" in app.js; wider screens only, phones keep the top bar. -->
+<div class="qf-title" id="qfTitle">
+  <button type="button" class="qf-logo" id="qfLogo" title="Home: the start screen" aria-label="QuorX: Home"><img src="brand/quorx-32.png" alt=""></button>
+  <button type="button" class="qf-burger" id="qfBurger" aria-haspopup="menu" aria-expanded="false" aria-label="Menus" title="Menus (Alt)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <nav class="qf-menubar" id="qfMenubar" role="menubar" aria-label="Menu bar"></nav>
+  <div class="qf-drag" aria-hidden="true"></div>
+</div>
+<!-- Row 2: back / forward, one tab per open project, ＋ for another, then Go to or run… (Ctrl+K) and app-wide notices. -->
+<div class="qf-proj" id="qfProj">
+  <div class="qf-nav" id="qfNav"></div>
+  <div class="qf-ptabs" id="qfTabs" role="tablist" aria-label="Open projects"></div>
+  <button type="button" class="qf-ib qf-pmore" id="qfMore" aria-haspopup="menu" aria-label="Every open project" title="Every open project" hidden>⋯</button>
+  <button type="button" class="qf-ib qf-padd" id="qfAdd" aria-haspopup="menu" aria-label="Open a project" title="New project, open a folder, or open another project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+  <div class="qf-cmd-slot" id="qfCmdSlot"></div>
+  <div class="qf-fill"></div>
+  <div class="qf-right" id="qfRight"></div>
+</div>
 <!-- Top bar: app-wide controls only. Everything about one chat lives in that chat's header and composer. -->
 <header class="top">
   <div class="brand" id="brandHome" role="link" tabindex="0" title="Home: the start screen">Quor<span>X</span></div>
@@ -49,10 +76,16 @@
 </header>
 
 <div class="shell">
+<!-- The activity bar: the big views the sidebar shows (Chats, Search, Running, Servers & pages, Source control,
+     Extensions, Schedules), then Spending and Settings at the bottom. Drawn by "the activity bar" in app.js from
+     public/frame-model.js; clicking the view that is open hides the sidebar (Ctrl+B). -->
+<nav class="ws-rail av-bar-act" id="wsRail" aria-label="Views"></nav>
 <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
   <div class="sb-expanded">
     <!-- On wider screens the app's title row lives here (moved from the top bar by placeChrome in app.js). -->
     <div class="sb-titlebar" id="sbTitlebar"></div>
+    <!-- With the activity bar: the Chats view's own toolbar (title, New chat, New project, Files, Collapse all). -->
+    <div class="av-tools av-chats-tools" id="avChatsTools"></div>
     <!-- Navigation: one compact row each, with its own icon. -->
     <nav class="sb-nav" aria-label="Main">
       <button type="button" class="sb-nav-row nav-home" id="homeBtn" title="Home: the start screen (new chat, open a folder, recent chats)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h5v-5.5h3V20h5V9.5"/></svg><span>Home</span></button>
@@ -103,6 +136,30 @@
 </aside>
 <div class="sidebar-backdrop" id="sideBackdrop"></div>
 <div class="resizer" id="sideResizer" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabindex="0" title="Drag to resize · double-click to reset"></div>
+<!-- The rail's Running panel: the Running list, in the sidebar's place. -->
+<!-- The sidebar for every view but Chats: the view's own toolbar, then its body (each view keeps its own, so switching
+     back finds it as it was). The Running list keeps #wpBody. -->
+<aside class="ws-panel" id="wsPanel" aria-label="View">
+  <div class="av-tools" id="avTools"></div>
+  <div class="wp-body av-view" id="wpBody" data-v="running" hidden></div>
+  <div class="av-bodies" id="avBodies"></div>
+</aside>
+<div class="ws-main">
+<!-- Back / forward, then the open chats of this project as tabs; on a phone, a switcher and a menu instead. -->
+<div class="ws-top" id="wsTop">
+  <div class="wt-nav">
+    <button type="button" class="wt-navb" id="wsBack" aria-label="Back" title="Back (Alt+←, or the mouse's back button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+    <button type="button" class="wt-navb" id="wsFwd" aria-label="Forward" title="Forward (Alt+→, or the mouse's forward button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+  </div>
+  <div class="wt-strip" id="wtStrip" role="tablist" aria-label="Open chats"></div>
+  <!-- Single (Layout › Single): the chat's other tabs in the same row (Steps, plans, pages, terminals, files). -->
+  <div class="wt-ptabs" id="wtPaneTabs" role="tablist" aria-label="This chat's tabs" hidden></div>
+  <!-- Layouts: one click arranges the whole workspace; yours under Mine. -->
+  <div class="ws-layouts" id="wsLayouts" role="group" aria-label="Layouts"></div>
+  <button type="button" class="wt-switch" id="wtSwitch" aria-haspopup="menu" title="Open chats: switch, or reopen one you closed"></button>
+  <button type="button" class="wt-more" id="wtMore" aria-haspopup="menu" aria-label="All open chats, and reopen closed tabs" title="All open chats, and reopen closed tabs (Ctrl+Shift+T)">…</button>
+  <button type="button" class="wt-panels" id="wtPanels" aria-haspopup="menu" aria-label="Panels: chats, running, servers, files" title="Chats, Running, Servers, Files">☰<i class="wt-pn" hidden></i></button>
+</div>
 <main class="layout">
   <section class="work">
     <div class="chats" id="chats"></div>
@@ -111,21 +168,31 @@
   <aside class="pane" id="pane" aria-label="Artifacts">
     <!-- The pane is a small browser: tabs for what it can show, then an address bar for the open one. -->
     <div class="pane-tabs icons-only" id="paneTabs" role="tablist" aria-label="What the pane shows">
+      <!-- With two chats on screen: whose this group is (the chat you use, or the chat it is pinned to). -->
+      <i class="pa-own own-sq" hidden></i>
       <button type="button" role="tab" data-tab="art" aria-label="Artifact" title="Artifact&#10;Plans and documents the agent wrote for this chat"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span class="pt-label">Artifact</span> <span class="pt-n"></span></button>
       <button type="button" role="tab" data-tab="browser" aria-label="Browser" title="Browser&#10;What the agent's own browser is looking at, your own tabs, and the sites and apps it runs"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg><span class="pt-label">Browser</span> <span class="pt-dot"></span></button>
+      <!-- Each browser page is a tab of its own (the agent's page too), drawn by drawPageTabs; Browser above shows only while there are none. -->
+      <span class="pa-pages"></span>
       <button type="button" role="tab" data-tab="trace" aria-label="Steps" title="Steps&#10;Everything a reply did, in order"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><path d="M6 8v8M11 6h9M11 12h9M11 18h9"/><circle cx="6" cy="12" r="1.2" fill="currentColor"/></svg><span class="pt-label">Steps</span></button>
       <button type="button" role="tab" data-tab="term" aria-label="Terminal" title="Terminal&#10;Your own terminals, and every command and server in this project, live"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg><span class="pt-label">Terminal</span> <span class="pt-n"></span></button>
       <button type="button" role="tab" data-tab="files" aria-label="Files" title="Files&#10;This chat's artifacts and the project's files, each previewed"><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="pt-label">Files</span></button>
+      <button type="button" role="tab" data-tab="pulls" aria-label="Pull requests" title="Pull requests&#10;This project's pull requests on GitHub: checks, reviews, and a failing check sent to the chat" hidden><svg class="pt-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4"/><path d="m13 4-2 2 2 2"/></svg><span class="pt-dot pr-dot"></span></button>
+      <!-- Files open as tabs here, after the pane's five; the empty part of the strip maximises the group on a double-click. -->
+      <span class="pa-files"></span>
+      <!-- ＋ opens any kind of tab here: a chat, a browser page, a terminal, files, a plan, Steps, Settings. -->
+      <button type="button" class="pt-icon pa-btn pa-add" data-pa="add" aria-haspopup="menu" aria-label="Open a tab here" title="Open a tab here: chat, browser page, terminal, files, plan, Steps or Settings">＋</button>
       <span class="pt-spacer"></span>
-      <button type="button" class="pt-icon pa-btn" data-pa="split" aria-label="Split the pane" title="Split: show another tab below this one"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12h16"/></svg></button>
-      <button type="button" class="pt-icon pa-btn" data-pa="close" aria-label="Close this area" title="Close this area (the others take its space)" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg></button>
+      <span class="pa-follow" hidden>👁</span>
+      <button type="button" class="pt-icon pa-btn" data-pa="max" aria-pressed="false" aria-label="Maximise this group" title="Maximise this group">⤢</button>
+      <button type="button" class="pt-icon pa-btn" data-pa="more" aria-haspopup="menu" aria-label="More for this group" title="Split, move, maximise, follow the agent, close">⋯</button>
       <button type="button" class="pt-icon" id="paneSrvBtn" title="Servers: run, stop and edit this project's dev servers" aria-label="Servers" aria-haspopup="dialog" aria-expanded="false"></button>
-      <button type="button" class="pt-icon" id="paneMaxBtn" aria-pressed="false" title="Make the pane full width">⤢</button>
     </div>
     <div class="srv-pop pane-srv-pop" id="paneSrvPop" role="dialog" aria-label="Servers in this project" hidden></div>
     <div class="pane-tool" id="paneTool">
     <div class="pane-head urlbar" id="paneUrlWrap">
       <select id="artSelect" aria-label="Artifact"></select>
+      <span class="url-kind kind-tag page" hidden title="A page: served by QuorX's own pages server, always on (not one of the project's servers)">PAGE</span>
       <input id="paneUrl" class="url-field" spellcheck="false" autocomplete="off" aria-label="Address" title="The address this is served at. Type an address or words to search, and press Enter to look at it yourself in the Browser tab.">
       <button class="icon" id="reloadBtn" title="Reload" aria-label="Reload"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
       <button class="icon" id="copyUrlBtn" title="Copy the address" aria-label="Copy the address"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button>
@@ -136,27 +203,41 @@
     <div class="pane-body" id="paneBody"></div>
   </aside>
 </main>
+<!-- The bottom panel (Ctrl+J, ⬓ in the status bar): Terminal, Checks, Debug. Its Terminal is a copy of the pane's own
+     markup, so your terminals and every command's and server's output draw here exactly as in a Terminal tab. -->
+<section class="qx-panel" id="qxPanel" aria-label="Bottom panel" hidden>
+  <div class="qp-resize" id="qpResize" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" tabindex="0" title="Drag to resize · double-click for the usual height"></div>
+  <div class="qp-tabs" id="qpTabs" role="tablist" aria-label="Bottom panel"></div>
+  <div class="qp-body" id="qpBody"></div>
+</section>
 </div>
+</div>
+<!-- The status bar: project and branch, checks, servers, what runs and what needs you on the left; context, spending,
+     🔔 notifications and ⬆ Update on the right. Each item opens the one place it is about. -->
+<footer class="ws-status" id="wsStatus" aria-label="Status"><span class="wsb-side" id="wsbLeft"></span><span class="wsb-grow"></span><span class="wsb-side" id="wsbRight"></span><span class="wsb-side wsb-fixed" id="wsbFixed"></span><span class="wsb-side" id="wsbBell"></span><span class="wsb-side wsb-fixed" id="wsbUpd"></span></footer>
 
-<dialog id="settings" class="st-dialog" aria-label="Settings">
+<!-- ⚙ Settings: a tab in the workspace (app.js "the Settings tab" moves this into the tab that shows it). -->
+<div id="settings" class="st-tab" role="region" aria-label="Settings" hidden>
   <div class="settings-modal">
     <header class="st-head">
       <div class="st-head-left">
         <div class="st-head-title-wrap"><span class="st-head-title"><span class="st-gear-icon">⚙</span> Settings</span><span class="st-head-version"><img class="st-head-logo" src="brand/quorx-32.png" alt="">QuorX</span></div>
+        <div class="st-segmented st-scopes" id="stScopes" role="radiogroup" aria-label="Which settings"></div>
         <div class="st-search-wrap"><span class="st-search-icon">⌕</span><input class="st-search-input" id="stSearch" placeholder="Search every setting" aria-label="Search settings"><kbd class="sx-search-kbd" aria-hidden="true">/</kbd></div>
       </div>
-      <div class="st-head-right"><button type="button" class="st-btn secondary sm st-head-upd" id="stHeadUpd" hidden>⟳ Check for updates</button><button type="button" class="st-btn secondary sm st-head-restart" id="stHeadRestart" title="Restart the harness: loads the latest server code">⟳ Restart harness</button><button type="button" class="st-close-btn" id="stClose" aria-label="Close settings">✕</button></div>
+      <div class="st-head-right"><button type="button" class="st-btn secondary sm st-head-upd" id="stHeadUpd" hidden>⟳ Check for updates</button><button type="button" class="st-btn secondary sm st-head-restart" id="stHeadRestart" title="Restart the harness: loads the latest server code">⟳ Restart harness</button><button type="button" class="st-btn ghost sm st-head-act" id="stFile" title="The settings as JSON, read only (API keys are never in it)">{ } Settings file</button><button type="button" class="st-btn ghost sm st-head-act" id="stPopOut" title="Open Settings in a window of its own" hidden>⧉ New window</button><button type="button" class="st-close-btn" id="stClose" aria-label="Close settings" title="Close the Settings tab">✕</button></div>
     </header>
+    <div class="st-filters" id="stFilters" role="group" aria-label="Filter the settings"></div>
     <div class="st-body">
       <nav class="st-nav" id="stNav" aria-label="Settings categories"></nav>
       <main class="st-main" id="stMain"></main>
     </div>
     <footer class="st-foot">
       <div class="st-foot-status"><span class="st-foot-status-dot"></span><span id="stDirty">No changes</span></div>
-      <div class="st-foot-actions"><button type="button" class="st-btn ghost" id="stResetCat">Reset <span class="sx-reset-what" id="stResetWhat">category</span></button><button type="button" class="st-btn secondary" id="stCancel">Cancel</button><button type="button" class="st-btn primary" id="saveSettings">Save</button></div>
+      <div class="st-foot-actions"><button type="button" class="st-btn ghost" id="stResetCat">Reset <span class="sx-reset-what" id="stResetWhat">category</span></button><button type="button" class="st-btn secondary" id="stCancel" hidden>Cancel</button><button type="button" class="st-btn primary" id="saveSettings">Save</button></div>
     </footer>
   </div>
-</dialog>
+</div>
 
 <dialog id="picker" class="mp-dialog" aria-labelledby="pkTitle">
   <div class="mp">
@@ -189,8 +270,6 @@
   </div>
 </dialog>
 
-<dialog id="projDlg" class="pj-dialog" aria-label="Project settings"><div class="pj" id="projBody"></div></dialog>
-<dialog id="projSubDlg" class="pj-dialog pjx-dialog" aria-label="Project settings"><div class="pj pjx" id="projSubBody"></div></dialog>
 <dialog id="costs">
   <div class="picker">
     <div class="picker-head"><h2>💲 Costs</h2><button type="button" class="ghost" id="costClose" aria-label="Close">✕</button></div>
@@ -201,6 +280,12 @@
   <div class="picker">
     <div class="picker-head"><h2>Running</h2><button type="button" class="ghost" id="rlClose" aria-label="Close">✕</button></div>
     <div id="rlBody"></div>
+  </div>
+</dialog>
+<dialog id="letThrough">
+  <div class="picker">
+    <div class="picker-head"><h2 id="ltTitle">Let through in ⚡ YOLO</h2><button type="button" class="ghost" id="ltClose" aria-label="Close">✕</button></div>
+    <div id="ltBody"></div>
   </div>
 </dialog>
 <dialog id="schedules">

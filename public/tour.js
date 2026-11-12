@@ -8,28 +8,28 @@ export const FIRST_BUILD = 'Make a one-page focus timer: 25-minute work and 5-mi
 // Each step points at the first of `at` that is on screen; with none, the card sits in the middle of the page.
 const STEPS = [
   {
-    at: ['#projectList', '#railList'], title: 'Projects and Scratch',
+    at: ['#projectList', '#railList', '.wr-btn[data-view="chats"]'], title: 'Projects and Scratch',
     html: `<p>A <b>project</b> is one folder on your computer. Every chat in it works in that folder, so its files, notes and servers stay together.</p>
       <p><b>Scratch</b> is for quick questions and throwaway things. Give each project its own folder: don't make a project inside another project's folder.</p>`,
   },
   {
-    at: ['.chatpane.focus .cq-perm', '#ldStart'], title: '🔒 Strict or ⚡ YOLO',
+    at: ['.chatpane.focus .cq-mode-ico', '#ldStart .cq-mode-ico', '.chatpane.focus .cq-perm', '#ldStart'], title: '🔒 Strict or ⚡ YOLO',
     html: `<div class="tr-seg" aria-hidden="true"><span>🔒 Strict</span><span>⚡ YOLO</span></div>
-      <p>Each chat has one or the other, in the row of switches above its message box. <b>Strict</b> asks you before every tool it uses. <b>YOLO</b> works on its own: the deciders answer its questions, and the safety rules and your budget cap still apply.</p>`,
+      <p>Each chat has one or the other, as the 🔒 / ⚡ button in its message box (click it to switch). <b>Strict</b> asks you before every tool it uses. <b>YOLO</b> works on its own: the deciders answer its questions, and the safety rules and your budget cap still apply.</p>`,
   },
   {
-    at: ['#settingsBtn', '#railSettings'], title: 'The deciders and the reviewer',
+    at: ['.wr-btn[data-act="settings"]', '#settingsBtn', '#railSettings'], title: 'The deciders and the reviewer',
     html: `<p><b>Deciders</b> are small, fast models that vote when a judgment matters (which option, is this right, does the page look right) in about half a second, for a fraction of a cent.</p>
       <p>The <b>reviewer</b> is a separate model that tests what was built, like a demanding user, and sends it back with the bugs it found. Choose both in ⚙ Settings → Deciders and Agent loop.</p>`,
   },
   {
-    at: ['.chatpane.focus .ch-cost', '#costsBtn', '#railCosts'], title: 'Where costs show',
+    at: ['.chatpane.focus .ch-cost', '.wr-btn[data-view="spending"]', '#costsBtn', '#railCosts'], title: 'Where costs show',
     html: `<p>Money is always shown in amber: what a chat cost in its header, each project's spend (and its limit) on its card, and everything in <b>Spending</b>.</p>
       <p>Each project has a budget in its ⚙: a reply that reaches it pauses and asks whether to raise it or stop.</p>`,
   },
   {
-    at: ['#paneTabs [data-tab="term"]', '#pane'], title: 'Terminal and Running',
-    html: `<p>Once a chat is open, the side panel has a <b>Terminal</b> (your own terminals, plus every command and server the agent starts, live) and <b>Running</b>: everything still running in the project, with a Stop for each.</p>`,
+    at: ['.ws-status [data-sb="panel"]', '#paneTabs [data-tab="term"]', '#pane'], title: 'Terminal and Running',
+    html: `<p>The bottom panel (this button, or Ctrl+J) has the <b>Terminal</b>: your own terminals, plus every command and server the agent starts, live. <b>Running</b> in the bar on the left lists everything still running, with a Stop for each.</p>`,
   },
   {
     at: ['#ldStartText', '.chatpane.focus .input'], title: 'Try a first build', last: true,
