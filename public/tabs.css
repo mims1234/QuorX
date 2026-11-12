@@ -48,6 +48,11 @@ body.ws-single #pane .pane-tabs { display: none !important; }
 .wt-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .wt-padd, .wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
 .wt-padd:hover, .wt-pmore:hover { background: var(--panel-2); color: var(--text); }
+/* With more tabs than fit, ＋ and ⋯ stay at the strip's right end and the tabs scroll under them. */
+.ws-top .wt-ptabs .wt-padd, .ws-top .wt-ptabs .wt-pmore { position: sticky; z-index: 1; background: var(--panel); box-shadow: -8px 0 8px -2px var(--panel); }
+.ws-top .wt-ptabs .wt-padd { right: 26px; margin-left: auto; }
+.ws-top .wt-ptabs .wt-pmore { right: 0; box-shadow: none; }
+.ws-top .wt-ptabs .wt-padd:hover, .ws-top .wt-ptabs .wt-pmore:hover { background: var(--panel-2); }
 
 /* ---------- a chat shown inside a pane group (split layouts) ---------- */
 /* The group keeps its strip on top; while its chat is in front, the rest of the group steps out of sight and lets the

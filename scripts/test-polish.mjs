@@ -75,3 +75,18 @@ test('pop-out windows get the frame; the phone-sized desktop window leaves room 
   assert.match(app, /const el = qfOn\(\) \? \$\('#qfTitle'\) : \$\('header\.top'\);/);
   assert.match(app, /if \(!frame\) qfOverlay\(\);/);
 });
+
+test('after a full test pass: the tour points at the new shell, ＋ stays reachable, the model chip wraps, commands leave no draft', () => {
+  const tour = read('public/tour.js'), tabs = read('public/tabs.css'), comp = read('public/composer.css');
+  // Each tour step names a target of the new shell first (the old ids stay as fallbacks).
+  for (const sel of ['.wr-btn[data-view="chats"]', '.cq-mode-ico', '.wr-btn[data-act="settings"]', '.wr-btn[data-view="spending"]', '.ws-status [data-sb="panel"]']) assert.ok(tour.includes(sel), `tour targets ${sel}`);
+  assert.doesNotMatch(tour, /row of switches above its message box/);
+  assert.doesNotMatch(tour, /the side panel has a <b>Terminal<\/b>/);
+  // With more tabs than fit, ＋ and ⋯ stay at the strip's right end.
+  assert.match(tabs, /\.ws-top \.wt-ptabs \.wt-padd, \.ws-top \.wt-ptabs \.wt-pmore \{ position: sticky;/);
+  // The narrowest message box wraps instead of squeezing the model chip to nothing (the Quorium squares never shrink).
+  assert.match(comp, /\.composer-box\.fold6 \.cmp-foot \.cmp-model-slot \{ flex: 0 1 auto; min-width: 56px; \}/);
+  assert.match(comp, /\.composer-box\.fold6 \.cmp-control-rack \{ flex-wrap: wrap !important;/);
+  // A slash command clears the saved draft too, even when its card redraws the chat before the save.
+  assert.match(app, /runCommand\(c, t\.trim\(\)\)\) \{ ta\.value = ''; c\.unsent = ''; return; \}/);
+});

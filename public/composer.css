@@ -124,7 +124,9 @@
 /* 6. Too narrow even then: the buttons take their own line under the setup, so nothing overlaps */
 .composer-box.fold6 .cmp-foot { flex-wrap: wrap; row-gap: 6px; }
 .composer-box.fold6 .cmp-foot .cmp-control-rack { flex: 1 0 100%; }
-.composer-box.fold6 .cmp-foot .cmp-model-slot { flex: 0 1 auto; min-width: 0; }
+.composer-box.fold6 .cmp-foot .cmp-model-slot { flex: 0 1 auto; min-width: 56px; }
+/* the Quorium's squares never shrink, so the model and the chips wrap under them instead of being squeezed away */
+.composer-v2 .composer-box.fold6 .cmp-foot .cmp-control-rack, .chatpane .composer-box.fold6 .cmp-control-rack { flex-wrap: wrap !important; row-gap: 6px; }
 .composer-box.fold6 .cmp-foot .cmp-bottom-bar { margin-left: auto !important; }
 .composer-box.fold6 .enhBtn { display: inline-grid !important; }
 /* the tray button's count sits in its corner, like the other badges */
