@@ -10270,12 +10270,16 @@ function qfPlace(on) {
   document.body.classList.toggle('qf-desk', on && DESK);
   const nav = $('.wt-nav'), pal = $('#paletteBtn'), top = $('header.top'), ws = $('#wsTop');
   if (on) {
+    // Both rows sit above the editor area only: the activity bar and the sidebar run the window's full height, as in
+    // Zed. Row 1 still starts at the window's top edge (right of the sidebar), so − □ × stay at its right end.
+    const main = $('.ws-main'); if (main && title.parentElement !== main) main.prepend(title, proj);
     if (nav) $('#qfNav').append(nav);
     if (pal) { $('#qfCmdSlot').append(pal); const s = $('span', pal); if (s) s.textContent = 'Go to or run…'; }
     for (const q of ['#staleNote', '#spend']) { const el = $(q); if (el) $('#qfRight').append(el); }
     qfOverlay();
     return true;
   }
+  if (title.parentElement !== document.body) document.body.prepend(title, proj);
   if (nav && ws) ws.prepend(nav);
   if (pal && top) { ($('.spacer', top) || top.lastElementChild)?.after(pal); const s = $('span', pal); if (s) s.textContent = 'Search'; }
   return false;
