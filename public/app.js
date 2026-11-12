@@ -10192,7 +10192,7 @@ function avExtensions(b) {
   const p = qfProject();
   if (AV.ext === 'hooks') {
     b.innerHTML = `<div class="av-cards">${[['hooks', 'Hooks'], ['perms', 'Permissions'], ['design', 'Design system']].map(([k, l]) => `<button type="button" class="av-card" data-pjx="${k}"><b>${l}</b><small>${esc(PJX[k][1])}</small></button>`).join('')}<p class="av-note">For ${esc(p?.name || 'this project')}.</p></div>`;
-    for (const x of b.querySelectorAll('[data-pjx]')) x.onclick = () => (x.dataset.pjx === 'perms' ? openPermissions({ kind: 'settings' }) : p && openProjectSub(p, x.dataset.pjx));
+    for (const x of b.querySelectorAll('[data-pjx]')) x.onclick = () => (x.dataset.pjx === 'perms' ? openPermissions({ kind: 'settings' }) : p && openProjectSettings(p, x.dataset.pjx)); // a page of the Settings tab's Project scope
     return;
   }
   b.innerHTML = '<div class="av-cards"><button type="button" class="av-card" data-sk><b>Skills</b><small>playbooks the agent can load: turn them on or off, write or import one (Settings → Skills)</small></button></div>';
