@@ -282,7 +282,7 @@ async function mergeServerCopy(c, last) {
     const box = $('.msgs', c.el.root);
     if (box && c.agent.messages.length) { box.innerHTML = ''; for (const m of c.agent.messages) box.appendChild(renderMsg(c, m)); if (c.follow) c.toEnd?.(); }
     renderChatHead(c); renderComposerBar(c);
-    if (!res.ok) flashTip($('.chat-head', c.el.root) || document.body, 'This chat changed in another window; reloaded the latest', 4000);
+    // Taking the other window's copy is QuorX's own housekeeping: the chat redraws without a notice.
   }
   return true;
 }
@@ -2325,7 +2325,7 @@ function editBudget(c, suggest, anchor) {
       <div class="bp-acts">${cur != null ? '<button type="button" class="bp-none" title="Remove the budget (no limit)">No limit</button>' : ''}<span class="kx-spacer"></span><button type="button" class="bp-cancel">Cancel</button><button type="button" class="bp-save">Save</button></div>`;
     document.body.appendChild(pop);
     // Above the chip it was opened from (else in the middle of the window).
-    if (anchor?.isConnected) {
+    if (anchor?.isConnected && anchor.offsetParent) { // the 💵 button sits in the settings panel: when that is shut, the middle
       const r = anchor.getBoundingClientRect(), w = 280;
       Object.assign(pop.style, { left: `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`, top: 'auto', bottom: `${Math.max(8, innerHeight - r.top + 6)}px`, transform: 'none' });
     }
@@ -3624,7 +3624,7 @@ function traceCostHTML(c, m) {
   const sumCache = (list) => list.reduce((a, [, v]) => ({ cacheRead: a.cacheRead + (v.cacheRead || 0), cachedIn: a.cachedIn + (v.cachedIn || 0), cacheWrite: a.cacheWrite + (v.cacheWrite || 0) }), { cacheRead: 0, cachedIn: 0, cacheWrite: 0 });
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
   const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${provTag(id)}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
-  return `<div class="trace-cost">
+  return `<div class="trace-cost">${traceContextHTML(c)}
     <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
@@ -4098,7 +4098,6 @@ function paneHTML(c) {
               <button type="button" class="cmp-act-btn enhUndo" title="Undo the last ✨ Enhance: your words back" aria-label="Undo enhance" hidden>↶</button>
             </div>
             <div class="cmp-actions-right">
-              <span class="cmp-ctx-slot"></span>
               <button type="button" class="cmp-stop-btn stopBtn" title="Stop the agent" aria-label="Stop" hidden>${CMP_ICO.stop}</button>
               <button type="submit" class="cmp-send-btn sendBtn" title="Send (Enter)" aria-label="Send">${CMP_ICO.send}</button>
             </div>
@@ -4418,6 +4417,7 @@ function renderComposerBar(c) {
     + sec('think', 'Thinking', levelsHTML(s, 'reason'))
     + sec('creative', 'Creativity', levelsHTML(s, 'creative'))
     + sec('safety', 'Mode', `${permHTML('cq-perm')}<button type="button" class="cq-let linkish" title="The commands and actions ⚡ YOLO's deciders allowed in this chat without asking you">What ⚡ YOLO let through</button>`)
+    + sec('budget', 'Budget', '<button type="button" class="cmp-budget" aria-haspopup="dialog"></button>', 'this chat')
     + sec('mic', 'Mic', `<div class="cs-tools">${quickToolsHTML(c, { micOnly: true })}</div>`, 'all chats')
     + sec('mcp', '🧲 MCP servers', mcpRowHTML(c), 'this chat')
     + sec('limit', 'At a usage limit', `<div class="seg cq-limit" role="group" aria-label="What this chat does when its provider runs out of usage"><button type="button" data-limit="app" class="${c.agent.limitMode === 'wait' ? '' : 'on'}" title="Do what ⚙ Settings → Providers says: switch to the provider's fallback model, or stop">App setting</button><button type="button" data-limit="wait" class="${c.agent.limitMode === 'wait' ? 'on' : ''}" title="When the reset is close, wait for it in this chat (nothing paid) instead of switching models">Wait it out here</button></div>`, 'this chat');
@@ -4437,13 +4437,15 @@ function renderComposerBar(c) {
   const chip = (k, ico, label, val, tone, tip) => `<button type="button" class="cq-chip cq-${k}" data-sec="${k}" data-state="${ch[k] || k === 'safety' ? 'changed' : 'default'}" data-tone="${tone}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(`${label || tip.split(':')[0]}: ${val}${ch[k] ? '' : ' (usual)'}`)}" title="${esc(tip)}"><span class="cq-ci" aria-hidden="true">${ico}</span>${label ? `<span class="cq-cl">${label}</span>` : ''}<b>${esc(val)}</b></button>`;
   chipsEl.innerHTML = chip('think', '🧠', 'Thinking', RWORD[rv] || rv, 'violet', `Thinking: ${REASON_INFO[rv]?.[0] || rv}\nHow much the model reasons before answering. Click to change.`)
     + chip('creative', '🎨', '', CREATIVITY_INFO[cv][0], 'accent', `Creativity: ${CREATIVITY_INFO[cv][0]}\nHow varied the answers are. Click to change.`)
-    + chip('safety', yolo ? '⚡' : '🔒', '', yolo ? 'YOLO' : 'Strict', yolo ? 'red' : 'ok', yolo ? 'YOLO: uses its tools without asking; the deciders answer its questions. Click to change.' : 'Strict: asks you before paid media; its questions come to you. Click to change.')
-    + '<button type="button" class="cmp-budget" aria-haspopup="dialog"></button>'
+    // Strict / YOLO is one square icon (🔒 quiet, ⚡ red): a click switches the mode, the tooltip says which and what it means.
+    + `<button type="button" class="cq-chip cq-safety cq-mode-ico" data-state="changed" data-tone="${yolo ? 'red' : 'plain'}" aria-pressed="${yolo}" aria-label="${yolo ? 'YOLO mode is on. Click for Strict' : 'Strict mode is on. Click for YOLO'}" title="${esc(yolo ? '⚡ YOLO (now)\nUses its tools without asking; the deciders answer its questions.\nThe chat budget and the safety rules still apply.\nClick to switch to 🔒 Strict.' : '🔒 Strict (now)\nAsks you before paid media, and the agent\'s questions come to you.\nClick to switch to ⚡ YOLO.')}"><span class="cq-ci" aria-hidden="true">${yolo ? '⚡' : '🔒'}</span></button>`
     + ((G.mcp || []).some((x) => x.on) ? `<button type="button" class="cq-chip cq-mcpc" data-sec="mcp" data-state="${mcpOn(c).length ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="MCP servers in this chat: ${mcpOn(c).length}" title="${esc(`MCP servers this chat may use: ${mcpOn(c).join(', ') || 'none'}. Click to tick them.`)}"><span class="cq-ci" aria-hidden="true">🧲</span><b>${mcpOn(c).length}</b></button>` : '')
-    + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed" title="This chat's settings: thinking, creativity, Strict / YOLO"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}</button>`
+    + `<button type="button" class="cq-chip cq-sum" data-sec="" data-state="${nCh ? 'changed' : 'default'}" data-tone="accent" aria-haspopup="dialog" aria-expanded="false" aria-label="This chat's settings, ${nCh} changed" title="This chat's settings: thinking, creativity, Strict / YOLO, budget"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${nCh ? `<b>${nCh}</b>` : ''}</button>`
     + `<button type="button" class="cq-chip cq-more" data-sec="" aria-haspopup="dialog" aria-expanded="false" aria-label="All of this chat's settings" title="All of this chat's settings">⋯</button>`;
-  const budChip = $('.cmp-budget', chipsEl);
+  // 💵 The chat's budget lives in the settings panel now (its own line), the same button and editor as before.
+  const budChip = $('.cmp-budget', quick);
   budChip.onclick = () => editBudget(c, undefined, budChip);
+  $('.cq-mode-ico', chipsEl).onclick = (e) => { e.stopPropagation(); c.approval = yolo ? 'strict' : 'yolo'; c._cq = undefined; saveChat(c); renderComposerBar(c); if (c.running?.runId) postJ(`/api/runs/${c.running.runId}/mode`, { approval: c.approval }).catch(() => {}); };
   drawBudgetChip(c);
   drawContextMeter(c);
   if (!c.bud) loadChatBudget(c);
@@ -4589,7 +4591,7 @@ function wireQuickSettings(c, quick, chips, followSlot) {
     const open = c._cq != null;
     quick.hidden = !open;
     const from = open ? [...chips.querySelectorAll(`.cq-chip[data-sec="${c._cq}"]`)].find((b) => b.offsetParent) : null;
-    for (const b of chips.querySelectorAll('.cq-chip')) b.setAttribute('aria-expanded', String(b === from));
+    for (const b of chips.querySelectorAll('.cq-chip:not(.cq-mode-ico)')) b.setAttribute('aria-expanded', String(b === from));
     if (!open) return;
     for (const sec of quick.querySelectorAll('.cq-sec')) sec.hidden = !!c._cq && sec.dataset.sec !== c._cq;
     quick.classList.toggle('one', !!c._cq);
@@ -4599,7 +4601,7 @@ function wireQuickSettings(c, quick, chips, followSlot) {
   };
   fitComposer(box);
   const tray = () => { $('.cmp-tray', followSlot)?.classList.toggle('open', !!c._tray); $('.cmp-tray-b', followSlot)?.setAttribute('aria-expanded', String(!!c._tray)); };
-  for (const b of chips.querySelectorAll('.cq-chip')) b.onclick = () => {
+  for (const b of chips.querySelectorAll('.cq-chip:not(.cq-mode-ico)')) b.onclick = () => { // the 🔒/⚡ icon switches the mode itself
     c._cq = c._cq === b.dataset.sec ? undefined : b.dataset.sec; c._tray = false; tray(); place();
     if (c._cq != null) (quick.querySelector(`[data-sec="${c._cq || 'think'}"] .on, [data-sec="${c._cq || 'think'}"] input`))?.focus({ preventScroll: true });
   };
@@ -4615,7 +4617,7 @@ function wireQuickSettings(c, quick, chips, followSlot) {
   const signal = quick._ac.signal;
   document.addEventListener('pointerdown', (e) => {
     const ch = quick._c, t = e.target;
-    if (!ch || !quick.isConnected || t.closest?.('dialog, .oh-tip, .chat-set, .allow-pop')) return;
+    if (!ch || !quick.isConnected || t.closest?.('dialog, .oh-tip, .chat-set, .allow-pop, .bud-pop')) return;
     if (ch._cq != null && !quick.contains(t) && !t.closest?.('.cq-chip')) { ch._cq = undefined; renderComposerBar(ch); }
     else if (ch._tray && !followSlot.contains(t)) { ch._tray = false; renderComposerBar(ch); }
   }, { capture: true, signal });
@@ -4649,47 +4651,67 @@ function contextUse(c) {
 }
 const ctxK = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
 const CTX_COLOR = { ok: 'var(--accent)', amber: 'var(--amber)', red: 'var(--bad)', none: 'var(--dim)' };
-function ctxRingSVG(u, size = 18) {
-  const r = size / 2 - 2.5, C = 2 * Math.PI * r, fill = u.left == null ? 0 : u.left;
-  return `<svg class="ctx-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="3"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${CTX_COLOR[u.tone]}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(C * fill).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`;
+// The ring fills with what is used: a fresh chat shows a thin sliver, a chat about to run out shows a full ring (amber
+// at 25% left, red at 8%). It sits on the 🧭 Steps tab, since a reply uses several models and Steps shows them all.
+function ctxRingSVG(u, size = 18, stroke = 3) {
+  const r = size / 2 - stroke / 2 - 0.5, C = 2 * Math.PI * r;
+  const used = u.left == null ? 0 : Math.min(1, Math.max(0, 1 - u.left));
+  const fill = used > 0 && used < 0.04 ? 0.04 : used; // once anything is used, a sliver stays visible
+  return `<svg class="ctx-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="${stroke}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${CTX_COLOR[u.tone]}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${(C * fill).toFixed(2)} ${C.toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>`;
 }
 const ctxLabel = (u) => (u.pct != null ? `${u.estimated ? '≈' : ''}${u.pct}% left` : u.known ? `${ctxK(u.used)} used` : 'Context');
+// Every model the newest reply used, each with its own context: the chat model first (its figure follows Compact), then
+// each Quorium role (reviewer, deciders, helpers, prompt enhancer…) from its newest call in that reply.
+function contextModels(c) {
+  const main = contextUse(c), mainId = main.model || c.agent.setup.model;
+  const m = c.agent.messages.findLast((x) => x.role === 'assistant' && (x.stats?.byModel || x.liveByModel));
+  const by = m ? (m.stats?.byModel || m.liveByModel || {}) : {};
+  const rows = [{ role: 'writer', model: mainId, u: main }];
+  for (const [id, v] of Object.entries(by)) {
+    if (!v?.last?.in || id === mainId) continue;
+    rows.push({ role: v.role || 'writer', model: id, u: contextNumbers(v.last, G.byId?.get(id)?.ctx || 0) });
+  }
+  return rows;
+}
+const ctxTip = (c, u) => (u.pct != null ? `${100 - u.pct}% of ${short(c.agent.setup.model)}'s context used (${ctxK(u.used)} of ${ctxK(u.max)} tokens)${u.estimated ? ', estimated after Compact' : ''}`
+  : u.known ? `${ctxK(u.used)} tokens used (this model's context size isn't listed)` : '');
+// The 🧭 Steps tab of every group shows the chat in front's ring; hovering it says the figure.
+function drawStepsTabRing(c) {
+  const u = contextUse(c), tip = ctxTip(c, u);
+  for (const b of document.querySelectorAll('[data-tab="trace"]')) {
+    const ring = b.querySelector('.st-ctx-ring');
+    b.dataset.ctx = u.known ? u.tone : '';
+    if (!u.known) { ring?.remove(); b.title = 'Steps\nEverything a reply did, in order'; continue; }
+    const html = ctxRingSVG(u, 26, 2).replace('class="ctx-ring"', 'class="ctx-ring st-ctx-ring"');
+    if (ring) ring.outerHTML = html; else b.insertAdjacentHTML('beforeend', html);
+    b.title = `Steps\nEverything a reply did, in order\n\nContext: ${tip}\nOpen Steps to see every model's context and to Compact.`;
+  }
+}
 function drawContextMeter(c) {
-  const slot = c.el && $('.cmp-ctx-slot', c.el.root);
-  if (!slot) return;
-  const u = contextUse(c), open = !!$('.ctx-pop:not([hidden])', slot);
-  const tip = u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens)${u.estimated ? ', estimated after Compact' : ''}. Click for details and Compact.`
-    : u.known ? `${ctxK(u.used)} tokens used; this model's context size isn't listed. Click for details and Compact.` : 'How much of the model\'s context this chat uses shows after the first reply. Click for Compact.';
-  slot.innerHTML = `<button type="button" class="cmp-ctx-btn" data-tone="${u.tone}" aria-haspopup="dialog" aria-expanded="${open}" title="${esc(tip)}" aria-label="${esc(tip)}">${ctxRingSVG(u)}<span class="ctx-lbl">${esc(ctxLabel(u))}</span></button><div class="ctx-pop" role="dialog" aria-label="Context" ${open ? '' : 'hidden'}></div>`;
-  const btn = $('.cmp-ctx-btn', slot), pop = $('.ctx-pop', slot);
-  if (open) drawContextPop(c, pop, u);
-  if (focused() === c) wsStatusDraw(); // the status bar shows the same figure
-  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
-  const outside = (e) => { if (!slot.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); btn.focus(); } };
-  btn.onclick = () => {
-    if (!pop.hidden) return close();
-    drawContextPop(c, pop, contextUse(c)); pop.hidden = false; btn.setAttribute('aria-expanded', 'true');
-    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+  if (focused() !== c) return;
+  drawStepsTabRing(c);
+  wsStatusDraw(); // the status bar shows the same figure
+}
+// At the top of the Steps pane's cost block: each model's context from its newest call, and Compact for the chat.
+function traceContextHTML(c) {
+  const list = contextModels(c), main = list[0].u;
+  if (!main.known && list.length < 2) return '';
+  const row = ({ role, model, u }) => {
+    const [ico, name] = USAGE_KIND[role] || ['🤖', role];
+    const pct = u.left == null ? null : 100 - u.pct;
+    return `<div class="tcx-row" data-tone="${u.tone}"><span class="tcx-who">${ico} ${esc(role === 'writer' ? 'Chat model' : name)}</span><span class="tc-model" title="${esc(model)}">${esc(short(model))}</span><span class="tcx-bar" aria-hidden="true"><i style="width:${pct ?? 0}%"></i></span><span class="tcx-n">${u.known ? `${u.estimated ? '≈' : ''}${ctxK(u.used)}${u.max ? ` / ${ctxK(u.max)}` : ''}` : '—'}${pct != null ? ` · ${pct}%` : ''}</span></div>`;
   };
-  if (open) { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true); }
-}
-function drawContextPop(c, pop, u) {
-  const n = (v) => (v || 0).toLocaleString();
-  const parts = u.known ? (u.cacheRead != null ? [['Cache read', u.cacheRead, 'var(--accent)'], ['Cache write', u.cacheWrite, 'var(--amber)'], ['Fresh input', u.fresh, 'var(--violet)'], ['Output', u.output, 'var(--ok)']] : [['Input', u.input, 'var(--violet)'], ['Output', u.output, 'var(--ok)']]) : [];
-  const total = u.max || u.used || 1;
-  const rows = [['Used', u.used, '', 'ctx-used'], ...parts.filter(([k]) => k !== 'Fresh input' && k !== 'Input'), ...(u.free != null ? [['Free', u.free, '', 'ctx-free']] : [])];
   const busy = !!c.running;
-  pop.innerHTML = `<div class="ctx-head"><b>Context</b><span class="ctx-of">${u.known ? `${u.estimated ? '≈ ' : ''}${ctxK(u.used)}${u.max ? ` / ${ctxK(u.max)}` : ''}` : u.max ? `${ctxK(u.max)} window` : ''}</span></div>`
-    + (u.known ? `<div class="ctx-bar">${parts.map(([k, v, col]) => `<span title="${esc(k)}" style="width:${Math.min(100, (v / total) * 100).toFixed(2)}%;background:${col}"></span>`).join('')}</div>
-      <div class="ctx-rows">${rows.map(([k, v, col, cls]) => `<div class="${cls || ''}"><span class="k">${col ? `<span class="sw" style="background:${col}"></span>` : ''}${k}</span><span class="v">${n(v)}</span></div>`).join('')}</div>
-      <div class="ctx-note">${u.estimated ? 'Estimated after Compact; the next reply gives the real figure.' : `From the last model call${u.model ? ` (${esc(short(u.model))})` : ''}.`}${u.cacheRead == null ? ' This source doesn\'t report cache tokens.' : ''}${u.max ? '' : ' This model\'s context size isn\'t listed.'}</div>`
-      : '<div class="ctx-note">Shows after the first reply: what the last model call sent and got back.</div>')
-    + `<button type="button" class="primary ctx-compact" ${busy ? 'disabled' : ''}>Compact conversation</button>
-      <div class="ctx-note">${busy ? 'Wait for the reply to finish, or stop it, to compact.' : `Older turns become a short summary written by ${esc(short(c.agent.setup.model))}; the last 8 messages stay as they are.`}</div>
-      <div class="ctx-err" hidden></div>`;
-  $('.ctx-compact', pop).onclick = (e) => compactConversation(c, e.currentTarget, $('.ctx-err', pop));
+  return `<div class="trace-ctx"><div class="tc-head"><span>◔ Context by model</span><span class="tcx-sub">each model's newest call</span></div>${list.map(row).join('')}
+    ${main.known && main.cacheRead != null ? `<div class="tcx-cache">Chat model's last call: ${ctxK(main.cacheRead)} read from cache · ${ctxK(main.cacheWrite)} written to it · ${ctxK(main.output)} out</div>` : ''}
+    <div class="tcx-acts"><button type="button" class="tcx-compact" ${busy ? 'disabled' : ''}>Compact conversation</button><span class="tcx-sub">${busy ? 'Wait for the reply to finish, or stop it, to compact.' : `Older turns become a short summary by ${esc(short(c.agent.setup.model))}; the last 8 messages stay as they are.`}</span></div>
+    <div class="ctx-err" hidden></div></div>`;
 }
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.tcx-compact'); if (!b || b.disabled) return;
+  const c = focused(); if (!c) return;
+  compactConversation(c, b, b.closest('.trace-ctx')?.querySelector('.ctx-err') || document.createElement('div'));
+});
 // The same summary a reply writes on a long chat (server: compactChat), asked for now. The chat keeps it like that one
 // (summary + the time the kept turns start), so the next reply sends the summary and only the turns after it.
 async function compactConversation(c, btn, err) {
@@ -4710,8 +4732,8 @@ async function compactConversation(c, btn, err) {
   const box = c.el && $('.msgs', c.el.root);
   if (box) { box.querySelector('.hint')?.remove(); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
   saveChat(c); renderChatHead(c); drawBudgetChip(c);
-  const pop = c.el && $('.cmp-ctx-slot .ctx-pop', c.el.root); if (pop) pop.hidden = true;
   drawContextMeter(c);
+  if (focused() === c && G.view?.trace) renderPane();
 }
 // The note Compact leaves in the chat. Like a /usage card it is yours: never part of the agent's history.
 function compactedHTML(m) {
@@ -5932,9 +5954,12 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   right.append(tb);
   $('.foot', el).append(right);
   if (s && !m.live && !m.runActive) {
-    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}${speakOK() ? `<button type="button" class="mt-btn mt-speak ${G.speak?.m === m ? 'on' : ''}" title="${G.speak?.m === m ? 'Stop reading' : 'Read aloud with this computer’s voices (code, tables and files are skipped)'}" aria-label="${G.speak?.m === m ? 'Stop reading' : 'Read aloud'}" aria-pressed="${G.speak?.m === m}">${msgIcon(G.speak?.m === m ? 'stop' : 'speak')}</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
+    right.insertAdjacentHTML('afterbegin', `<span class="msg-tools">${m.error ? '' : '<button type="button" class="mt-btn mt-repeat" title="⏰ Repeat this: a schedule that asks for this again at set times. Its runs post in this chat." aria-label="Repeat this on a schedule">⏰</button>'}<button type="button" class="mt-btn mt-remix" title="Remix: a new chat in this project with the conversation up to here. Files are not touched." aria-label="Remix in a new chat">${msgIcon('branch')}</button>${bodyText(m).length > 600 ? `<button type="button" class="mt-btn mt-pane" data-open-pane="reply" data-run="${esc(m.runId || '')}" data-ref="" title="Read this answer in the side pane" aria-label="Read in the side pane"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 9h2M16.5 12.5h2"/></svg></button>` : ''}${speakOK() ? `<button type="button" class="mt-btn mt-speak ${speakingNow(m) ? 'on' : ''}" title="${esc(speakingNow(m) ? 'Stop reading' : speakTitle(c))}" aria-label="${speakingNow(m) ? 'Stop reading' : 'Read aloud'}" aria-pressed="${speakingNow(m)}">${msgIcon(speakingNow(m) ? 'stop' : 'speak')}</button><button type="button" class="mt-btn mt-speak-pick" title="Change how replies are read aloud: PC voice or AI voice" aria-label="Change read aloud voice" aria-haspopup="dialog">▾</button>` : ''}<button type="button" class="mt-btn mt-copy" title="Copy this reply (Markdown)" aria-label="Copy reply">${msgIcon('copy')}</button></span>`);
     wireIconCopy($('.foot .mt-copy', el), () => m.content);
-    const say = $('.foot .mt-speak', el); if (say) say.onclick = () => readAloud(m, el);
+    const say = $('.foot .mt-speak', el); if (say) say.onclick = () => readAloud(m, el, c);
+    if (say) say.onpointerenter = () => { if (!say.classList.contains('on')) say.title = speakTitle(c); }; // the Voice model may have changed since
+    const sayHow = $('.foot .mt-speak-pick', el); if (sayHow) sayHow.onclick = () => speakChoice(m, el, c, sayHow);
+    applySpeakPref();
     $('.foot .mt-remix', el).onclick = () => remixFrom(c, m);
     const rep = $('.foot .mt-repeat', el); if (rep) rep.onclick = () => repeatReply(c, m);
   }
@@ -9975,12 +10000,13 @@ function wsChatsWorking() {
     return `<button type="button" class="wp-chat st-${st}" data-chat="${esc(c.id)}" title="Open this chat"><i class="wt-dot"></i><span class="wt-name">${esc(c.title)}</span>${p ? `<span class="rl-proj" style="${projStyle(p)}">${esc(clip(p.name, 18))}</span>` : ''}<small>${esc(say)}</small></button>`;
   }).join('')}</section>`;
 }
-// The context left in the chat on screen: the composer meter's own numbers and colours (contextUse), once known.
+// The context left in the chat on screen: the Steps context's own numbers and colours (contextUse), once known.
 function wsContextLeft(c) {
   const u = contextUse(c); if (!u.known) return null;
-  return { pct: u.pct, tone: u.tone, text: ctxLabel(u), title: u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens). Click for details and Compact.` : `${ctxK(u.used)} tokens used. Click for details and Compact.` };
+  return { pct: u.pct, tone: u.tone, text: ctxLabel(u), title: u.pct != null ? `${u.pct}% of ${short(c.agent.setup.model)}'s context left (${ctxK(u.used)} of ${ctxK(u.max)} tokens). Click to open Steps: every model's context, and Compact.` : `${ctxK(u.used)} tokens used. Click to open Steps: every model's context, and Compact.` };
 }
 function wsStatusDraw() {
+  { const fc = focused(); if (fc) drawStepsTabRing(fc); }
   const bar = $('#wsStatus'); if (!bar) return;
   const need = needsYou(), work = replying().length, procs = runTotal(), n = work + procs, c = focused(), pid = c ? projOf(c) : WT.pid, srv = ((c ? spaceOf(c) : pid) && G.srvUp?.[c ? spaceOf(c) : pid]) || 0, ctx = c ? wsContextLeft(c) : null;
   const sig = JSON.stringify([need.map((x) => [x.c.id, x.kind]), work, procs, srv, pid, ctx, c?.id]);
@@ -10000,8 +10026,8 @@ function wsStatusWire() {
       const i = list.findIndex((x) => x.c.id === G.panes[0]);
       showChat(list[(i + 1) % list.length].c.id);
     }
-    // The context figure opens the composer's own meter (its details and Compact).
-    if (b.dataset.sb === 'ctx') $('.cmp-ctx-btn', focused()?.el?.root || document)?.click();
+    // The context figure opens Steps, where every model's context and Compact are.
+    if (b.dataset.sb === 'ctx') { const c = focused(), m = c?.agent.messages.findLast((x) => x.role === 'assistant' && x.runId); if (m) openTrace(c, m); }
     if (b.dataset.sb === 'run') wrRunning(true);
     if (b.dataset.sb === 'srv') wrServers();
   };
@@ -11080,6 +11106,8 @@ function catEditor([k, label, note], T = G.settings.tools) {
   }).join('') : '';
   const pick = t.models && k !== 'listen' ? `<label class="row">Model per call <select class="pick"><option value="fixed" ${t.pick !== 'agent' ? 'selected' : ''}>I pick: always model 1</option><option value="agent" ${t.pick === 'agent' ? 'selected' : ''}>Agent picks among these</option></select></label>` : '';
   const extra = k === 'image' ? `<label class="row">Size <select class="res">${['512', '768', '1K', '1.5K', '2K', '4K'].map((r) => `<option ${r === t.resolution ? 'selected' : ''}>${r}</option>`).join('')}</select></label>`
+    // 🔊 under a reply: how it reads aloud (the same choice its "Remember my choice" saves; the value is set after drawing)
+    : k === 'speech' ? `<label class="row">Read aloud with <select class="read-aloud" title="What 🔊 under a reply uses"><option value="">Ask each time</option><option value="pc">🖥 PC voice (free, offline)</option><option value="ai">✨ AI voice (${esc(short(settingsModel('speech')) || 'Voice model')}, or the chat's Quorium Voice)</option></select></label>`
     : k === 'video' ? `<label class="row">Resolution <select class="res">${['480p', '720p', '1080p'].map((r) => `<option ${r === t.resolution ? 'selected' : ''}>${r}</option>`).join('')}</select> Default length <input type="number" class="secs" min="1" max="15" value="${t.seconds || 5}">s</label>` : '';
   return `<div class="cat" data-cat="${k}"><label class="row head"><input type="checkbox" class="on" ${t.on !== false ? 'checked' : ''}> <b>${label}</b> <small>${esc(note)}</small></label>${pick}${rows}${extra}</div>`;
 }
@@ -12289,6 +12317,7 @@ function wireSettings() {
   }
   drawCheckList(S, mark);
   $('#catEditors').innerHTML = CATS.map((cat) => catEditor(cat, S.tools)).join('');
+  { const ra = $('#catEditors .read-aloud'); if (ra) ra.value = S.readAloud === 'pc' || S.readAloud === 'ai' ? S.readAloud : ''; }
   for (const el of document.querySelectorAll('#catEditors .cat')) { wireCatEditor(el); el.addEventListener('change', mark); el.addEventListener('click', (ev) => { if (ev.target.closest('button')) mark(); }); }
   drawSkillsPanel(mark);
   // Usage & costs: today, this week and all time, and a bar per project (from /api/costs).
@@ -12358,7 +12387,7 @@ function resetCategory() {
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, nextSteps: d.nextSteps, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
-  if (ST.cat === 'tools') S.tools = structuredClone(d.tools);
+  if (ST.cat === 'tools') { S.tools = structuredClone(d.tools); delete S.readAloud; }
   if (ST.cat === 'budget') Object.assign(S, { chatBudget: 10, budgetGrace: d.budgetGrace });
   if (ST.cat === 'skills') S.skillsOff = [];
   if (ST.cat === 'shortcuts') { S.keys = {}; S.micKey = MIC_KEY; S.micMode = MIC_MODE; }
@@ -12446,6 +12475,7 @@ function saveSettings() {
     if ($('.pick', el)) t.pick = $('.pick', el).value;
     if ($('.res', el)) t.resolution = $('.res', el).value;
     if ($('.secs', el)) t.seconds = Math.max(1, Math.min(15, Number($('.secs', el).value) || 5));
+    if ($('.read-aloud', el)) { const v = $('.read-aloud', el).value; if (v) S.readAloud = v; else delete S.readAloud; }
   }
   G.theme = S.theme ?? null; delete S.theme;
   saveStorageRules(S.storage); delete S.storage;
@@ -12458,7 +12488,7 @@ function saveSettings() {
   G.settings = S;
   savePrefs(); if (POP) stSaveFromPop(); // a Settings tab in a pop-out window saves for the main window too
   ST.rowIndex = null;
-  applyTheme(); applyUi(); applyKeyTitles();
+  applyTheme(); applyUi(); applyKeyTitles(); applySpeakPref();
   renderToolbars(); renderPanes(); renderSpend(); renderSidebar(); // the sidebar folds idle chats by a setting
   // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
   // check work from here), and the footer says it was saved.
@@ -14470,36 +14500,11 @@ function wirePages(c, pop, pages) {
     };
   }
 }
-// "N previews moved to Pages": once per project, after older versions' previews left the launch file. Undo puts them
-// back; ✕ keeps the move. It shows at the top of each open chat of that project until one of the two.
+// Older versions' previews leaving the launch file for Pages is QuorX's own housekeeping: it happens silently (no
+// banner). The moved ones show in Pages under "Moved from servers", where they can be opened, kept as a project server or removed.
 function pagesNotice(projectId, r) {
   if (!r || r.error) return;
-  const n = r.pagesNotice;
-  for (const c of G.open.values()) {
-    if (!c.el || spaceOf(c) !== projectId) continue;
-    const old = $('.pages-notice', c.el.root);
-    if (!n) { old?.remove(); continue; }
-    if (old && old.dataset.at === String(n.at)) continue;
-    old?.remove();
-    $('.chat-head', c.el.root).insertAdjacentHTML('afterend', `<div class="budget-notice pages-notice" role="status" data-at="${esc(String(n.at))}">
-      <span class="bn-ico"><span class="kind-tag page">PAGE</span></span>
-      <div class="bn-text"><b>${n.count} preview${n.count > 1 ? 's' : ''} moved to Pages</b><small>${esc(n.names.filter(Boolean).slice(0, 4).join(', '))}${n.names.length > 4 ? ` and ${n.names.length - 4} more` : ''}: QuorX shows ${n.count > 1 ? 'them' : 'it'} now, always on, so the launch file keeps only what runs the project. Your project servers are unchanged.</small></div>
-      <button type="button" class="bn-raise pn-see">See Pages</button>
-      <button type="button" class="srv-btn pn-undo" title="Put ${n.count > 1 ? 'them' : 'it'} back in .quorx/launch.json as before">Undo</button>
-      <button type="button" class="bn-x" aria-label="Keep the move and close this notice" title="Keep the move and close this notice">✕</button></div>`);
-    const box = $('.pages-notice', c.el.root);
-    $('.pn-see', box).onclick = () => { if (focused() === c) openTerminal(c, null, 'srv'); };
-    const done = async (action, b) => {
-      b.disabled = true;
-      const res = await postJ('/api/pages', { projectId, action });
-      if (res?.error) { b.disabled = false; return uiAlert(res.error); }
-      for (const ch of G.open.values()) if (ch.el && spaceOf(ch) === projectId) $('.pages-notice', ch.el.root)?.remove();
-      for (const ch of G.open.values()) if (ch.srvPop && spaceOf(ch) === projectId) renderServers(ch);
-      pollDev();
-    };
-    $('.pn-undo', box).onclick = (e) => done('undo', e.currentTarget);
-    $('.bn-x', box).onclick = (e) => done('dismiss', e.currentTarget);
-  }
+  for (const c of G.open.values()) if (c.el && spaceOf(c) === projectId) $('.pages-notice', c.el.root)?.remove();
 }
 // A pages address (QuorX's pages server): PAGE in the address bar, and the page reloads when the project's files
 // change, as an artifact or a site in the Artifact tab does.
@@ -16302,7 +16307,8 @@ function wireIconCopy(btn, text) {
 }
 
 // ---------- 🔊 read a reply aloud ----------
-// The system's own voices (speechSynthesis): nothing is downloaded and nothing leaves the PC. Only the reply's words are
+// The PC voice is the system's own (speechSynthesis): nothing is downloaded and nothing leaves the PC. The AI voice is
+// the chat's 🗣 Voice model (server/readaloud.js), paid per character; 🔊 asks which. Only the reply's words are
 // read: code blocks, tables, maths, pictures and file cards are skipped. The sentence being read is lit with a CSS
 // highlight, so the message itself is never rewritten. One reply reads at a time; 🔊 again (or ■) stops it.
 const speakOK = () => typeof window.speechSynthesis !== 'undefined' && typeof window.SpeechSynthesisUtterance === 'function';
@@ -16333,10 +16339,26 @@ function speakMark(range) {
   if (!window.CSS?.highlights || typeof window.Highlight !== 'function') return;
   if (range) CSS.highlights.set('qx-speak', new Highlight(range)); else CSS.highlights.delete('qx-speak');
 }
-function speakButtons(m, on) {
-  for (const b of m?.el?.querySelectorAll?.('.mt-speak') || []) {
+// How replies are read: 'pc' (this computer's voices, free) or 'ai' (the chat's 🗣 Voice model, paid), once you tick
+// "Remember my choice"; until then 🔊 asks. ⚙ Settings → Tools & media changes it too; ▾ by 🔊 shows once it is set.
+const speakHow = () => (G.settings.readAloud === 'pc' || G.settings.readAloud === 'ai' ? G.settings.readAloud : '');
+const speakModel = (c) => (c ? moduleModel(c, 'speech') : settingsModel('speech'));
+// A Voice model's price, short: dollars per million characters read, and what a typical reply (≈ 1,500 characters) costs.
+const speakPrice = (id) => { const m = G.byId?.get(id); return m?.kind === 'speech' && m.price?.[0] != null ? `$${+m.price[0].toFixed(2)}/M chars · ≈ $${(m.price[0] * 1500 / 1e6).toFixed(3)} a reply` : ''; };
+const applySpeakPref = () => document.documentElement.classList.toggle('speak-set', !!speakHow());
+function speakTitle(c) {
+  const how = speakHow(), id = speakModel(c);
+  if (how === 'pc') return 'Read aloud with this computer’s voices (free; code, tables and files are skipped)';
+  if (how === 'ai') return `Read aloud with the AI voice${id ? ` (${short(id)}${speakPrice(id) ? `, ${speakPrice(id)}` : ''})` : ''}; code, tables and files are skipped`;
+  return 'Read aloud: with this computer’s voice (free) or an AI voice (code, tables and files are skipped)';
+}
+// The reply being read, also after it was drawn again (a save that merged with the server's copy makes new objects).
+const speakingNow = (m) => !!G.speak && (G.speak.m === m || (!!m?.runId && G.speak.m?.runId === m.runId));
+function speakButtons(m, on, c) {
+  // Off: every lit 🔊 on the page (the reply may have been drawn again since it started).
+  for (const b of on ? m?.el?.querySelectorAll?.('.mt-speak') || [] : document.querySelectorAll('.mt-speak.on')) {
     b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
-    b.title = on ? 'Stop reading' : 'Read aloud with this computer’s voices (code, tables and files are skipped)'; b.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud');
+    b.title = on ? 'Stop reading' : speakTitle(c); b.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud');
     b.innerHTML = msgIcon(on ? 'stop' : 'speak');
   }
 }
@@ -16345,20 +16367,60 @@ function stopReading() {
   G.speak = null;
   was.stopped = true;
   try { speechSynthesis.cancel(); } catch { /* nothing was speaking */ }
+  try { was.audio?.pause(); } catch { /* nothing was playing */ }
+  was.done?.(false);
   speakMark(null);
-  speakButtons(was.m, false);
+  speakButtons(was.m, false, was.c);
+  if (was.spent && was.c) { saveChat(was.c); renderChatHead(was.c); drawBudgetChip(was.c); } // the AI voice's calls, saved once
 }
-function readAloud(m, el) {
-  if (!speakOK()) return uiAlert('This window has no speech voices. Read aloud uses the voices installed in Windows (Settings → Time & language → Speech).');
-  const mine = G.speak?.m === m;
+// 🔊 PC voice or ✨ AI voice (with the Voice model's name and price), and "Remember my choice". Opened by 🔊 until a
+// choice is remembered, and by ▾ next to it after.
+function speakChoice(m, el, c, anchor) {
+  document.querySelector('.speak-pop')?.remove();
+  anchor = anchor?.isConnected ? anchor : $('.foot .mt-speak', el);
+  const id = speakModel(c), how = speakHow();
+  const pop = document.createElement('div');
+  pop.className = 'speak-pop floating';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Read aloud with');
+  pop.innerHTML = `<div class="sp-h"><b>🔊 Read aloud with</b><button type="button" class="sp-x" aria-label="Close" title="Close (Esc)">✕</button></div>
+    <button type="button" class="sp-opt${how === 'pc' ? ' on' : ''}" data-how="pc"><span class="sp-ico" aria-hidden="true">🖥</span><span class="sp-t"><b>PC voice</b><small>Built into Windows, works offline</small></span><span class="sp-free">free</span></button>
+    <button type="button" class="sp-opt${how === 'ai' ? ' on' : ''}" data-how="ai"${id ? '' : ' disabled'}><span class="sp-ico" aria-hidden="true">✨</span><span class="sp-t"><b>AI voice</b><small>${id ? `${esc(short(id))} · the chat's 🗣 Voice model` : 'No Voice model chosen: pick one in the Quorium or ⚙ Settings'}</small>${id && speakPrice(id) ? `<span class="sp-price" title="${esc(priceOf(id))}">${esc(speakPrice(id))}</span>` : ''}</span><span class="sp-paid">paid</span></button>
+    <label class="sq-check sp-remember"><input type="checkbox"${how ? ' checked' : ''}><span>Remember my choice</span></label>
+    <p class="sp-note">Change it with ▾ next to 🔊, or in ⚙ Settings → Tools & media.</p>`;
+  document.body.appendChild(pop);
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  if (anchor) {
+    const r = anchor.getBoundingClientRect();
+    pop.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
+    pop.style.top = `${r.top - h - 6 >= 8 ? r.top - h - 6 : Math.min(r.bottom + 6, innerHeight - h - 8)}px`;
+  } else { pop.style.left = `${Math.max(8, (innerWidth - w) / 2)}px`; pop.style.top = `${Math.max(8, (innerHeight - h) / 2)}px`; }
+  const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
+  const outside = (e) => { if (!pop.contains(e.target) && e.target !== anchor) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor?.focus(); } };
+  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+  $('.sp-x', pop).onclick = close;
+  for (const b of pop.querySelectorAll('.sp-opt')) b.onclick = () => {
+    if ($('.sp-remember input', pop).checked) G.settings.readAloud = b.dataset.how; else delete G.settings.readAloud;
+    savePrefs(); applySpeakPref(); close();
+    stopReading(); readAloud(m, el, c, b.dataset.how);
+  };
+  ($('.sp-opt.on', pop) || $('.sp-opt', pop)).focus({ preventScroll: true });
+}
+function readAloud(m, el, c, pick) {
+  const mine = speakingNow(m);
   stopReading();
   if (mine) return; // 🔊 again stops it
+  const how = pick || speakHow();
+  if (!how) return speakChoice(m, el, c);
   const body = $('.body', el) || el;
   const parts = speakParts(body);
   if (!parts.length) return flashTip($('.mt-speak', el) || el, 'Nothing to read here: only code, tables or files.');
-  const run = { m, el, parts, i: 0, stopped: false };
+  if (how === 'ai') return readAloudAI(m, el, c, parts, body);
+  if (!speakOK()) return uiAlert('This window has no speech voices. Read aloud uses the voices installed in Windows (Settings → Time & language → Speech).');
+  const run = { m, el, c, parts, i: 0, stopped: false };
   G.speak = run;
-  speakButtons(m, true);
+  speakButtons(m, true, c);
   const voice = speakVoice();
   const next = () => {
     if (run.stopped || G.speak !== run) return;
@@ -16375,6 +16437,48 @@ function readAloud(m, el) {
   };
   // Voices can arrive a moment after the page opens; speaking starts either way.
   next();
+}
+// The AI voice reads a few sentences per call (up to about 600 characters), so the highlight can follow; the next piece
+// is fetched while one plays (at most one piece ahead, so Stop wastes little). Each call counts in the chat's spend.
+function speakPieces(parts, max = 600) {
+  const out = [];
+  for (const p of parts) {
+    const last = out.at(-1);
+    if (last && last.text.length + p.text.length + 1 <= max) { last.text += ` ${p.text}`; last.parts.push(p); } else out.push({ text: p.text, parts: [p] });
+  }
+  for (const x of out) {
+    const a = x.parts[0].range, b = x.parts.at(-1).range;
+    x.range = null;
+    if (a && b) { try { x.range = document.createRange(); x.range.setStart(a.startContainer, a.startOffset); x.range.setEnd(b.endContainer, b.endOffset); } catch { x.range = null; } }
+  }
+  return out;
+}
+async function readAloudAI(m, el, c, parts, body) {
+  const btn = () => $('.foot .mt-speak', el) || el;
+  const model = speakModel(c);
+  if (!model) return flashTip(btn(), 'Pick a 🗣 Voice model first (the Quorium or ⚙ Settings → Tools & media), or read with the PC voice.', 3200);
+  const pieces = speakPieces(parts), voice = G.settings.tools?.speech?.voices?.[model] || '';
+  const run = { m, el, c, parts, stopped: false, audio: new Audio() };
+  G.speak = run;
+  speakButtons(m, true, c);
+  const load = (p) => (p.load ||= postJ('/api/read-aloud', { text: p.text, model, voice }).then((r) => {
+    // Counted at once (the chat's spend and budget see it); saved when reading ends, since a save mid-reading can
+    // draw the reply again.
+    if (r?.cost && c) { (c.agent.extraUsage ||= []).push({ kind: 'speech', model: r.model, cost: r.cost, at: Date.now() }); run.spent = true; if (G.speak !== run) { saveChat(c); renderChatHead(c); drawBudgetChip(c); } }
+    return r;
+  }));
+  for (let i = 0; i < pieces.length; i++) {
+    const r = await load(pieces[i]);
+    if (run.stopped || G.speak !== run) return;
+    if (!r || r.error) { stopReading(); return flashTip(btn(), `Couldn’t read it aloud: ${r?.error || 'no answer'}`, 3600); }
+    if (i + 1 < pieces.length) load(pieces[i + 1]);
+    speakMark(body.isConnected ? pieces[i].range : null);
+    run.audio.src = r.url;
+    const ok = await new Promise((done) => { run.done = done; run.audio.onended = () => done(true); run.audio.onerror = () => done(false); run.audio.play().catch(() => done(false)); });
+    if (run.stopped || G.speak !== run) return;
+    if (!ok) { stopReading(); return flashTip(btn(), 'Couldn’t play the AI voice.'); }
+  }
+  stopReading();
 }
 // Leaving the page, or a new reply starting to read, stops the old one.
 window.addEventListener('pagehide', stopReading);

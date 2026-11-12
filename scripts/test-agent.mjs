@@ -520,6 +520,9 @@ test('each model call reports the tokens it sent, and the cache share where the 
   assert.deepEqual([calls[0].tokensIn, calls[0].tokensOut, calls[0].cacheRead, calls[0].cacheWrite], [12000, 300, 9000, 1000]);
   // A source that sends no prompt count: nothing is made up.
   assert.equal(calls[1].tokensIn, undefined); assert.equal(calls[1].cacheRead, undefined);
+  // Each model keeps its newest call's context for the Steps pane; a call with no prompt count doesn't wipe it.
+  const last = Object.values(of(events, 'spend').at(-1).byModel)[0].last;
+  assert.deepEqual(last, { in: 12000, out: 300, read: 9000, write: 1000 });
 });
 
 const longChat = (n) => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `${i % 2 ? 'Built part' : 'Please build part'} ${i} ${'x'.repeat(3000)}${i % 2 ? '\n\n[What I did: Wrote part.js. Checks passed.]' : ''}`, at: 1000 + i }));
@@ -538,6 +541,38 @@ test('the context meter: % left of the window, amber at 25% or less, red at 8% o
   // No window in the model list: tokens used, no % and no colour.
   assert.deepEqual([contextNumbers({ in: 9000, out: 100 }, 0).pct, contextNumbers({ in: 9000, out: 100 }, 0).tone, contextNumbers({ in: 9000, out: 100 }, 0).used], [null, 'none', 9100]);
   assert.equal(contextNumbers(null, 200000).known, false);
+});
+
+test('the context ring fills with what is used, and Steps lists every model the reply used with its own context', () => {
+  const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf("document.addEventListener('click', (e) => {\n  const b = e.target.closest?.('.tcx-compact')", i);
+  assert.ok(i >= 0 && j > i);
+  const G = { byId: new Map([['main/m', { ctx: 1000000 }], ['rev/r', { ctx: 128000 }]]) };
+  const api = new Function('G', 'short', 'esc', 'USAGE_KIND', 'focused', 'wsStatusDraw', `${page.slice(i, j)}; return { contextNumbers, ctxRingSVG, contextModels, traceContextHTML };`)(
+    G, (s) => s, (s) => String(s), { reviewer: ['🔍', 'Reviewer'], decider: ['⚖️', 'Deciders'] }, () => null, () => {});
+  const dash = (svg) => Number(svg.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/g)[0].match(/"([\d.]+) ([\d.]+)"/).slice(1).reduce((a, b) => a / b));
+  // 45k of 1M used: a thin ring (the sliver minimum), not a full one.
+  const fresh = api.contextNumbers({ in: 45087, out: 241 }, 1000000);
+  assert.ok(dash(api.ctxRingSVG(fresh)) < 0.06, 'a fresh chat shows an almost empty ring');
+  assert.ok(dash(api.ctxRingSVG(api.contextNumbers({ in: 950000, out: 0 }, 1000000))) > 0.9, 'a nearly full chat shows a full ring');
+  assert.equal(dash(api.ctxRingSVG(api.contextNumbers(null, 1000000))), 0);
+  // The chat model first, then each other model of the newest reply with its newest call.
+  const c = { agent: { setup: { model: 'main/m' }, messages: [
+    { role: 'user' },
+    { role: 'assistant', ctxUse: { in: 45000, out: 200, model: 'main/m', at: 1 }, stats: { byModel: {
+      'main/m': { role: 'writer', calls: 3, last: { in: 45000, out: 200 } },
+      'rev/r': { role: 'reviewer', calls: 1, last: { in: 100000, out: 900 } },
+      'dec/d': { role: 'decider', calls: 2, last: { in: 3000, out: 10 } },
+      'old/x': { role: 'decider', calls: 1 }, // no newest-call figure (an older reply's record): left out
+    } } },
+  ] } };
+  const rows = api.contextModels(c);
+  assert.deepEqual(rows.map((r) => [r.role, r.model]), [['writer', 'main/m'], ['reviewer', 'rev/r'], ['decider', 'dec/d']]);
+  assert.equal(rows[1].u.tone, 'amber'); assert.equal(rows[1].u.max, 128000); // 21% left
+  assert.equal(rows[2].u.max, 0); // window not listed: tokens only
+  const html = api.traceContextHTML(c);
+  assert.match(html, /Context by model/); assert.match(html, /Reviewer/); assert.match(html, /101k \/ 128k · 79%/);
+  assert.match(html, /tcx-compact/);
 });
 
 test('Compact by the context meter writes the same summary on demand, and says when there is nothing to compact', async () => {

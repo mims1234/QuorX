@@ -3383,3 +3383,44 @@ html.reduce-motion body #projectList .sb-project .sb-chat.sb-chat-item .live-dot
 .kc-reset:hover { color: var(--text); border-color: var(--line-strong); }
 .kc-warn { grid-column: 1 / -1; font-size: 12px; color: var(--warn); }
 .kc-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* Context on the 🧭 Steps tab (drawStepsTabRing in app.js): a thin ring around the icon that fills with what the chat
+   model's context has used, amber and red near the end. Steps lists every model's context (traceContextHTML). */
+[data-tab="trace"] { position: relative; }
+[data-tab="trace"] .st-ctx-ring { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.trace-ctx { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+.trace-ctx .tc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.trace-ctx .tcx-sub { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.trace-ctx .tcx-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 70px auto; gap: 8px; align-items: center; font-size: 12px; }
+.trace-ctx .tcx-who { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-ctx .tc-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.trace-ctx .tcx-bar { height: 5px; border-radius: 3px; background: var(--panel-3); overflow: hidden; }
+.trace-ctx .tcx-bar i { display: block; height: 100%; background: var(--accent); }
+.trace-ctx .tcx-row[data-tone="amber"] .tcx-bar i { background: var(--amber); }
+.trace-ctx .tcx-row[data-tone="red"] .tcx-bar i { background: var(--bad); }
+.trace-ctx .tcx-n { font: 11.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trace-ctx .tcx-row[data-tone="red"] .tcx-n { color: var(--bad); font-weight: 650; }
+.trace-ctx .tcx-cache { font-size: 11.5px; color: var(--muted); }
+.trace-ctx .tcx-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.trace-ctx .tcx-compact { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 12px var(--font-ui); cursor: pointer; }
+.trace-ctx .tcx-compact:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.trace-ctx .tcx-compact:disabled { opacity: .55; cursor: default; }
+
+/* 🔊 read aloud asks PC voice or AI voice (speakChoice in app.js); ▾ next to 🔊 shows once a choice is remembered */
+.msg-tools .mt-speak-pick { display: none; width: 16px; margin-left: -4px; font-size: 10px; }
+html.speak-set .msg-tools .mt-speak-pick { display: inline-grid; }
+.speak-pop { position: fixed; z-index: 200; width: 320px; display: grid; gap: 6px; padding: 10px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); font: 400 12.5px var(--font-ui); color: var(--text); }
+.speak-pop .sp-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.speak-pop .sp-x { width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.speak-pop .sp-x:hover { background: var(--panel-3); color: var(--text); }
+.speak-pop .sp-opt { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.speak-pop .sp-opt:hover:not(:disabled), .speak-pop .sp-opt:focus-visible { border-color: var(--accent); }
+.speak-pop .sp-opt.on { border-color: var(--accent-border, var(--accent)); background: var(--accent-dim); }
+.speak-pop .sp-opt:disabled { opacity: .55; cursor: default; }
+.speak-pop .sp-ico { font-size: 15px; text-align: center; }
+.speak-pop .sp-t { display: flex; flex-direction: column; min-width: 0; }
+.speak-pop .sp-t small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speak-pop .sp-free { font: 600 10.5px var(--mono); color: var(--ok); text-transform: uppercase; letter-spacing: .04em; }
+.speak-pop .sp-price { font: 11px var(--mono); color: var(--money, #e8b04a); white-space: nowrap; }
+.speak-pop .sp-paid { font: 600 10.5px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.speak-pop .sp-remember { margin-top: 2px; font-size: 12px; color: var(--text); }
+.speak-pop .sp-note { margin: 0; font-size: 11px; color: var(--dim); }

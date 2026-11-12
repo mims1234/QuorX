@@ -109,14 +109,14 @@
 .composer-box.fold4 .cq-chip.cq-sum { display: inline-flex; }
 .composer-box.fold4 .cmp-q-slot .qx-pick-l, .composer-box.fold4 .cmp-q-slot .qx-chg { display: none; }
 .composer-box.fold4 .cmp-foot { gap: 6px; padding: 0 6px 6px; }
-/* 5. Narrowest: the squares go too (the Quorium's list still shows them); enhance hides */
-.composer-box.fold5 .cmp-q-slot .qx-strip { display: none; }
+/* 5. Narrowest: the Quorium's squares stay (each opens its role's model picker) but get smaller; enhance hides */
+.composer-box.fold5 .cmp-q-slot .qx-strip { gap: 2px; }
+.composer-box.fold5 .cmp-q-slot .qx-sq { width: 20px; height: 20px; font-size: 10.5px; border-radius: 5px; }
 .composer-box.fold5 .enhBtn { display: none !important; }
-/* the Quorium button's own count of modules on, with their colours: shown once the squares have gone */
+/* the Quorium button's own count of modules on: no longer used, since the squares never fold into a count */
 .cmp-q-slot .qx-n { display: none; align-items: center; gap: 2px; }
 .cmp-q-slot .qx-n i { width: 7px; height: 7px; border-radius: 2px; background: var(--qk); }
 .cmp-q-slot .qx-n b { margin-left: 3px; font: 600 11.5px var(--mono); color: var(--muted); }
-.composer-box.fold5 .cmp-q-slot .qx-n { display: inline-flex; }
 /* the narrowest step also tightens the row: the model keeps its dot and the start of its name (the rest on hover) */
 .composer-box.fold5 .cmp-foot .cmp-model-slot { min-width: 56px; }
 .composer-box.fold5 .cmp-foot .cmp-control-rack { gap: 5px; }
@@ -246,3 +246,12 @@
   font: 500 12.5px var(--font-ui); color: var(--text); white-space: nowrap; animation: popFade .15s ease-out; }
 .fc-toast .fc-tact { color: var(--accent); border-color: var(--accent-border); }
 .fc-toast .fc-tx { border: 0; background: none; color: var(--dim); padding: 0 4px; }
+
+/* ---- the message box in the IDE shell: Strict / YOLO as one square icon, the budget in the settings panel ---- */
+/* 🔒 Strict is quiet, ⚡ YOLO keeps its red; no word, the tooltip says which and what it means (app.js renderComposerBar) */
+.cq-chip.cq-mode-ico { width: 28px; padding: 0; justify-content: center; flex: none; }
+.cq-chip.cq-mode-ico .cq-ci { font-size: 13px; }
+.composer-box.fold5 .cq-chip.cq-mode-ico { padding: 0; }
+/* 💵 the chat's budget: its own line in the settings panel, the same chip as before */
+.cmp-quick .cq-sec[data-sec="budget"] .cmp-budget { height: 24px; font-size: 12px; }
+.composer-box .cmp-quick .cq-sec[data-sec="budget"] .cmp-budget .cb-of { display: inline; } /* the panel has room: the whole figure */
