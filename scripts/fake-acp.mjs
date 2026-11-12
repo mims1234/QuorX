@@ -7,6 +7,8 @@ const args = process.argv.slice(2), mode = process.env.FAKE_ACP_MODE || 'normal'
 const record = { args, cwd: process.cwd(), openrouter: !!process.env.OPENROUTER_API_KEY, droidNoUpdate: process.env.DROID_DISABLE_AUTO_UPDATE || null, requests: [], permOutcomes: [] };
 const flush = () => { if (logFile) { try { fs.writeFileSync(logFile, JSON.stringify(record)); } catch { /* ignore */ } } };
 const say = (j) => process.stdout.write(`${JSON.stringify(j)}\n`);
+// A CLI from before its ACP mode (agy 1.4.x): it refuses the argument and quits.
+if (mode === 'old') { process.stderr.write(`Error: unexpected argument "${args[0] || 'acp'}". Prompts are read only from -p/--print, -i/--prompt-interactive, or stdin, so this argument would have been ignored.\n`); process.exit(2); }
 
 const CONFIG = [
   { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'yolo', options: [{ value: 'ask', name: 'Ask' }, { value: 'yolo', name: 'YOLO' }] },

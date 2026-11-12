@@ -28,7 +28,7 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
-import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe, quorxFor, SEARCH_PAGE } from '../server/acp.js';
+import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe, quorxFor, SEARCH_PAGE, authFor } from '../server/acp.js';
 import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
 import { LOCAL_HTTP_IDS, normalizeRoot, ensureLocalHttp, localHttpModels, localHttpBody, localHttpStream } from '../server/localhttp.js';
 
@@ -909,7 +909,7 @@ const ACP_DEV = {
   google: { models: { 'gemini-4-carbon': { id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1000000, output: 65536 }, cost: { input: 1.25, output: 10, cache_read: 0.31 } } } },
   anthropic: { models: { 'claude-sonnet-4-6': { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 200000, output: 64000 }, cost: { input: 3, output: 15, cache_read: 0.3 }, canonical_model_id: 'anthropic/claude-sonnet-4.6' } } },
 };
-const acpOpts = (exe = 'agy.exe') => ({ find: (n) => (n === exe.replace(/\.exe$/, '') ? exe : null), start: (_cmd, args, o) => spawn(process.execPath, [FAKE_ACP, ...args], o), fetchJSON: async () => ACP_DEV });
+const acpOpts = (exe = 'kimi.exe') => ({ find: (n) => (n === exe.replace(/\.exe$/, '') ? exe : null), start: (_cmd, args, o) => spawn(process.execPath, [FAKE_ACP, ...args], o), fetchJSON: async () => ACP_DEV });
 async function viaFakeAcp(id, mode, body, opts = {}) {
   const log = path.join(tempDir('fake-acp-'), 'call.json');
   const keep = { mode: process.env.FAKE_ACP_MODE, log: process.env.FAKE_ACP_LOG, or: process.env.OPENROUTER_API_KEY, gk: process.env.GEMINI_API_KEY };
@@ -927,40 +927,76 @@ async function viaFakeAcp(id, mode, body, opts = {}) {
     for (const [k, v] of [['FAKE_ACP_MODE', keep.mode], ['FAKE_ACP_LOG', keep.log], ['OPENROUTER_API_KEY', keep.or], ['GEMINI_API_KEY', keep.gk]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 }
-const ACP_BODY = { ...CLAUDE_BODY, model: 'antigravity-local/gemini-4-carbon', reasoning: { effort: 'xhigh' } };
+// The generic ACP tests run as Kimi Code (a plan sign-in); Antigravity has its own tests (API key / Google Cloud only).
+const ACP_BODY = { ...CLAUDE_BODY, model: 'kimi-local/gemini-4-carbon', reasoning: { effort: 'xhigh' } };
 
-test('ACP sources: all eight subscription-login CLIs register, list grouped models with models.dev prices, and map effort levels', async () => {
-  for (const id of ['antigravity-local', 'codex-local', 'gemini-local', 'copilot-local', 'cursor-local', 'droid-local', 'kimi-local', 'qwen-local']) {
+test('ACP sources: the seven coding CLIs register, list grouped models with models.dev prices, and map effort levels', async () => {
+  for (const id of ['antigravity-local', 'codex-local', 'copilot-local', 'cursor-local', 'droid-local', 'kimi-local', 'qwen-local']) {
     assert.ok(ACP_IDS.includes(id) && SOURCE_IDS.includes(id), id);
     assert.equal(ACP_SOURCES[id].local, true);
   }
+  assert.ok(!SOURCE_IDS.includes('gemini-local'), 'Gemini CLI is gone (Google retired it for personal accounts)');
   assert.deepEqual(findAcpExe('antigravity-local', (n) => (n === 'agy_acp_server' ? '/bin/agy_acp_server.exe' : null)), { exe: '/bin/agy_acp_server.exe', app: 'agy_acp_server' }, 'Antigravity falls back to the standalone ACP registry binary');
   assert.deepEqual(ACP_SOURCES['antigravity-local'].acpArgs('/bin/agy.exe'), ['acp']);
   assert.deepEqual(ACP_SOURCES['antigravity-local'].acpArgs('C:\\agy\\agy_acp_server.exe'), []);
 
-  const list = await acpModels('antigravity-local', acpOpts());
+  const list = await acpModels('kimi-local', acpOpts());
   assert.deepEqual(list.map((m) => [m.id, m.maker, m.plan, m.planLabel, m.ctx, m.status]), [
-    ['antigravity-local/gemini-4-carbon', 'google', 'plan', 'Antigravity', 1000000, null],
-    ['antigravity-local/claude-sonnet-4-6', 'anthropic', 'plan', 'Antigravity', 200000, null],
-    ['antigravity-local/old-preview', 'google', 'plan', 'Antigravity', null, 'deprecated'],
+    ['kimi-local/gemini-4-carbon', 'google', 'plan', 'Kimi', 1000000, null],
+    ['kimi-local/claude-sonnet-4-6', 'anthropic', 'plan', 'Kimi', 200000, null],
+    ['kimi-local/old-preview', 'moonshotai', 'plan', 'Kimi', null, 'deprecated'],
   ]);
   assert.deepEqual([list[0].in, list[0].listPrice, list[1].listPrice], [['text', 'image'], [1.25, 10], [3, 15]]);
-  assert.equal(sameOnOpenRouter('antigravity-local/claude-sonnet-4-6', [{ id: 'anthropic/claude-sonnet-4.6', tools: true }], list[1]), 'anthropic/claude-sonnet-4.6');
+  assert.equal(sameOnOpenRouter('kimi-local/claude-sonnet-4-6', [{ id: 'anthropic/claude-sonnet-4.6', tools: true }], list[1]), 'anthropic/claude-sonnet-4.6');
   assert.deepEqual([acpEffort({ effort: 'xhigh' }, list[0].variants), acpEffort({ enabled: false }, list[0].variants)], ['Extra', 'Low']);
 
-  // Signed-out ACP CLI points the user to its login command; with an env API key it authenticates as paid.
-  const keepMode = process.env.FAKE_ACP_MODE, keepKey = process.env.GEMINI_API_KEY;
+  // A signed-out ACP CLI points the user to its login command.
+  const keep = { mode: process.env.FAKE_ACP_MODE, gk: process.env.GEMINI_API_KEY, gp: process.env.GOOGLE_CLOUD_PROJECT, gl: process.env.GOOGLE_CLOUD_LOCATION };
   try {
-    process.env.FAKE_ACP_MODE = 'signedout'; delete process.env.GEMINI_API_KEY;
-    const err = await acpModels('antigravity-local', acpOpts()).catch((x) => x);
+    process.env.FAKE_ACP_MODE = 'signedout'; delete process.env.GEMINI_API_KEY; delete process.env.GOOGLE_CLOUD_PROJECT; delete process.env.GOOGLE_CLOUD_LOCATION;
+    const err = await acpModels('kimi-local', acpOpts()).catch((x) => x);
     assert.equal(failureKind(err), 'auth');
-    assert.match(err.message, /agy acp --login/);
-    process.env.FAKE_ACP_MODE = 'envkey'; process.env.GEMINI_API_KEY = 'AIza-test-key';
-    const paid = await acpModels('antigravity-local', acpOpts());
-    assert.deepEqual([paid[0].plan, paid[0].price], ['paid', [1.25, 10]]);
+    assert.match(err.message, /Run "kimi login"/);
   } finally {
-    if (keepMode === undefined) delete process.env.FAKE_ACP_MODE; else process.env.FAKE_ACP_MODE = keepMode;
-    if (keepKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = keepKey;
+    for (const [k, v] of [['FAKE_ACP_MODE', keep.mode], ['GEMINI_API_KEY', keep.gk], ['GOOGLE_CLOUD_PROJECT', keep.gp], ['GOOGLE_CLOUD_LOCATION', keep.gl]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test('Google Antigravity: only a Gemini API key or Google Cloud, never the personal sign-in (Google’s terms); too old says update', async () => {
+  const def = ACP_SOURCES['antigravity-local'];
+  const keep = { mode: process.env.FAKE_ACP_MODE, log: process.env.FAKE_ACP_LOG, gk: process.env.GEMINI_API_KEY, gp: process.env.GOOGLE_CLOUD_PROJECT, gl: process.env.GOOGLE_CLOUD_LOCATION };
+  const agy = (env, mode = 'normal') => { process.env.FAKE_ACP_MODE = mode; let started = 0; const o = acpOpts('agy.exe'); return { started: () => started, run: acpModels('antigravity-local', { ...o, env, start: (...a) => { started++; return o.start(...a); } }).catch((x) => x) }; };
+  try {
+    for (const k of ['GEMINI_API_KEY', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']) delete process.env[k];
+    // Which sign-in: a Gemini key first, else Google Cloud with a project and a location, else none (null).
+    assert.equal(authFor(def, {}), null);
+    assert.equal(authFor(def, { GEMINI_API_KEY: 'AIza-x' }), 'gemini-api-key');
+    assert.equal(authFor(def, { GOOGLE_CLOUD_PROJECT: 'p' }), null, 'a project without a location is not enough');
+    assert.equal(authFor(def, { GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1' }), 'agent-platform');
+    assert.equal(authFor(ACP_SOURCES['kimi-local'], {}), undefined, 'other CLIs sign in as before');
+    // No allowed sign-in: nothing starts, and the message says why and what to add.
+    const none = agy({});
+    const e = await none.run;
+    assert.equal(none.started(), 0, 'agy never starts, so its cached personal sign-in is never used');
+    assert.equal(failureKind(e), 'auth');
+    assert.match(e.message, /needs a Gemini API key \(⚙ Settings → Providers → Google Gemini\) or Google Cloud.*Google’s terms don’t allow its personal Google sign-in/);
+    // With a key: QuorX signs in with it before opening a session (never cached_token / oauth-personal), billed per call.
+    const log = path.join(tempDir('fake-acp-'), 'call.json'); process.env.FAKE_ACP_LOG = log;
+    const paid = await agy({ GEMINI_API_KEY: 'AIza-test-key' }, 'envkey').run;
+    assert.ok(Array.isArray(paid), paid?.message);
+    assert.deepEqual([paid[0].plan, paid[0].price], ['paid', [1.25, 10]]);
+    const asked = JSON.parse(fs.readFileSync(log, 'utf8')).requests.map((r) => r.method === 'authenticate' ? `authenticate:${r.params.methodId}` : r.method);
+    assert.deepEqual(asked.slice(0, 3), ['initialize', 'authenticate:gemini-api-key', 'session/new']);
+    assert.ok(!asked.some((m) => /cached_token|oauth-personal/.test(m)));
+    // Google Cloud asked of an agy that doesn't offer it: update it.
+    const cloud = await agy({ GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: 'us-central1' }).run;
+    assert.match(cloud.message, /doesn’t offer the agent-platform sign-in QuorX needs\. Update it with "agy update"/);
+    // An Antigravity CLI from before its ACP mode (1.4.x refuses "acp") says to update it, not "unexpected argument".
+    const old = await agy({ GEMINI_API_KEY: 'AIza-test-key' }, 'old').run;
+    assert.equal(old.kind, 'notinstalled');
+    assert.match(old.message, /^Google Antigravity on this PC is too old for QuorX: it has no ACP mode yet \(it needs 1\.5\.0 or newer\)\. Update it with "agy update"/);
+  } finally {
+    for (const [k, v] of [['FAKE_ACP_MODE', keep.mode], ['FAKE_ACP_LOG', keep.log], ['GEMINI_API_KEY', keep.gk], ['GOOGLE_CLOUD_PROJECT', keep.gp], ['GOOGLE_CLOUD_LOCATION', keep.gl]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
 
@@ -988,21 +1024,21 @@ test('ACP built-in tools: a web search, a page, a command, a file read and a fil
 
 test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied native permissions, zero-usage fallback and Stop', async () => {
   { // Streams thought + text, reads <quorx_call>, sends base64 pictures, lowers yolo mode to ask, and strips OPENROUTER_API_KEY
-    const { r, e, call, shown, thought, prepped } = await viaFakeAcp('antigravity-local', 'normal', ACP_BODY);
+    const { r, e, call, shown, thought, prepped } = await viaFakeAcp('kimi-local', 'normal', ACP_BODY);
     assert.equal(e, undefined, e?.message);
-    assert.deepEqual([r.text, shown, thought, r.finishReason, r.provider], ['Building now.', 'Building now.\n', 'Plan via ACP.', 'tool_calls', 'Google Antigravity']);
+    assert.deepEqual([r.text, shown, thought, r.finishReason, r.provider], ['Building now.', 'Building now.\n', 'Plan via ACP.', 'tool_calls', 'Moonshot through Kimi Code']);
     assert.deepEqual(r.toolCalls.map((c) => [c.function.name, c.function.arguments]), [['write_file', '{"path":"app.js"}']]);
     assert.ok(prepped.includes('write_file'), 'streaming <quorx_call> feeds onCall');
     assert.deepEqual([r.usage.prompt_tokens, r.usage.completion_tokens, r.usage.prompt_tokens_details?.cached_tokens], [500, 60, 200]);
     assert.equal(call.openrouter, false);
-    assert.match(call.cwd, /antigravity-local$/);
+    assert.match(call.cwd, /kimi-local$/);
     const sets = call.requests.filter((x) => x.method === 'session/set_config_option').map((x) => [x.params.configId, x.params.value]);
     assert.deepEqual(sets, [['mode', 'ask'], ['model', 'gemini-4-carbon'], ['thinking', 'Extra']]);
     const promptReq = call.requests.find((x) => x.method === 'session/prompt');
     assert.deepEqual(promptReq.params.prompt.filter((p) => p.type === 'image'), [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]);
   }
   { // Zero-usage ACP servers (agy_acp_server) still get estimated tokens so plan_cost is priced from models.dev
-    const { r, e } = await viaFakeAcp('antigravity-local', 'nousage', ACP_BODY);
+    const { r, e } = await viaFakeAcp('kimi-local', 'nousage', ACP_BODY);
     assert.equal(e, undefined, e?.message);
     assert.equal(r.usage.tokens_estimated, true);
     assert.ok(r.usage.prompt_tokens > 0 && r.usage.completion_tokens > 0);
@@ -1025,7 +1061,7 @@ test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied nati
     const wsOff = await viaFakeAcp('cursor-local', 'websearch', { ...ACP_BODY, model: 'cursor-local/grok-4.7' }, { exe: 'cursor-agent.exe' });
     assert.match(wsOff.e?.message || '', /reached for a built-in tool \(Web search[^)]*\), which QuorX keeps off\. This chat has no web access: turn on Browser/);
     assert.match(wsOff.call.requests.filter((r) => r.method === 'session/prompt').at(-1)?.params?.prompt?.[0]?.text || '', /\[QuorX\] Your last answer tried a built-in web search/, 'the second go is told to answer without the web');
-    const stuck = await viaFakeAcp('antigravity-local', 'perm_always', ACP_BODY);
+    const stuck = await viaFakeAcp('kimi-local', 'perm_always', ACP_BODY);
     assert.equal(failureKind(stuck.e), 'shape');
     assert.match(stuck.e.message, /run_command/);
     assert.deepEqual(stuck.call.permOutcomes[0], { outcome: 'selected', optionId: 'deny' });
@@ -1034,7 +1070,7 @@ test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied nati
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 400);
     const t0 = Date.now();
-    const stopped = await viaFakeAcp('antigravity-local', 'hang', ACP_BODY, { signal: ac.signal });
+    const stopped = await viaFakeAcp('kimi-local', 'hang', ACP_BODY, { signal: ac.signal });
     assert.ok(stopped.e && Date.now() - t0 < 8000);
   }
 });
