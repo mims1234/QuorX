@@ -15024,6 +15024,7 @@ function renderPaneTabs(c) {
   const t = G.view.ftab ? null : paneTab();
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   drawFileTabs(box);
+  drawPageTabs(box, c);
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
   // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
@@ -15142,7 +15143,8 @@ function wireAreaChrome() {
     b.ondragend = wsDropHide;
     b.oncontextmenu = (e) => wsTabMenu(e, area, { type: 'pane', tab: b.dataset.tab, from: area });
   }
-  for (const b of $$a('#paneTabs [data-pa]')) b.onclick = (e) => (b.dataset.pa === 'max' ? wsMaxToggle(area.gid) : wsGroupMenu(Object.assign(e, { anchor: b }), area));
+  for (const b of $$a('#paneTabs [data-pa]')) b.onclick = (e) => (b.dataset.pa === 'max' ? wsMaxToggle(area.gid) : b.dataset.pa === 'add' ? paneAddMenu(Object.assign(e, { anchor: b }), area) : wsGroupMenu(Object.assign(e, { anchor: b }), area));
+  wirePageTabs(area);
   // A double-click on the empty part of the strip maximises the group (and restores it).
   $('#paneTabs').ondblclick = (e) => { if (e.target === e.currentTarget || e.target.classList.contains('pt-spacer')) wsMaxToggle(area.gid); };
   // Files open as tabs: click to show, double-click to keep a preview, × or middle-click to close, drag or right-click
@@ -15256,17 +15258,8 @@ function renderBrowser(c) {
   const ex = $('.bv-ext', bar); if (ex) ex.onclick = () => window.ohDesktop.openExternal(t.url);
   wireDownloads(bar);
   const mb = $('.bv-mode', bar); if (mb) mb.onclick = () => { t.mode = t.mode === 'frame' ? 'remote' : 'frame'; t.opened = null; renderPane(); };
-  body.innerHTML = `<div class="bwin"><div class="btabs" role="tablist" aria-label="Browser tabs">${list.map((x) => `<span class="btab ${x.sid === t?.sid ? 'on' : ''} ${x.agent ? 'agent' : ''} ${!x.agent && lentChatOf(x.sid) ? 'lent' : ''}" data-sid="${esc(x.sid)}" role="tab" ${x.agent ? '' : 'draggable="true" '}title="${esc(x.url || 'New tab')}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="bt-title">${esc(x.agent ? (x.title || 'Agent') : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 24) : 'New tab')))}</span>${DESK ? sndMark(x) : ''}<button type="button" class="bt-x" data-close="${esc(x.sid)}" title="Close this tab" aria-label="Close tab">×</button></span>`).join('')}<button type="button" class="btab-new" title="New tab">＋</button></div><div class="bstage"></div></div>`;
-  for (const el of body.querySelectorAll('.btab')) el.onclick = (e) => { if (e.target.closest('.bt-x')) return; G.bActive = el.dataset.sid; renderPane(); };
-  wireSndMarks();
-  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.ondragstart = (e) => { e.dataTransfer.setData('application/x-quorx-tab', el.dataset.sid); e.dataTransfer.effectAllowed = 'link'; };
-  // Right-click one of your tabs: give it to this chat's agent (or take it back), or close it.
-  for (const el of body.querySelectorAll('.btab[draggable="true"]')) el.oncontextmenu = (e) => {
-    const sid = el.dataset.sid, to = lentChatOf(sid);
-    popMenu(e, [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)], ['✕ Close tab', () => closeBTab(c, sid)]]);
-  };
-  for (const b of body.querySelectorAll('.bt-x')) b.onclick = () => closeBTab(c, b.dataset.close);
-  $('.btab-new', body).onclick = () => { newBTab(c.projectId, ''); renderPane(); $('#paneUrl').focus(); };
+  // The pages themselves are tabs in the group's strip now (drawPageTabs); here only the page.
+  body.innerHTML = '<div class="bwin"><div class="bstage"></div></div>';
   const stage = $('.bstage', body);
   if (!t || !t.url) return newTabPage(c, stage);
   if (t.commenting) return commentStage(c, t, stage);
@@ -15283,6 +15276,79 @@ function renderBrowser(c) {
   const img = $('.ub-shot', stage); if (t.shot) img.src = t.shot;
   wireUbView(t);
   if (!t.agent && t.opened !== t.url) { t.opened = t.url; ubCall('open', { url: t.url }); } else ubCall('look');
+}
+// ---------- browser pages as tabs, and ＋ in each group's strip ----------
+// Each browser page is a tab in the group's own strip (🌐 your pages, 🤖 the agent's page), in place of the Browser
+// tab's inner page strip; the page's address bar, back / forward, device size, lending and everything inside a page
+// are as they were. Each page tab says whose it is (the agent's page: its chat; your pages: the project), shows 🔊
+// while it plays sound (click: mute, 🔇) in the desktop app, and has Mute tab / Give to agent / Close on right-click.
+// With no page open, the Browser tab stands in for them. ＋ at the end of the strip opens any kind of tab here.
+const pageLabel = (x) => (x.agent ? (x.title || "Agent's page") : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 28) : 'New tab')));
+function pageOwner(c, x) {
+  if (x.agent) { const ch = G.open.get(String(x.sid).replace(/^agent-/, '')) || c; return ch?.title || 'its chat'; }
+  const to = lentChatOf(x.sid); if (to) return `lent to ${(G.open.get(to) || G.chats.find((y) => y.id === to))?.title || 'a chat'}`;
+  return 'Project';
+}
+function drawPageTabs(box, c) {
+  const holder = box && $('.pa-pages', box); if (!holder) return;
+  const list = c ? browserTabs(c) : [], on = !!G.view.browser && !G.view.ftab, cur = on && c ? activeBTab(c)?.sid : null;
+  const snd = DESK ? JSON.stringify(list.map((x) => G.sound?.tabs?.[x.sid] || null)) : '';
+  const sig = JSON.stringify([list.map((x) => [x.sid, pageLabel(x), x.agent, x.locked, pageOwner(c, x)]), cur, snd]);
+  const bt = $('[data-tab="browser"]', box); if (bt) bt.hidden = list.length > 0;
+  if (holder.dataset.sig === sig) return;
+  holder.dataset.sig = sig;
+  holder.innerHTML = list.map((x) => {
+    const own = pageOwner(c, x), label = pageLabel(x);
+    return `<span class="pa-ptab ${x.sid === cur ? 'on' : ''} ${x.agent ? 'agent' : ''}" role="tab" tabindex="${x.sid === cur ? 0 : -1}" aria-selected="${x.sid === cur}" data-sid="${esc(x.sid)}" ${x.agent ? '' : 'draggable="true"'} title="${esc(`${label}${x.url ? `\n${x.url}` : ''}\n· ${own}`)}">${x.agent ? `<i class="bt-dot ${x.locked ? 'live' : ''}"></i>🤖` : '🌐'}<span class="pp-name">${esc(clip(label, 26))}</span><span class="pp-own">· ${esc(clip(own, 18))}</span>${DESK ? sndMark(x) : ''}${x.agent ? '' : `<button type="button" class="pp-x" data-close="${esc(x.sid)}" tabindex="-1" aria-label="Close ${esc(label)}">×</button>`}</span>`;
+  }).join('');
+}
+// A page's title or sound changed: every group's page tabs (each group draws for its own chat).
+function pageTabsRefresh() { eachArea(() => { const box = $('#paneTabs'); if (box) drawPageTabs(box, focused()); }); }
+function showPageTab(sid) { G.bActive = sid; setPaneTab('browser'); }
+function pageTabMenu(e, c, sid) {
+  const t = browserTabs(c).find((x) => x.sid === sid); if (!t) return;
+  const muted = !!G.sound?.tabs?.[sid]?.muted, to = !t.agent && lentChatOf(sid);
+  popMenu(e, [
+    ...(DESK ? [[muted ? '🔊 Unmute tab' : '🔇 Mute tab', () => setSound('tab', { sid, muted: !muted })]] : []),
+    ...(DESK && t.agent ? [[G.sound?.agentMuted ? "🔊 Let the agent's pages play sound" : "🔇 Mute the agent's pages", () => setSound('set', { agentMuted: !G.sound?.agentMuted })]] : []),
+    ...(t.agent ? [] : [to ? ['↩ Take back from the agent', () => takeBackTab(to)] : ['🤖 Give to agent in this chat', () => lendTab(c, sid)]]),
+    ...(t.agent ? [] : [null, ['✕ Close tab', () => closeBTab(c, sid)]]),
+  ]);
+}
+function wirePageTabs(area) {
+  const holder = $('#paneTabs .pa-pages'); if (!holder || holder.dataset.wired) return;
+  holder.dataset.wired = '1';
+  const tabOf = (e) => e.target.closest('.pa-ptab');
+  holder.addEventListener('click', (e) => {
+    const t = tabOf(e); if (!t) return;
+    const c = focused(); if (!c) return;
+    if (e.target.closest('.bt-snd')) { e.stopPropagation(); const sid = t.dataset.sid; return setSound('tab', { sid, muted: !G.sound?.tabs?.[sid]?.muted }); }
+    if (e.target.closest('.pp-x')) return closeBTab(c, t.dataset.sid);
+    showPageTab(t.dataset.sid);
+  });
+  holder.addEventListener('auxclick', (e) => { const t = tabOf(e); if (t && e.button === 1 && !t.classList.contains('agent')) { e.preventDefault(); closeBTab(focused(), t.dataset.sid); } });
+  holder.addEventListener('mousedown', (e) => { if (e.button === 1 && tabOf(e)) e.preventDefault(); });
+  holder.addEventListener('contextmenu', (e) => { const t = tabOf(e), c = focused(); if (t && c) pageTabMenu(e, c, t.dataset.sid); });
+  holder.addEventListener('keydown', (e) => { const t = tabOf(e); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); showPageTab(t.dataset.sid); } });
+  // Drag one of your pages into a chat's message box (as before) to hand it over.
+  holder.addEventListener('dragstart', (e) => { const t = tabOf(e); if (!t || t.classList.contains('agent')) return; e.dataTransfer.setData('application/x-quorx-tab', t.dataset.sid); e.dataTransfer.effectAllowed = 'link'; });
+}
+// ＋: any kind of tab, here (this group).
+function paneAddMenu(e, area) {
+  const c = focused();
+  const here = (fn) => () => { inArea(area, fn); };
+  popMenu(e, [
+    ['💬 New chat', () => newChat(qfPid())],
+    ...(c ? [
+      ['🌐 Browser page', here(() => { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl')?.focus()); })],
+      ['⌨ Terminal', here(() => openTerminal(c, null, 'term'))],
+      ['📁 Files', here(() => setPaneTab('files'))],
+      ['📄 Plan', here(() => setPaneTab('art'))],
+      ['🧭 Steps', here(() => setPaneTab('trace'))],
+    ] : []),
+    null,
+    ['⚙ Settings', () => openSettings()],
+  ]);
 }
 // ---------- device sizes (the Browser tab's 📱 menu, public/devices.js) ----------
 // One of your tabs can show its page at a phone's, tablet's or laptop's size, or one of your own, turned sideways or
@@ -16144,7 +16210,7 @@ async function ubCall(op, a = {}) {
   Object.assign(t, { url: res.url, title: res.title, shot: res.shot || t.shot, w: res.w, h: res.h, locked: res.locked });
   if (lockChanged) return renderPane();
   if (res.shot) $('#paneBody .ub-shot').src = res.shot;
-  const tt = $(`#paneBody .btab[data-sid="${CSS.escape(t.sid)}"] .bt-title`); if (tt && !t.agent) tt.textContent = res.title || res.url.replace(/^https?:\/\//, '').slice(0, 24);
+  pageTabsRefresh(); // the page tabs show its new title
   setUrlBar(res.url); ubStatus('');
 }
 function wireUbView(t) {
@@ -16432,7 +16498,7 @@ if (DESK) {
       Object.assign(t, { url: ev.url || t.url, opened: ev.url || t.opened, title: ev.title || t.title, loading: ev.loading, canBack: ev.canBack, canForward: ev.canForward });
       eachArea(() => {
         const active = G.view.browser && G.dsk?.sid === t.sid;
-        const tt = $(`#paneBody .btab[data-sid="${CSS.escape(t.sid)}"] .bt-title`); if (tt) tt.textContent = t.title || t.url.replace(/^https?:\/\//, '').slice(0, 24);
+        pageTabsRefresh(); // the page tabs show its new title
         if (!active) return;
         if (urlChanged || document.activeElement !== $('#paneUrl')) setUrlBar(t.url);
         const real = $('#appBar .bv-real'); if (real) { real.textContent = `● real tab${t.loading ? ' · loading…' : ''}`; real.classList.toggle('loading', !!t.loading); }
@@ -16481,6 +16547,7 @@ function sndRefresh() {
   const c = focused();
   eachArea(() => { const t = c && G.view.browser && activeBTab(c), b = $('#appBar .bv-snd'); if (b && t) { b.outerHTML = sndBtnHTML(t); wireSnd($('#appBar'), t); } });
   const t = c && G.view.browser && activeBTab(c);
+  pageTabsRefresh();
   for (const el of document.querySelectorAll('#paneBody .btab[data-sid]')) {
     const now = el.querySelector('.bt-snd'), html = sndMark({ sid: el.dataset.sid });
     if (now) now.remove();
@@ -16540,7 +16607,7 @@ function deskAgentEvent(ev) {
   if (c?.id === chatId) eachArea(() => {
     if (!G.view.browser || G.dsk?.sid !== ev.sid) return;
     setUrlBar(a.url);
-    const tt = $(`#paneBody .btab[data-sid="${CSS.escape(ev.sid)}"] .bt-title`); if (tt) tt.textContent = a.title || 'Agent';
+    pageTabsRefresh(); // the page tabs show its new title
     const real = $('#appBar .bv-real'); if (real) { real.textContent = `● real tab${a.loading ? ' · loading…' : ''}`; real.classList.toggle('loading', !!a.loading); }
   });
 }

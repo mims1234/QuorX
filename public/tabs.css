@@ -1,0 +1,26 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* Tabs everywhere (shell phase 3): browser pages as tabs in each group's strip, their owner, sound and ＋. Laid out
+   like the file tabs beside them (workspace.css); the page itself and its address bar are unchanged. */
+#pane .pane-tabs .pa-pages { display: inline-flex; align-items: stretch; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+#pane .pane-tabs .pa-pages:empty { display: none; }
+#pane .pane-tabs .pa-ptab { display: inline-flex; align-items: center; gap: 5px; min-width: 56px; flex: 0 1 auto; max-width: 230px; height: 34px; padding: 0 4px 0 9px; border-left: 1px solid var(--line); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+#pane .pane-tabs .pa-ptab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ptab.on { min-width: 90px; flex-shrink: 0; color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ptab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#pane .pane-tabs .pa-ptab .pp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Whose page it is, after its title in muted text; it goes first when the strip is short of room. */
+#pane .pane-tabs .pa-ptab .pp-own { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dim, var(--muted)); font-weight: 400; flex: 0 2 auto; }
+#pane .pane-tabs .pa-ptab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; line-height: 1; opacity: 0; cursor: pointer; }
+#pane .pane-tabs .pa-ptab:hover .pp-x, #pane .pane-tabs .pa-ptab.on .pp-x { opacity: 1; }
+#pane .pane-tabs .pa-ptab .pp-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+#pane .pane-tabs .pa-ptab .bt-snd { width: 20px; height: 20px; min-height: 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; flex: none; }
+#pane .pane-tabs .pa-ptab .bt-snd.off { color: var(--warn, #d9a441); }
+#pane .pane-tabs .pa-ptab .bt-snd:hover { background: var(--panel-3, var(--panel-2)); }
+#pane .pane-tabs .pa-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#pane .pane-tabs .pa-ptab .bt-dot { flex: none; }
+#pane .pane-tabs [data-tab="browser"][hidden] { display: none !important; }
+#pane .pane-tabs .pa-add { font-size: 15px; }
+/* The Browser view without its inner page strip: the page fills the body. */
+#paneBody .bwin > .bstage:first-child { border-top: 0; }
+#pane .pane-tabs .pa-ptab { max-width: 260px; }
+#pane .pane-tabs .pa-ptab .pp-name { flex: 0 1 auto; max-width: 140px; }
