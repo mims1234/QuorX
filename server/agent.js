@@ -1314,6 +1314,9 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     const { read, write } = cacheTokens(u);
     if (read != null) { m.cacheRead = (m.cacheRead || 0) + read; m.cachedIn = (m.cachedIn || 0) + (u.prompt_tokens || 0); stats.cacheRead = (stats.cacheRead || 0) + read; stats.cachedIn = (stats.cachedIn || 0) + (u.prompt_tokens || 0); }
     if (write) { m.cacheWrite = (m.cacheWrite || 0) + write; stats.cacheWrite = (stats.cacheWrite || 0) + write; }
+    // The newest call of each model: how much of that model's context it used. The Steps pane shows it for every model
+    // a reply used (the chat model and each Quorium role), not only the chat's own.
+    if (u.prompt_tokens > 0) m.last = { in: u.prompt_tokens, out: u.completion_tokens || 0, ...(read != null ? { read, write: write || 0 } : {}) };
     spendNow();
   };
   const spendNow = () => {

@@ -20,6 +20,7 @@ import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey,
 import { setupCheck, runFix } from './server/setup-check.js';
 import { startSignIn, signInStatus, cancelSignIn, finishByCallback, finishWithCode, callbackPage } from './server/oauth.js';
 import { runAgent, answerApproval, answerQuestion, answerSecret, answerBudget, setRunApproval, setRunAccess, steerRun, setRunReading, setRunVideo, setRunLimitBack, holdCard, DEFAULTS, MEDIA, briefFor, briefForChat, compactChat, nextStepsFor, REVIEW_MODEL, HELPER_MODEL, REVIEW_ALT, REVIEW_STRONG, REVIEW_STRONG_ALT, sideQuestion } from './server/agent.js';
+import { readAloudPiece } from './server/readaloud.js';
 import { reviewCode, pickReviewer } from './server/codereview.js';
 import { loadHooks, saveHooks, HOOK_EVENTS, HOOK_WHEN, cleanHook, hookLine, safeHookFile } from './server/hooks.js';
 import { projectEnv } from './server/projectsecrets.js';
@@ -1309,6 +1310,13 @@ const server = http.createServer(async (req, res) => {
       const allowed = DEFAULTS.tools.listen.models;
       const model = String(b.model || allowed[0]);
       try { const r = await transcribe({ model, audio: String(b.audio || ''), format: 'wav' }); return json(res, 200, { text: r.text, cost: r.usage.cost || 0, ms: r.ms, model }); }
+      catch (e) { return json(res, 200, { error: e.message }); }
+    }
+    // 🔊 Read aloud with an AI voice: one piece of a reply, read by the chat's Voice model (server/readaloud.js).
+    if (req.method === 'POST' && url.pathname === '/api/read-aloud') {
+      if (!currentKey()) return json(res, 200, { error: 'AI voices run on OpenRouter: add a key in ⚙ Settings → Providers, or read with the PC voice.' });
+      const b = JSON.parse(await readBody(req, 1e5) || '{}');
+      try { return json(res, 200, await readAloudPiece({ text: b.text, model: b.model, voice: b.voice })); }
       catch (e) { return json(res, 200, { error: e.message }); }
     }
     if (req.method === 'POST' && url.pathname === '/api/approve') {
