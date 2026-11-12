@@ -17585,19 +17585,33 @@ async function readAloudAI(m, el, c, parts, body) {
 window.addEventListener('pagehide', stopReading);
 
 // ---------- "restart the harness" notice: its server code changed after it started ----------
+// The page's newest file when this page loaded (from /api/config, else the first check): a newer one later means this
+// window runs old page code (a branch switch, a pull, an edit), so ⟳ lights up for that too.
+let pageAtLoad = null;
+const RESTART_TIP = { restartBtn: 'Restart the harness (loads server changes)', railRestart: 'Restart the harness', wrRestart: 'Restart the harness (loads server changes)' };
 async function checkStale() {
   const r = await getJ('/api/stale');
   const el = $('#staleNote'); if (!el) return;
   // An older harness has no /api/stale at all: that is stale too (it predates this check).
   const old = r && r.error && /not found|404/i.test(r.error);
-  const stale = old || r?.stale;
+  if (pageAtLoad == null) pageAtLoad = G.cfg?.page?.at || r?.page?.at || null;
+  const pageNew = !old && pageAtLoad && r?.page?.at > pageAtLoad + 1000 ? r.page.file : '';
+  const stale = old || r?.stale || pageNew;
   el.hidden = !stale;
-  if (stale) noteAdd({ kind: 'warn', title: 'Restart the harness to load the latest changes', text: old ? 'It started before its latest server changes' : `${r.stale.file || 'Its server code'} changed after it started`, key: 'stale' }, { once: true });
-  for (const b of ['#restartBtn', '#railRestart', '#wrRestart'].map((q) => $(q)).filter(Boolean)) { b.classList.toggle('stale', !!stale); if (stale) b.title = 'Restart needed: the harness has newer server code than it is running. Click to restart.'; }
-  if (stale) el.title = old ? 'The harness was started before its latest server changes. Restart it (stop it, then run npm start) to load them; pages already load fresh.' : `${r.stale.file} changed after the harness started. Restart it (stop it, then run npm start) to load the latest server code; pages already load fresh.`;
+  const file = old ? '' : r?.stale?.file || pageNew;
+  const what = old ? 'The harness started before its latest server changes' : r?.stale ? `${file} changed after the harness started` : `${file} changed after this window opened`;
+  if (stale) noteAdd({ kind: 'warn', title: 'Restart the harness to load the latest changes', text: what, key: 'stale' }, { once: true });
+  for (const b of ['#restartBtn', '#railRestart', '#wrRestart'].map((q) => $(q)).filter(Boolean)) {
+    b.classList.toggle('stale', !!stale);
+    b.title = stale ? `Restart needed: ${what}. Click to restart and reload.` : RESTART_TIP[b.id];
+  }
+  if (stale) el.title = `${what}. Restart to load the latest code (the window reloads with it).`;
 }
 setInterval(checkStale, 30000);
 setTimeout(checkStale, 1500);
+// Back to the window (after switching branches or editing in another app): checked at once, not up to 30 s later.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkStale(); });
+window.addEventListener('focus', () => checkStale());
 
 // ---------- the desktop app: real Chromium tabs in the Browser tab (desktop/main.js, desktop/preload.js) ----------
 // The page keeps the tab strip and address bar; the desktop app places a real browser view exactly over

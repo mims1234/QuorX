@@ -85,12 +85,25 @@ const STARTED = Date.now();
 // The version shown in the sidebar and Settings (package.json; the desktop release script keeps it in step).
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '?'; } })();
 const diagBundles = new Map(); // ⚙ About → Report a problem: built bundles waiting to be saved, by id
-function codeChanged() {
-  let latest = 0, file = '';
-  for (const f of [path.join(ROOT, 'server.js'), ...fs.readdirSync(path.join(ROOT, 'server')).filter((x) => x.endsWith('.js')).map((x) => path.join(ROOT, 'server', x))]) {
-    try { const t = fs.statSync(f).mtimeMs; if (t > latest) { latest = t; file = path.relative(ROOT, f).replaceAll('\\', '/'); } } catch { /* removed */ }
+// The newest file under a folder (subfolders too) matching `want`: { t, file } (file relative to the repo).
+function newestIn(dir, want, out = { t: 0, file: '' }) {
+  let ents = [];
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ents) {
+    const f = path.join(dir, e.name);
+    if (e.isDirectory()) { if (e.name !== 'node_modules' && !e.name.startsWith('.')) newestIn(f, want, out); continue; }
+    if (!want.test(e.name)) continue;
+    try { const t = fs.statSync(f).mtimeMs; if (t > out.t) { out.t = t; out.file = path.relative(ROOT, f).replaceAll('\\', '/'); } } catch { /* removed */ }
   }
-  return { started: STARTED, stale: latest > STARTED + 1000 ? { since: Math.round(latest), file } : null };
+  return out;
+}
+// Server code (server.js, server/ and its subfolders) newer than this process, and the page's newest file: a page
+// opened before that time runs old page code until it reloads (a branch switch or a pull changes both).
+function codeChanged() {
+  const srv = newestIn(path.join(ROOT, 'server'), /\.(m?js|json)$/);
+  try { const t = fs.statSync(path.join(ROOT, 'server.js')).mtimeMs; if (t > srv.t) { srv.t = t; srv.file = 'server.js'; } } catch { /* removed */ }
+  const page = newestIn(PUBLIC, /\.(html|m?js|css|svg|json)$/);
+  return { started: STARTED, stale: srv.t > STARTED + 1000 ? { since: Math.round(srv.t), file: srv.file } : null, page: { at: Math.round(page.t), file: page.file } };
 }
 if (!currentKey()) console.warn('!! No OpenRouter key yet: add one in the page (⚙ Settings → Providers) or set OPENROUTER_API_KEY in .env');
 startSampling();
