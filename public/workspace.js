@@ -493,13 +493,15 @@ export function migrateAreas(old, chats, have = new Set()) {
 // boxes, frames and terminals stay), file tabs go to the nearest slot, and the chats keep their tabs.
 const slot = (id, kind, w = 1) => ({ t: 'g', id, kind, w: w3(w) });
 export const LAYOUTS = {
+  // Single: every tab in one strip and one group; the chat and its pane share the space, the tab you pick in front.
+  single: { name: 'Single', tip: 'Every tab in one row: the chat, its steps, pages, terminals and files; the one you pick fills the space', root: split('row', [slot(CHAT_GROUP, null, 1), slot('s1', 'art', 1)]), single: true },
   build: { name: 'Build', tip: 'The chat on the left; the browser over the terminal on the right', root: split('row', [slot(CHAT_GROUP, null, 1.4), split('col', [slot('s1', 'browser'), slot('s2', 'term')])]), follow: 's1' },
   debug: { name: 'Debug', tip: 'The chat, its steps, and the browser over the terminal', root: split('row', [slot(CHAT_GROUP, null, 1.2), slot('s1', 'trace'), split('col', [slot('s2', 'browser'), slot('s3', 'term')])]), follow: 's2' },
   compare: { name: 'Compare', tip: 'Two chats side by side, each with its own browser below it', root: split('row', [split('col', [slot(CHAT_GROUP, null, 1.3), slot('s1', 'browser')]), split('col', [slot(CHAT2_GROUP, null, 1.3), slot('s2', 'browser')])]), follow: 's1', pins: { s1: 0, s2: 1 }, chats: 2 },
   review: { name: 'Review', tip: 'The chat and the project\'s files, to read what changed', root: split('row', [slot(CHAT_GROUP, null, 1), slot('s1', 'files', 1.3)]) },
   focus: { name: 'Focus', tip: 'Only the chat', root: split('row', [slot(CHAT_GROUP, null, 1.4), slot('s1', 'art')]), focus: true },
 };
-export const LAYOUT_ORDER = ['build', 'debug', 'compare', 'review', 'focus'];
+export const LAYOUT_ORDER = ['single', 'build', 'debug', 'compare', 'review', 'focus'];
 const SLOT_KINDS = new Set(['art', 'browser', 'trace', 'term', 'files']);
 /** A layout's shape, from what is on screen (Save layout as…). chats: the chat ids on screen, in order. */
 export function shapeOf(lay, { follow = null, pins = {}, chats = [], focus = false } = {}) {
