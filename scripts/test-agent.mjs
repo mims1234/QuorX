@@ -545,11 +545,14 @@ test('the context meter: % left of the window, amber at 25% or less, red at 8% o
 
 test('the context ring fills with what is used, and Steps lists every model the reply used with its own context', () => {
   const page = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf("document.addEventListener('click', (e) => {\n  const b = e.target.closest?.('.tcx-compact')", i);
+  const i = page.indexOf('const CTX_AMBER'), j = page.indexOf('// The same summary a reply writes on a long chat', i);
   assert.ok(i >= 0 && j > i);
-  const G = { byId: new Map([['main/m', { ctx: 1000000 }], ['rev/r', { ctx: 128000 }]]) };
-  const api = new Function('G', 'short', 'esc', 'USAGE_KIND', 'focused', 'wsStatusDraw', `${page.slice(i, j)}; return { contextNumbers, ctxRingSVG, contextModels, traceContextHTML };`)(
-    G, (s) => s, (s) => String(s), { reviewer: ['🔍', 'Reviewer'], decider: ['⚖️', 'Deciders'] }, () => null, () => {});
+  const G = { byId: new Map([['main/m', { ctx: 1000000 }], ['rev/r', { ctx: 128000 }]]), settings: { ui: {} } };
+  const uiOf = (S) => ({ stepsCtx: true, stepsCost: true, ...(S.ui || {}) });
+  const doc = { addEventListener() {}, querySelectorAll: () => [] };
+  let saved = 0;
+  const api = new Function('G', 'short', 'esc', 'USAGE_KIND', 'focused', 'wsStatusDraw', 'uiOf', 'document', 'savePrefs', `${page.slice(i, j)}; return { contextNumbers, ctxRingSVG, contextModels, traceContextHTML, setStepsFold, contextCardHTML };`)(
+    G, (s) => s, (s) => String(s), { reviewer: ['🔍', 'Reviewer'], decider: ['⚖️', 'Deciders'] }, () => null, () => {}, uiOf, doc, () => { saved++; });
   const dash = (svg) => Number(svg.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/g)[0].match(/"([\d.]+) ([\d.]+)"/).slice(1).reduce((a, b) => a / b));
   // 45k of 1M used: a thin ring (the sliver minimum), not a full one.
   const fresh = api.contextNumbers({ in: 45087, out: 241 }, 1000000);
@@ -573,6 +576,17 @@ test('the context ring fills with what is used, and Steps lists every model the 
   const html = api.traceContextHTML(c);
   assert.match(html, /Context by model/); assert.match(html, /Reviewer/); assert.match(html, /101k \/ 128k · 79%/);
   assert.match(html, /tcx-compact/);
+  // Open by default; ▸ folds it to its header, which still says the chat model's figure. Remembered in ui.stepsCtx.
+  assert.match(html, /class="trace-ctx tc-sec" data-fold="ctx"><button type="button" class="tc-head tc-fold" aria-expanded="true"/);
+  api.setStepsFold('ctx', false);
+  assert.equal(G.settings.ui.stepsCtx, false); assert.equal(saved, 1);
+  const folded = api.traceContextHTML(c);
+  assert.match(folded, /tc-sec folded/); assert.match(folded, /aria-expanded="false"/); assert.match(folded, /tcx-key tc-fold-only">main\/m · 5% used</);
+  api.setStepsFold('ctx', true);
+  // /context: the same rows and Compact, as a card, from the figures posted with it.
+  const card = api.contextCardHTML(c, { at: 1, ctx: { rows } });
+  assert.match(card, /Context for this chat/); assert.match(card, /101k \/ 128k · 79%/); assert.match(card, /Compact conversation/);
+  assert.match(api.contextCardHTML(c, { at: 1, ctx: { rows: [{ role: 'writer', model: 'main/m', u: api.contextNumbers(null, 0) }] } }), /Shows after the first reply/);
 });
 
 test('Compact by the context meter writes the same summary on demand, and says when there is nothing to compact', async () => {

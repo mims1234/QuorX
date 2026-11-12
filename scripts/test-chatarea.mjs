@@ -105,3 +105,19 @@ test('QuorX\'s own housekeeping is silent: no "moved to Pages" banner, no "reloa
   assert.match(page, /This chat has used its \$\$\{b\.budget\.toFixed\(2\)\} budget\./);
   assert.match(page, /The folder of “\$\{esc\(p\.name\)\}” is missing\./);
 });
+
+test('Steps: the cost block folds like the context block, both remembered and both in Settings; /context posts a card', () => {
+  const cost = between('function traceCostHTML(', '// ---------- zoom');
+  assert.match(cost, /const folded = !uiOf\(G\.settings\)\.stepsCost;/);
+  assert.match(cost, /class="tc-sec tc-cost-sec\$\{folded \? ' folded' : ''\}" data-fold="cost"/);
+  assert.match(cost, /<button type="button" class="tc-head tc-fold" aria-expanded="\$\{!folded\}"[^>]*><span><i class="tc-caret"[^`]*<b>\$\{money\(/, 'folded, the header keeps the reply\'s cost');
+  assert.match(page, /usageBtn: true, stepsCtx: true, stepsCost: true,/, 'both open by default');
+  assert.match(page, /stSwitch\('ui\.stepsCtx', U\.stepsCtx\)/); assert.match(page, /stSwitch\('ui\.stepsCost', U\.stepsCost\)/);
+  // /context: in the command list, drawn like /usage (a usage-role card, so never part of the agent's history).
+  assert.match(page, /\['context', 'How much of each model[^\n]*\(c\) => postContext\(c\)\],/);
+  assert.match(page, /if \(m\.role === 'usage' && m\.kind === 'context'\) \{/);
+  assert.match(page, /const m = \{ role: 'usage', kind: 'context', at: Date\.now\(\), ctx: \{ rows: contextModels\(c\) \} \};/);
+  // The command palette's Compact opens that card (the old ring button by Send is gone).
+  assert.match(page, /compact: \{ run: qfCmd\('context'\)/);
+  assert.doesNotMatch(page, /cmp-ctx-btn', qfChat/);
+});
