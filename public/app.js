@@ -487,6 +487,7 @@ const COMMANDS = [
   ['attach', 'Pick chats to attach as context (a checklist)', (c) => openCtxPicker(c)],
   ['review', 'Review the code changes for bugs: the last reply, uncommitted changes, or the branch', (c, arg) => codeReview(c, arg)],
   ['usage', 'This chat\'s cost per model, as a card only you see', (c) => postUsage(c)],
+  ['context', 'How much of each model\'s context this chat uses, with Compact, as a card only you see', (c) => postContext(c)],
   ['costs', 'What each project and chat has cost', () => openCosts()],
   ['schedule', 'Schedules: chats QuorX starts on its own (every weekday at 9, in an hour…)', () => openSchedules('new')],
   ['skills', 'List the skills the agent can load', (c) => showSkills(c)],
@@ -3636,14 +3637,18 @@ function traceCostHTML(c, m) {
   const sumCache = (list) => list.reduce((a, [, v]) => ({ cacheRead: a.cacheRead + (v.cacheRead || 0), cachedIn: a.cachedIn + (v.cachedIn || 0), cacheWrite: a.cacheWrite + (v.cacheWrite || 0) }), { cacheRead: 0, cachedIn: 0, cacheWrite: 0 });
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
   const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${provTag(id)}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  // The cost part folds to its header line (▸ and the reply's $) like the context part above it (ui.stepsCost).
+  const folded = !uiOf(G.settings).stepsCost;
   return `<div class="trace-cost">${traceContextHTML(c)}
-    <div class="tc-head"><span>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></div>
+    <div class="tc-sec tc-cost-sec${folded ? ' folded' : ''}" data-fold="cost">
+    <button type="button" class="tc-head tc-fold" aria-expanded="${!folded}" title="Show or hide what this reply cost (⚙ Settings → Window & layout → Steps)"><span><i class="tc-caret" aria-hidden="true"></i>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></button>
+    <div class="tc-body">
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     ${(() => { const bp = byProvider(models); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
     ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions; counts toward the chat's budget</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
-  </div>`;
+  </div></div></div>`;
 }
 // ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
 // In the terminal they change its text size only, as in an editor's terminal. Elsewhere, in the desktop app they zoom
@@ -4704,26 +4709,58 @@ function drawContextMeter(c) {
   drawStepsTabRing(c);
   wsStatusDraw(); // the status bar shows the same figure
 }
+// One model's line: who (chat model or the Quorium role), the model, a bar and "45k / 1M · 4%". Steps and /context.
+function ctxRowHTML({ role, model, u }) {
+  const [ico, name] = USAGE_KIND[role] || ['🤖', role];
+  const pct = u.left == null ? null : 100 - u.pct;
+  return `<div class="tcx-row" data-tone="${u.tone}"><span class="tcx-who">${ico} ${esc(role === 'writer' ? 'Chat model' : name)}</span><span class="tc-model" title="${esc(model)}">${esc(short(model))}</span><span class="tcx-bar" aria-hidden="true"><i style="width:${pct ?? 0}%"></i></span><span class="tcx-n">${u.known ? `${u.estimated ? '≈' : ''}${ctxK(u.used)}${u.max ? ` / ${ctxK(u.max)}` : ''}` : '—'}${pct != null ? ` · ${pct}%` : ''}</span></div>`;
+}
+// Under the rows: the chat model's cache line, and Compact with its one-line explanation.
+function ctxFootHTML(c, main) {
+  const busy = !!c.running;
+  return `${main.known && main.cacheRead != null ? `<div class="tcx-cache">Chat model's last call: ${ctxK(main.cacheRead)} read from cache · ${ctxK(main.cacheWrite)} written to it · ${ctxK(main.output)} out</div>` : ''}
+    <div class="tcx-acts"><button type="button" class="tcx-compact" ${busy ? 'disabled' : ''}>Compact conversation</button><span class="tcx-sub">${busy ? 'Wait for the reply to finish, or stop it, to compact.' : `Older turns become a short summary by ${esc(short(c.agent.setup.model))}; the last 8 messages stay as they are.`}</span></div>
+    <div class="ctx-err" hidden></div>`;
+}
+// The chat model's figure in one short line, for a folded header: "fast · 31% used".
+const ctxKey = (row) => (!row?.u.known ? '' : `${short(row.model)} · ${row.u.pct != null ? `${row.u.estimated ? '≈' : ''}${100 - row.u.pct}% used` : `${ctxK(row.u.used)} used`}`);
 // At the top of the Steps pane's cost block: each model's context from its newest call, and Compact for the chat.
+// It folds to its header (▸, with the chat model's figure) for people who only want the steps; remembered (ui.stepsCtx).
 function traceContextHTML(c) {
   const list = contextModels(c), main = list[0].u;
   if (!main.known && list.length < 2) return '';
-  const row = ({ role, model, u }) => {
-    const [ico, name] = USAGE_KIND[role] || ['🤖', role];
-    const pct = u.left == null ? null : 100 - u.pct;
-    return `<div class="tcx-row" data-tone="${u.tone}"><span class="tcx-who">${ico} ${esc(role === 'writer' ? 'Chat model' : name)}</span><span class="tc-model" title="${esc(model)}">${esc(short(model))}</span><span class="tcx-bar" aria-hidden="true"><i style="width:${pct ?? 0}%"></i></span><span class="tcx-n">${u.known ? `${u.estimated ? '≈' : ''}${ctxK(u.used)}${u.max ? ` / ${ctxK(u.max)}` : ''}` : '—'}${pct != null ? ` · ${pct}%` : ''}</span></div>`;
-  };
-  const busy = !!c.running;
-  return `<div class="trace-ctx"><div class="tc-head"><span>◔ Context by model</span><span class="tcx-sub">each model's newest call</span></div>${list.map(row).join('')}
-    ${main.known && main.cacheRead != null ? `<div class="tcx-cache">Chat model's last call: ${ctxK(main.cacheRead)} read from cache · ${ctxK(main.cacheWrite)} written to it · ${ctxK(main.output)} out</div>` : ''}
-    <div class="tcx-acts"><button type="button" class="tcx-compact" ${busy ? 'disabled' : ''}>Compact conversation</button><span class="tcx-sub">${busy ? 'Wait for the reply to finish, or stop it, to compact.' : `Older turns become a short summary by ${esc(short(c.agent.setup.model))}; the last 8 messages stay as they are.`}</span></div>
-    <div class="ctx-err" hidden></div></div>`;
+  const folded = !uiOf(G.settings).stepsCtx;
+  return `<div class="trace-ctx tc-sec${folded ? ' folded' : ''}" data-fold="ctx"><button type="button" class="tc-head tc-fold" aria-expanded="${!folded}" title="Show or hide every model's context (⚙ Settings → Window & layout → Steps)"><span><i class="tc-caret" aria-hidden="true"></i>◔ Context by model</span><span class="tcx-sub tc-open-only">each model's newest call</span><span class="tcx-key tc-fold-only">${esc(ctxKey(list[0]))}</span></button>
+    <div class="tc-body">${list.map(ctxRowHTML).join('')}${ctxFootHTML(c, main)}</div></div>`;
+}
+// ▸ / ▾ on the Steps pane's Context and Cost headers: folds that block in every Steps pane, remembered across replies
+// and restarts (the same setting as ⚙ Settings → Window & layout → Steps).
+const STEPS_FOLD = { ctx: 'stepsCtx', cost: 'stepsCost' };
+function setStepsFold(k, open) {
+  (G.settings.ui ??= {})[STEPS_FOLD[k]] = open; savePrefs();
+  for (const sec of document.querySelectorAll(`.tc-sec[data-fold="${k}"]`)) { sec.classList.toggle('folded', !open); sec.querySelector('.tc-fold')?.setAttribute('aria-expanded', String(open)); }
 }
 document.addEventListener('click', (e) => {
-  const b = e.target.closest?.('.tcx-compact'); if (!b || b.disabled) return;
+  const f = e.target.closest?.('.tc-sec > .tc-fold');
+  if (f) { const k = f.parentElement.dataset.fold; if (STEPS_FOLD[k]) setStepsFold(k, f.parentElement.classList.contains('folded')); return; }
+  const b = e.target.closest?.('.tcx-compact'); if (!b || b.disabled || b.closest('.msg')) return; // a /context card wires its own
   const c = focused(); if (!c) return;
   compactConversation(c, b, b.closest('.trace-ctx')?.querySelector('.ctx-err') || document.createElement('div'));
 });
+// /context: the same rows as Steps, as a card in the conversation (like /usage: yours, never part of the agent's
+// history). It keeps the figures of when it was posted; its Compact acts on the chat now.
+function postContext(c) {
+  const m = { role: 'usage', kind: 'context', at: Date.now(), ctx: { rows: contextModels(c) } };
+  c.agent.messages.push(m);
+  const box = c.el && $('.msgs', c.el.root);
+  if (box) { box.querySelector('.hint')?.remove(); box.appendChild(renderMsg(c, m)); c.follow = true; c.toEnd?.(); }
+  saveChat(c);
+}
+function contextCardHTML(c, m) {
+  const rows = m.ctx?.rows || [], main = rows[0]?.u || { known: false };
+  return `<div class="usage-card ctx-card"><div class="uc-head"><b>◔ Context for this chat</b><span>${esc(new Date(m.at).toLocaleString())}</span></div>
+    <div class="trace-ctx">${rows.some((r) => r.u.known) ? `<div class="tcx-sub">Each model's newest call in the latest reply</div>${rows.map(ctxRowHTML).join('')}` : '<div class="tcx-sub">Shows after the first reply: what each model\'s newest call sent and got back.</div>'}${ctxFootHTML(c, main)}</div></div>`;
+}
 // The same summary a reply writes on a long chat (server: compactChat), asked for now. The chat keeps it like that one
 // (summary + the time the kept turns start), so the next reply sends the summary and only the turns after it.
 async function compactConversation(c, btn, err) {
@@ -5269,6 +5306,13 @@ function renderMsg(c, m) {
     const when = $('.utext', el)?.nextElementSibling;
     if (when && !when.className) { const foot = document.createElement('div'); foot.className = 'u-foot'; when.before(foot); foot.append($('.u-tools', el), when); }
     drawMsgMedia(c, m);
+    return el;
+  }
+  if (m.role === 'usage' && m.kind === 'context') { // /context
+    el.className = 'msg usage';
+    el.innerHTML = `${contextCardHTML(c, m)}<button type="button" class="ghost uc-x" title="Remove this card">✕</button>`;
+    const cb = $('.tcx-compact', el); if (cb) cb.onclick = () => compactConversation(c, cb, $('.ctx-err', el));
+    $('.uc-x', el).onclick = () => { c.agent.messages = c.agent.messages.filter((x) => x !== m); el.remove(); saveChat(c); };
     return el;
   }
   if (m.role === 'usage') {
@@ -10894,7 +10938,7 @@ const FRAME_ACTS = {
   btw: { run: () => qfType(qfChat(), '/btw '), ok: qfNeedChat },
   showSteps: { run: () => setPaneTab('trace'), ok: qfNeedChat },
   undoReply: { run: qfCmd('undo'), ok: () => !!focused() && !focused().running },
-  compact: { run: () => $('.cmp-ctx-btn', qfChat().el.root)?.click(), ok: () => !!focused() && !focused().running },
+  compact: { run: qfCmd('context'), ok: () => !!focused() && !focused().running }, // the /context card has Compact
   budget: { run: () => { const c = qfChat(); editBudget(c, undefined, $('.cmp-budget', c.el.root)); }, ok: qfNeedChat },
   usage: { run: qfCmd('usage'), ok: qfNeedChat },
   model: { run: qfCmd('model'), ok: qfNeedChat },
@@ -11837,7 +11881,7 @@ function wireCatEditor(el) {
 }
 // ---------- settings page: categories on the left, that category's settings on the right ----------
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember', idleHide: 0,
-  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
+  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, stepsCtx: true, stepsCost: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
 // The pages and their groups are in public/settings-map.js (the Settings tab: App, Project and This chat).
 const SETTINGS_NAV = SM.navFor(!!window.ohDesktop?.available); // (DESK is set further down)
 // host: where the Settings tab is shown now ('tab', 'page' with no chat open, null closed); scope: app, project, chat.
@@ -12012,6 +12056,10 @@ function settingsPanels(S) {
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Fold idle chats', 'Chats with nothing new for this long fold into an “Older” row at the end of their project in the sidebar. One click shows them; nothing is deleted. Pinned, open and working chats always stay in view. Pin a chat from its ⋯ menu.', stSeg('ui.idleHide', [['0', 'Off'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['30', '30 days']], String(uiOf(S).idleHide || 0)))
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
+      // The two blocks at the end of the Steps pane; ▸ / ▾ on their headers changes the same settings.
+      stCard('Steps', 'For people who only want the steps: either block can fold to its one-line header (▸ / ▾ on it does the same).',
+        stRow('Show context by model', 'Each model\'s context from its newest call, the cache line and Compact. Folded, its header still shows the chat model\'s figure. /context posts the same in the chat.', stSwitch('ui.stepsCtx', U.stepsCtx))
+        + stRow('Show what the reply cost', 'Each model\'s calls, tokens and cost, and the whole chat so far. Folded, its header still shows the reply\'s cost.', stSwitch('ui.stepsCost', U.stepsCost))),
       ...(DESK ? ['<div id="stDesktop"></div>'] : []),
     ]],
     privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
@@ -13197,6 +13245,7 @@ function saveSettings() {
   savePrefs(); if (POP) stSaveFromPop(); // a Settings tab in a pop-out window saves for the main window too
   ST.rowIndex = null;
   applyTheme(); applyUi(); applyKeyTitles(); applySpeakPref();
+  for (const [k, key] of Object.entries(STEPS_FOLD)) for (const sec of document.querySelectorAll(`.tc-sec[data-fold="${k}"]`)) sec.classList.toggle('folded', !uiOf(S)[key]); // a Steps pane on screen follows at once
   renderToolbars(); renderPanes(); renderSpend(); renderSidebar(); // the sidebar folds idle chats by a setting
   // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
   // check work from here), and the footer says it was saved.
