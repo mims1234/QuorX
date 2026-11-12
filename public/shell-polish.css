@@ -33,8 +33,8 @@ body.qf-desk .qf-title .qf-burger { -webkit-app-region: no-drag; }
 /* ---------- tab strips scroll instead of squeezing ---------- */
 body.qx-narrow .wt-strip, body.qx-narrow .pa-tabs, body.qx-narrow .pa-pages, body.qx-narrow .pa-files, body.qx-narrow #wtPaneTabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 body.qx-narrow .wt-strip::-webkit-scrollbar, body.qx-narrow .pa-tabs::-webkit-scrollbar, body.qx-narrow #wtPaneTabs::-webkit-scrollbar { display: none; }
-/* The layout buttons (View › Layout has them too) give the narrow tab row its room. */
-body.qx-narrow .ws-layouts { display: none !important; }
+/* Layout ▾ in row 2 stays, shorter. */
+body.qx-narrow .ws-layouts .wl-btn { max-width: 130px; }
 
 /* ---------- the status bar drops its least needed items first ---------- */
 @media (max-width: 1000px) { .ws-status [data-prio="5"] { display: none !important; } }
