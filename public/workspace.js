@@ -274,7 +274,8 @@ export function serialise(lay, tabs = {}, closed = [], extra = {}) {
   const pins = extra.pins && typeof extra.pins === 'object' ? Object.fromEntries(Object.entries(extra.pins).filter(([g, c]) => has(g) && typeof c === 'string' && c)) : {};
   return JSON.stringify({ v: 1, root: lay.root, focus: lay.focus, tabs: Object.fromEntries(Object.entries(tabs).filter(([id]) => live.has(id))), ...(closed?.length ? { closed: cleanClosed(closed) } : {}),
     ...(has(extra.follow) ? { follow: extra.follow } : {}), ...(has(extra.max) ? { max: extra.max } : {}), ...(Object.keys(pins).length ? { pins } : {}),
-    ...(typeof extra.preset === 'string' && extra.preset ? { preset: extra.preset.slice(0, 80) } : {}) });
+    ...(typeof extra.preset === 'string' && extra.preset ? { preset: extra.preset.slice(0, 80) } : {}),
+    ...(Object.keys(cleanHosts(lay, extra.hosts)).length ? { hosts: cleanHosts(lay, extra.hosts) } : {}) });
 }
 /** Reads a saved layout back, checking its shape. Anything it can't use gives null (the caller starts from its default). */
 export function parse(text) {
@@ -300,7 +301,34 @@ export function parse(text) {
   const tabs = s.tabs && typeof s.tabs === 'object' ? Object.fromEntries(Object.entries(s.tabs).filter(([id, v]) => live.has(id) && v && typeof v === 'object')) : {};
   const gid = (v) => (typeof v === 'string' && findGroup(lay, v) ? v : null);
   const pins = s.pins && typeof s.pins === 'object' ? Object.fromEntries(Object.entries(s.pins).filter(([g, c]) => gid(g) && typeof c === 'string' && c)) : {};
-  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), pins, preset: typeof s.preset === 'string' ? s.preset.slice(0, 80) : null };
+  return { layout: lay, tabs, closed: cleanClosed(s.closed), follow: gid(s.follow), max: gid(s.max), pins, preset: typeof s.preset === 'string' ? s.preset.slice(0, 80) : null, hosts: cleanHosts(lay, s.hosts) };
+}
+
+// ---------- a chat shown inside another group ----------
+// A chat group can be hosted by a pane group: the chat shows in that group (its strip gets a tab for it) and its own
+// slot gives its space to the others. hosts = { chatGroupId: paneGroupId }, each pane group hosting one chat at most.
+/** Only hosts that still make sense in this layout. */
+export function cleanHosts(lay, hosts) {
+  const out = {}, used = new Set();
+  if (!hosts || typeof hosts !== 'object') return out;
+  for (const [cg, pg] of Object.entries(hosts)) {
+    if (!isChatGroup(cg) || typeof pg !== 'string' || isChatGroup(pg) || used.has(pg) || !findGroup(lay, cg) || !findGroup(lay, pg)) continue;
+    out[cg] = pg; used.add(pg);
+  }
+  return out;
+}
+/**
+ * Sizes changed on a layout with some groups taken out (keepGroups): the same sizes, written into the full layout.
+ * Each node of the smaller tree is matched to the node of the full tree holding the same shown groups.
+ */
+export function writeBack(full, part) {
+  const shown = new Set(groups(part).map((g) => g.id));
+  const key = (n) => groups(n).map((g) => g.id).filter((id) => shown.has(id)).sort().join('|');
+  const want = new Map();
+  const walk = (n) => { want.set(key(n), n.w); if (n.t === 's') n.kids.forEach(walk); };
+  walk(part.root);
+  const put = (n) => { const k = key(n), w = want.get(k); const m = { ...n, ...(w != null && k ? { w } : {}) }; if (n.t === 's') m.kids = n.kids.map(put); return m; };
+  return { ...full, root: put(copy(full.root)) };
 }
 
 // ---------- open chats, and the tabs you closed ----------

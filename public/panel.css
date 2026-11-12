@@ -1,0 +1,119 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The IDE shell's bottom edge: the status bar (v2), the bottom panel (Terminal, Checks, Debug) and the 🔔 list.
+   Loaded after workspace.css, frame.css and tabs.css. What the panel's Terminal draws keeps the terminal's own styles. */
+
+/* ---------- the status bar ---------- */
+.ws-status { gap: 0; padding: 0 4px; }
+.ws-status .wsb-side { display: flex; align-items: center; gap: 1px; min-width: 0; }
+.ws-status .wsb-side:empty { display: none; }
+.ws-status .wsb-side#wsbLeft { flex: 0 1 auto; overflow: hidden; }
+.ws-status button { height: 20px; padding: 0 6px; gap: 4px; border-radius: 3px; flex: none; }
+.ws-status button svg { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ws-status .wsb-sep { width: 1px; height: 14px; margin: 0 4px; background: var(--line); flex: none; }
+/* ◧ ⬓: toggles, dimmed while what they show is hidden. */
+.ws-status .wsb-tog { padding: 0 5px; }
+.ws-status .wsb-tog[aria-pressed="false"] { opacity: .55; }
+.ws-status .wsb-tog[aria-pressed="true"] { color: var(--text); }
+/* The project (its colour) and its branch in mono. */
+.ws-status .wsb-proj { max-width: 340px; min-width: 0; color: var(--text); }
+.ws-status .wsb-proj .wsb-pname { overflow: hidden; text-overflow: ellipsis; }
+.ws-status .wsb-proj svg { margin-left: 4px; color: var(--muted); }
+.ws-status .wsb-dot { --pc: hsl(var(--ph, 150) 55% 55%); width: 8px; height: 8px; border-radius: 2px; flex: none; background: var(--pc); font-style: normal; }
+.ws-status .wsb-dot[style*="--pcx"] { --pc: var(--pcx); }
+.ws-status .wsb-mono { font: 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+/* State words in their beacon colours: violet running, amber needs you / problems, green checked. */
+.ws-status .sb-violet { color: var(--violet, var(--st-run)); }
+.ws-status .sb-amber { color: var(--amber); }
+.ws-status .sb-green { color: var(--ok); }
+.ws-status .wsb-need.sb-amber { font-weight: 700; background: var(--amber-dim, transparent); border-color: var(--amber-line, transparent); }
+.ws-status .wsb-need.sb-amber:hover { color: var(--amber); }
+.ws-status .sb-violet:hover { color: var(--violet, var(--st-run)); }
+.ws-status .sb-amber:hover { color: var(--amber); }
+.ws-status .sb-green:hover { color: var(--ok); }
+/* Money: monospace, gold. */
+.ws-status .wsb-money { font: 600 11px var(--mono); color: var(--money, #e8b04a); }
+.ws-status .wsb-money:hover { color: var(--money, #e8b04a); }
+/* 🔔: a squared count when something new came in. */
+.ws-status .wsb-bell { position: relative; padding: 0 6px; }
+.ws-status .wsb-bell.has { color: var(--text); }
+.ws-status .wsb-n { min-width: 14px; height: 14px; padding: 0 3px; border-radius: 3px; background: var(--accent); color: var(--accent-ink, #031317); font: 700 9.5px/14px var(--mono); text-align: center; }
+.ws-status .wsb-bell[aria-expanded="true"] { background: var(--panel-3); color: var(--text); }
+/* The app's own buttons moved in: ⟳ restart needed, 💲 the key's balance, ⬆ Update. */
+.ws-status .wsb-fixed { gap: 4px; }
+.ws-status #staleNote { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 3px; font: 600 11px var(--font-ui); color: var(--amber); background: var(--amber-dim, transparent); border: 1px solid var(--amber-line, var(--line)); cursor: pointer; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.ws-status #staleNote[hidden] { display: none; }
+.ws-status #spend[hidden] { display: none; }
+.ws-status #spend .sp-icon { height: 20px; width: 24px; padding: 0; justify-content: center; font-size: 12px; }
+.ws-status #updNote { height: 18px; margin: 0 0 0 4px; padding: 0 8px; border-radius: 3px; font-size: 11px; }
+.ws-status #updNote .un-txt svg { width: 12px; height: 12px; }
+
+/* ---------- the bottom panel ---------- */
+.qx-panel { position: relative; flex: none; display: flex; flex-direction: column; height: var(--qp-h, 260px); min-height: 0; background: var(--panel); border-top: 1px solid var(--line); }
+.qx-panel[hidden] { display: none !important; }
+/* Maximised: the groups above fold away (the rows above them stay). */
+body.qp-max .ws-main > .layout { flex: 0 0 0 !important; min-height: 0 !important; overflow: hidden; }
+body.qp-max .qx-panel { flex: 1 1 auto; height: auto; }
+.qp-resize { position: absolute; left: 0; right: 0; top: -3px; height: 6px; z-index: 5; cursor: ns-resize; }
+.qp-resize:hover, .qp-resize.drag, .qp-resize:focus-visible { background: color-mix(in srgb, var(--accent) 45%, transparent); outline: none; }
+body.qp-max .qp-resize { display: none; }
+.qp-tabs { display: flex; align-items: stretch; gap: 2px; height: 30px; flex: none; padding: 0 4px 0 8px; border-bottom: 1px solid var(--line); }
+.qp-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; background: transparent; color: var(--muted); font: 600 11px var(--font-ui); letter-spacing: .05em; text-transform: uppercase; cursor: pointer; white-space: nowrap; }
+.qp-tab:hover, .qp-tab.on { color: var(--text); }
+.qp-tab.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 1px; background: var(--accent); }
+.qp-n { min-width: 15px; height: 15px; padding: 0 4px; border-radius: 3px; background: var(--panel-3); color: var(--text); font: 600 10px/15px var(--mono); letter-spacing: 0; text-align: center; }
+.qp-n.amber { background: var(--amber-dim, var(--panel-3)); color: var(--amber); }
+.qp-n.red { background: var(--bad-dim, var(--panel-3)); color: var(--bad, #e5484d); }
+.qp-fill { flex: 1; }
+.qp-btn { align-self: center; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; }
+.qp-btn:hover { background: var(--panel-3); color: var(--text); }
+.qp-btn[aria-pressed="true"] { color: var(--accent); }
+.qp-body { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+/* The panel's Terminal is a pane area: its tab strip and address bar aren't used here (the panel has its tabs). */
+.qp-area { flex: 1 1 0; min-height: 0; }
+.qp-area > .pane-tabs, .qp-area .pane-head { display: none !important; }
+.qp-area .appbar { border-top: 0; }
+/* Checks and Debug. */
+.qp-page { flex: 1 1 0; min-height: 0; overflow: auto; padding: 8px 12px 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 18px; align-content: start; }
+.qp-page[hidden] { display: none; }
+.qp-sec { min-width: 0; }
+.qp-sec h4 { margin: 2px 0 8px; font: 600 11px var(--font-ui); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.qp-sec h4 small { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
+.qp-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12.5px; color: var(--text); }
+.qp-tools { grid-column: 1 / -1; }
+.qp-problems { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
+.qp-problems li { margin: 3px 0; }
+.qp-problems code { white-space: pre-wrap; word-break: break-word; }
+.qp-empty { padding: 6px 0; font-size: 12.5px; text-align: left; color: var(--muted); }
+.qp-trace { grid-column: 1 / -1; }
+.qp-page .review-card { margin: 0; }
+
+/* ---------- 🔔 notifications ---------- */
+.qx-notes { position: fixed; right: 8px; bottom: 30px; z-index: 900; width: 360px; max-width: calc(100vw - 16px); max-height: min(470px, calc(100vh - 80px)); display: flex; flex-direction: column; background: var(--panel-2); border: 1px solid var(--line-strong, var(--line)); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); overflow: hidden; }
+.qn-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.qn-fill { flex: 1; }
+.qn-close { width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.qn-close:hover { background: var(--panel-3); color: var(--text); }
+.qn-body { overflow-y: auto; padding: 0 0 8px; }
+.qn-body h4 { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px 12px 4px; font: 600 10.5px var(--font-ui); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.qn-n { font: 600 10px var(--mono); padding: 0 4px; border-radius: 3px; background: var(--panel-3); color: var(--text); letter-spacing: 0; }
+.qn-item { position: relative; display: flex; align-items: stretch; }
+.qn-row { flex: 1; min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 12px; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.qn-row[data-nochat] { cursor: default; }
+.qn-row:hover, .qn-row:focus-visible { background: var(--panel-3); outline: none; }
+.qn-ico { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 3px; font-size: 10px; font-weight: 700; }
+.k-need .qn-ico { background: var(--amber-dim, transparent); color: var(--amber); }
+.k-error .qn-ico { background: var(--bad-dim, transparent); color: var(--bad, #e5484d); }
+.k-warn .qn-ico { background: var(--amber-dim, transparent); color: var(--amber); }
+.k-done .qn-ico { background: var(--ok-dim, transparent); color: var(--ok); }
+.k-info .qn-ico { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.qn-t { display: grid; min-width: 0; }
+.qn-t b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qn-t small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qn-at { font: 11px var(--mono); color: var(--dim, var(--muted)); }
+.qn-item.new .qn-row { box-shadow: inset 2px 0 0 var(--accent); }
+.qn-x { width: 26px; border: 0; background: transparent; color: var(--dim, var(--muted)); cursor: pointer; opacity: 0; }
+.qn-item:hover .qn-x, .qn-x:focus-visible { opacity: 1; }
+.qn-x:hover { color: var(--text); background: var(--panel-3); }
+.qx-notes .empty { padding: 22px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+@media (max-width: 900px) { .qx-panel, .qx-notes { display: none !important; } }

@@ -48,3 +48,19 @@ body.ws-single #pane .pane-tabs { display: none !important; }
 .wt-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .wt-padd, .wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
 .wt-padd:hover, .wt-pmore:hover { background: var(--panel-2); color: var(--text); }
+
+/* ---------- a chat shown inside a pane group (split layouts) ---------- */
+/* The group keeps its strip on top; while its chat is in front, the rest of the group steps out of sight and lets the
+   chat (drawn under the strip, in the group's box) take the pointer. */
+#pane .pane-area.host-chat { background: transparent !important; pointer-events: none; box-shadow: none; }
+#pane .pane-area.host-chat > :not(.pane-tabs) { visibility: hidden; }
+#pane .pane-area.host-chat .pane-tabs { pointer-events: auto; }
+#pane .pane-area.host-chat .pane-tabs [data-tab].on, #pane .pane-area.host-chat .pane-tabs .pa-ptab.on, #pane .pane-area.host-chat .pane-tabs .pa-ftab.on { color: var(--muted); box-shadow: none; background: transparent; }
+#pane .pane-tabs .pa-host { display: inline-flex; align-items: stretch; flex: none; }
+#pane .pane-tabs .pa-ctab { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 34px; padding: 0 4px 0 10px; border-right: 1px solid var(--line); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+#pane .pane-tabs .pa-ctab:hover { color: var(--text); background: var(--panel-2); }
+#pane .pane-tabs .pa-ctab.on { color: var(--accent); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+#pane .pane-tabs .pa-ctab .pp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#pane .pane-tabs .pa-ctab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; cursor: pointer; }
+#pane .pane-tabs .pa-ctab .pp-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
+#chats > .chatpane.hosted { overflow: hidden; contain: paint; }

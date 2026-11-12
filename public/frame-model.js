@@ -47,6 +47,7 @@ export const MENUS = [
   { name: 'View', items: [
     { label: 'Go to or run…', act: 'palette', key: 'palette' }, '-',
     { label: 'Sidebar', act: 'toggleSidebar', key: 'view.sidebar' },
+    { label: 'Bottom panel', act: 'togglePanel', key: 'view.panel' },
     { label: 'Views', sub: 'views' }, '-',
     { label: 'Layout', sub: 'layouts' },
     { label: 'Maximise group', act: 'maximise' }, '-',
@@ -85,6 +86,8 @@ export const MENUS = [
     { label: 'Servers & pages', act: 'servers' },
     { label: 'Running everywhere', act: 'running' },
     { label: 'Terminal', act: 'terminal' },
+    { label: 'Checks', act: 'panelChecks' },
+    { label: 'Debug', act: 'panelDebug' },
     { label: 'Files', act: 'files' }, '-',
     { label: 'Review changes (/review)', act: 'review' }, '-',
     { label: 'Schedules…', act: 'schedules' },
