@@ -24,3 +24,27 @@
 #paneBody .bwin > .bstage:first-child { border-top: 0; }
 #pane .pane-tabs .pa-ptab { max-width: 260px; }
 #pane .pane-tabs .pa-ptab .pp-name { flex: 0 1 auto; max-width: 140px; }
+
+/* ---------- Single: one row for every tab (wsSingleStrip) ---------- */
+.ws-top .wt-ptabs { display: flex; align-items: flex-end; gap: 2px; min-width: 0; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ws-top .wt-ptabs[hidden] { display: none; }
+.ws-top .wt-ptabs::-webkit-scrollbar { display: none; }
+body.ws-single .ws-top .wt-strip { flex: 0 0 auto; max-width: 40%; }
+/* The pane group's own strip steps aside: its tabs are in the row above. */
+body.ws-single #pane .pane-tabs { display: none !important; }
+.wt-ptab { position: relative; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; max-width: 240px; height: 33px; padding: 0 8px 0 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.wt-ptab:hover { background: var(--panel-2); color: var(--text); }
+.wt-ptab.on { background: var(--bg); color: var(--text); border-color: var(--line); }
+.wt-ptab.on::before { content: ""; position: absolute; left: 10px; right: 10px; top: -1px; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
+.wt-ptab.on::after { content: ""; position: absolute; left: -1px; right: -1px; bottom: -1px; height: 1px; background: var(--bg); }
+.wt-ptab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wt-ptab .wp-ico { flex: none; font-size: 12px; }
+.wt-ptab .pp-name { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.wt-ptab .pp-own { color: var(--dim, var(--muted)); font-size: 11.5px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.wt-ptab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; line-height: 1; opacity: 0; cursor: pointer; }
+.wt-ptab:hover .pp-x, .wt-ptab.on .pp-x { opacity: 1; }
+.wt-ptab .bt-snd { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; }
+.wt-ptab .bt-snd.off { color: var(--warn, #d9a441); }
+.wt-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wt-padd, .wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.wt-padd:hover, .wt-pmore:hover { background: var(--panel-2); color: var(--text); }
