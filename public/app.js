@@ -923,7 +923,8 @@ function chatSearchDialog() {
   const input = $('#csInput', d);
   let t = 0;
   input.oninput = () => { CS.q = input.value.trim(); clearTimeout(t); t = setTimeout(() => runChatSearch(), 200); };
-  d.addEventListener('keydown', (e) => {
+  // On the box, not the dialog: the box moves into the Search view on wider screens (avSearch).
+  $('.cs-box', d).addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
     if (e.altKey && !e.ctrlKey && !e.metaKey && ['p', 'f', 'd', 'a'].includes(k)) {
       e.preventDefault();
@@ -948,7 +949,7 @@ function chatSearchDialog() {
 }
 // The filters: where, who wrote it, when. Each is a segmented control (← → inside it, or Alt+its letter from anywhere).
 function drawChatSearchFilters(focusSel) {
-  const box = $('#chatFind .cs-filters'), here = csProject(), pname = G.projects.find((p) => p.id === here)?.name;
+  const box = $('.cs-box .cs-filters'), here = csProject(), pname = G.projects.find((p) => p.id === here)?.name;
   if (!here && CS.scope === 'project') CS.scope = 'all';
   box.innerHTML = `${csSeg('scope', CS_SCOPE, 'Where', 'Where to search (Alt+P)')}
     ${CS.scope === 'all' ? `<label class="sq-check cs-arch" title="Archived projects are left out, as in the sidebar (Alt+A)"><input type="checkbox" ${CS.archived ? 'checked' : ''}><span>Archived too</span></label>` : `<span class="cs-proj" title="The project of the chat you have open">${esc(pname || '')}</span>`}
@@ -987,7 +988,7 @@ async function runChatSearch({ next = false } = {}) {
   if (from) p.set('from', from);
   if (to) p.set('to', to);
   const r = await getJ(`/api/search/chats?${p}`);
-  if (seq !== CS.seq || !$('#chatFind')?.open) return;
+  if (seq !== CS.seq || !csShown()) return;
   CS.busy = false;
   if (r.error) { CS.error = r.error; CS.titles = []; CS.chats = []; return drawChatSearch(); }
   CS.error = '';
@@ -1029,7 +1030,7 @@ function drawChatSearch() {
   const widen = $('.cs-widen', list);
   if (widen) widen.onclick = () => { CS.scope = 'all'; csChanged(); $('#csInput').focus(); };
   // By project: the shared list filter, its buttons made from the projects in the results (none for just one).
-  const narrow = $('#chatFind .cs-narrow');
+  const narrow = $('.cs-box .cs-narrow');
   const groups = list.querySelectorAll('.cs-group');
   narrow.hidden = !groups.length;
   if (groups.length) {
@@ -1065,8 +1066,12 @@ function csRun(n) {
   $('#chatFind').close();
   run();
 }
-function openChatSearch(q = '') {
+// Wider screens: the Search view in the sidebar; a phone (or ⤢ in the view): the window as before.
+const csShown = () => !!$('#csList')?.getClientRects().length;
+function openChatSearch(q = '', { dialog = false } = {}) {
+  if (!dialog && avOn()) { if (q) CS.q = q.trim(); return avShow('search', { focus: true }); }
   const d = chatSearchDialog();
+  const csBox = $('.cs-box', d) || $('.cs-box'); if (csBox && csBox.parentElement !== d) d.append(csBox);
   if (q) CS.q = q.trim();
   $('#csInput', d).value = CS.q;
   drawChatSearchFilters();
@@ -3221,7 +3226,7 @@ function placeChrome() {
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
   // The window frame (rows 1 and 2) takes over the top on wider screens: see qfPlace.
   const frame = qfPlace(desk && !POP);
-  if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
+  if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...btns); if (upd) $('#qfRight').prepend(upd); return; }
   if (desk) { title.append(brand, ...(perm ? [perm] : []), ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
   top.prepend(brand);
@@ -3471,7 +3476,8 @@ function wireStartBox(box, first, projects) {
     else if (e.key === 'ArrowUp') { e.preventDefault(); list[(at - 1 + list.length) % list.length]?.focus(); }
     else if (e.key === 'Enter' && document.activeElement?.classList.contains('ld-mfind')) { e.preventDefault(); list[0]?.click(); }
   };
-  if (!isPhone()) requestAnimationFrame(() => { if (box.isConnected && !document.querySelector('dialog[open]')) ta.focus(); });
+  // Not while you type in a sidebar view (Search, a filter): it was a window before, which this already left alone.
+  if (!isPhone()) requestAnimationFrame(() => { if (box.isConnected && !document.querySelector('dialog[open]') && !document.activeElement?.closest?.('#wsPanel, #sidebar input')) ta.focus(); });
 }
 // A template → a new project: pick where it goes, name its folder, and the harness makes <where>/<name>, copies the
 // template in and opens a chat there with the message started (you say what to build).
@@ -7831,7 +7837,7 @@ async function followRun(c, m, open) {
         if (e.t === 'compacted') { a.summary = e.summary; a.summaryAt = e.cutoffAt; }
         if (e.t === 'control') { c.driving = e.kind; markDriving(c); renderSidebar(); }
         // You switched paid tools on from the agent's card: they stay on for this chat (its 🧰 Tools menu shows them).
-        if (e.t === 'schedules_changed') loadSchedules().then(() => { if ($('#schedules')?.open) drawSchedules(); renderChatHead(c); });
+        if (e.t === 'schedules_changed') loadSchedules().then(() => { if (schedShown()) drawSchedules(); renderChatHead(c); });
         if (e.t === 'setting_changed') settingChanged(e);
         if (e.t === 'mcp_on') { c.mcp = [...new Set([...(c.mcp || []), ...(e.names || [])])]; saveChat(c); loadMcp().then(() => renderComposerBar(c)); }
         if (e.t === 'enhancer_off') { c.tools.enhancer = false; saveChat(c); renderComposerBar(c); renderToolbars(); }
@@ -9689,7 +9695,7 @@ const keyHint = (id) => { const k = keyLabel(id); return k ? `${k} · ` : ''; };
 const wtJump = (n) => { const id = n === 9 ? WT.tabs.at(-1) : WT.tabs[n - 1]; if (!id) return false; if (id !== curId()) showChat(id); return true; };
 const KEY_RUN = {
   palette: { anywhere: true, run: () => { const d = $('#palette'); if (d?.open) d.close(); else openPalette(); } },
-  chatsearch: { anywhere: true, run: () => { const d = $('#chatFind'); if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); } } },
+  chatsearch: { anywhere: true, run: () => { if (avOn() && !$('#chatFind')?.open) { $('#palette')?.close(); return avPick('search', { focus: true }); } const d = $('#chatFind'); if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); } } },
   // Caught before anything else on the page (a terminal, an editor with its own find); no dialog, Settings included.
   find: { capture: true, run: (e) => {
     if (settingsOpen() || document.querySelector('dialog[open]')) return false;
@@ -9704,6 +9710,8 @@ const KEY_RUN = {
   'nav.back': { inSettings: true, run: () => { wsStep(-1); } },
   'nav.forward': { inSettings: true, run: () => { wsStep(1); } },
   'view.sidebar': { run: () => qfToggleSidebar() },
+  // The activity bar's views (QF.VIEWS); Search is chatsearch above.
+  ...Object.fromEntries([...QF.VIEWS, ...QF.VIEWS_BOTTOM].filter((v) => v.key !== 'chatsearch').map((v) => [v.key, { run: () => { avPick(v.id); } }])),
   ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.${i + 1}`, { run: () => wtJump(i + 1) }])),
 };
 // The few that must be caught before the page's own boxes see the key (find) run in the capture phase.
@@ -9917,39 +9925,206 @@ function wtList(anchor) {
   (m.querySelector('.lf-q') || m.querySelector('.wt-lrow.on') || m.querySelector('.wt-lrow'))?.focus();
 }
 
-// ---------- the rail: Chats, Running, Servers, Files ----------
-// Chats is the sidebar as it always was, sliding in and out from here; Running is the Running list as a panel in the
-// same place; Servers and Files open the side pane on them (Terminal → Servers, Files). With the sidebar closed, the
-// buttons its folded strip had (Home, New chat, News, the update, restart, theme, Settings) sit on the rail.
+// ---------- the activity bar: the sidebar's views ----------
+// Like VS Code's: the bar on the far left picks WHAT the sidebar shows (public/frame-model.js VIEWS): Chats (the
+// sidebar as it always was), Search (search inside chats), Running, Servers & pages, Source control (pull requests),
+// Extensions (MCP servers, hooks, skills), Schedules, and Spending at the bottom with ⚙ Settings. Clicking the view
+// that is open hides the sidebar (Ctrl+B). Each view's top row is its own toolbar: its title, its actions, and ⤢ to
+// open it in the window it had before, where it has one. The views show QuorX's existing lists, moved in as they are:
+// the Running list, the servers list, the chat search, the schedules and costs windows' contents, the MCP servers.
+// Phones keep their own layout: a view's key or menu item opens the old window there.
 const WR = { run: false };
+const AV = { view: 'chats', shown: null, ext: 'mcp', homes: new Map() };
+const AV_KEY = 'qx-av-view';
+const avOn = () => !!$('#wsRail') && document.body.classList.contains('ws-on') && !isPhone() && !POP;
+const AV_ICO = {
+  chats: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12.5h5"/></svg>',
+  search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg>',
+  servers: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>',
+  source: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10c0 4-6 3-10.5 6.5"/></svg>',
+  extensions: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13v7M13 16.5h7"/></svg>',
+  schedules: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.8M9 3.5h6"/></svg>',
+  spending: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.5-.9-1.5-1.4-2.6-1.4-1.5 0-2.6.8-2.6 2s1.1 1.7 2.6 2c1.6.3 2.8.9 2.8 2.2 0 1.3-1.2 2.1-2.8 2.1-1.2 0-2.3-.5-2.8-1.5M12 6.2v1.6M12 16.2v1.6"/></svg>',
+  full: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 12v5M9.5 14.5h5"/></svg>',
+  files: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/></svg>',
+  fold: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5-5 5 5M7 15l5 5 5-5"/></svg>',
+};
 function wrInit() {
   const rail = $('#wsRail'); if (!rail) return;
-  const top = $('.wr-top', rail), foot = $('.wr-foot', rail);
-  for (const id of ['#railHome', '#railNew']) { const b = $(id); if (b) top.append(b); }
-  for (const id of ['#railNews', '#railUpd', '#railRestart', '#railTheme', '#railSettings']) { const b = $(id); if (b) foot.append(b); }
-  const run = $('#railRunning'); if (run) { run.dataset.rail = 'running'; $('[data-rail="servers"]', rail).before(run); }
-  $('[data-rail="chats"]', rail).onclick = () => { const open = !G.sideHidden && !WR.run; WR.run = false; G.sideHidden = open; savePrefs(); syncLayout(); };
-  if (run) run.onclick = () => wrRunning(!WR.run);
-  $('[data-rail="servers"]', rail).onclick = () => wrServers();
-  $('[data-rail="files"]', rail).onclick = () => wrFiles();
-  $('#wpClose').onclick = () => wrRunning(false);
+  try { const v = localStorage.getItem(AV_KEY); if (QF.viewById(v)) AV.view = v; } catch { /* storage off */ }
+  const btn = (v) => `<button type="button" class="wr-btn" data-view="${v.id}" aria-label="${esc(v.label)}" aria-pressed="false">${AV_ICO[v.id] || ''}<i class="av-badge" hidden></i></button>`;
+  rail.innerHTML = QF.VIEWS.map(btn).join('') + '<div class="wr-sp"></div>' + QF.VIEWS_BOTTOM.map(btn).join('')
+    + `<button type="button" class="wr-btn" data-act="settings" data-tip="Settings" aria-label="Settings">${ICO.gear}</button>`;
+  // Running keeps the button the Running list already counts on (its badge and tip are drawn by drawRunBadge).
+  const run = $('#railRunning'), ph = $('[data-view="running"]', rail);
+  if (run && ph) { ph.replaceWith(run); run.className = 'wr-btn'; run.dataset.view = 'running'; run.setAttribute('aria-pressed', 'false'); }
+  // Caught first, so the Running button's own click (the window, for phones) doesn't run here.
+  rail.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-view], [data-act="settings"]'); if (!b) return;
+    e.stopPropagation(); e.preventDefault();
+    if (b.dataset.act) return openSettings();
+    avPick(b.dataset.view, { focus: b.dataset.view === 'search' });
+  }, true);
+  $('#settings')?.addEventListener('close', () => { if (AV.view === 'extensions') { AV.shown = null; avDraw(); } });
   document.body.classList.add('ws-on');
 }
-function wrRunning(on) {
-  if (isPhone()) return openRunningAll();
-  WR.run = on; syncLayout();
-  if (on) { $('#wpBody').innerHTML = '<div class="run-empty">Checking what runs…</div>'; delete $('#wpBody').dataset.sig; loadRunningAll().then(drawRunningAll); }
+// A click or a key: the view that is open hides the sidebar; another one opens.
+function avPick(id, opts = {}) {
+  if (!avOn()) return avPhone(id);
+  const r = QF.pickView({ view: AV.view, open: !G.sideHidden }, id);
+  avSet(r.view, r.open, opts);
 }
-// The rail's own state: which button is lit, and the Running panel in the sidebar's place.
+function avShow(id, opts = {}) { if (!avOn()) return avPhone(id); avSet(id, true, opts); }
+function avSet(view, open, { focus = false } = {}) {
+  AV.view = view; G.sideHidden = !open;
+  try { localStorage.setItem(AV_KEY, view); } catch { /* storage off */ }
+  savePrefs(); syncLayout();
+  if (open && focus && view === 'search') requestAnimationFrame(() => { const i = $('#csInput'); if (i) { i.value = CS.q; i.focus(); i.select(); runChatSearch(); } });
+}
+// Phones: each view's old home.
+function avPhone(id) {
+  const go = { chats: () => setMView('chats'), search: () => openChatSearch('', { dialog: true }), running: () => openRunningAll(), servers: () => wrServers(), source: () => setPaneTab('pulls'),
+    extensions: () => openSettings('mcp'), schedules: () => openSchedules(undefined, { dialog: true }), spending: () => openCosts({ dialog: true }) }[id];
+  go?.();
+}
+function wrRunning(on) { if (isPhone()) return openRunningAll(); avSet(on ? 'running' : 'chats', true); }
+// The bar's own state, and the view in the sidebar's place (any view but Chats shows in #wsPanel).
 function wrSync() {
   const rail = $('#wsRail'); if (!rail) return;
-  const shell = $('.shell'), side = !G.sideHidden && !WR.run;
-  shell.classList.toggle('wr-run', WR.run && !isPhone());
-  shell.classList.toggle('wr-closed', !side && !WR.run);
-  $('[data-rail="chats"]', rail).classList.toggle('on', side);
-  $('[data-rail="chats"]', rail).setAttribute('aria-pressed', String(side));
-  $('#railRunning')?.classList.toggle('on', WR.run);
-  $('#railRunning')?.setAttribute('aria-pressed', String(WR.run));
+  const shell = $('.shell'), open = !G.sideHidden, panel = open && AV.view !== 'chats' && !isPhone();
+  WR.run = panel && AV.view === 'running';
+  shell.classList.toggle('wr-run', panel);
+  shell.classList.toggle('wr-closed', !open);
+  for (const b of rail.querySelectorAll('[data-view]')) {
+    const on = open && b.dataset.view === AV.view, v = QF.viewById(b.dataset.view), k = keyLabel(v.key);
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+    if (b.id !== 'railRunning') b.dataset.tip = `${v.label}${k ? ` (${k})` : ''}${on ? ' · click again to hide the sidebar' : ''}`;
+  }
+  avBadges();
+  avDraw();
+}
+// Small counts on the bar: servers up in this project (Running draws its own).
+function avBadges() {
+  const b = $('#wsRail [data-view="servers"] .av-badge'); if (!b) return;
+  const n = G.srvUp?.[qfPid()] || 0; b.hidden = !n; b.textContent = n;
+}
+const avBody = (v) => {
+  if (v === 'running') return $('#wpBody');
+  let el = $(`#avBodies .av-view[data-v="${v}"]`);
+  if (!el) { el = document.createElement('div'); el.className = 'av-view'; el.dataset.v = v; el.hidden = true; $('#avBodies').append(el); }
+  return el;
+};
+// Moving an element of a window (its body) into a view, and back into the window when that opens.
+function avClaim(id, host) {
+  const el = document.getElementById(id); if (!el) return null;
+  if (!AV.homes.has(id)) AV.homes.set(id, el.parentElement);
+  if (el.parentElement !== host) host.append(el);
+  return el;
+}
+function avGive(id) { const el = document.getElementById(id), home = AV.homes.get(id); if (el && home && el.parentElement !== home) home.append(el); }
+const avBar = (v, tools = '', full = false) => `<div class="av-bar"><span class="av-title">${esc(QF.viewById(v)?.label || v)}</span>${tools}${full ? `<button type="button" class="av-ib" data-av="full" title="Open in a window of its own" aria-label="Open ${esc(QF.viewById(v)?.label || v)} in a window of its own">${AV_ICO.full}</button>` : ''}</div>`;
+const avTool = (key, ico, tip) => `<button type="button" class="av-ib" data-av="${key}" title="${esc(tip)}" aria-label="${esc(tip)}">${ico}</button>`;
+// The chat a project-wide view works through (servers, pull requests): the one on screen when it is this project's,
+// else this project's first open tab. null: there is none yet.
+function avChat() {
+  const c = focused(), pid = qfPid();
+  if (c && projOf(c) === pid) return c;
+  return [...G.open.values()].find((x) => projOf(x) === pid && WT.tabs.includes(x.id)) || null;
+}
+const avNeedChat = (body, what) => { body.innerHTML = `<div class="av-empty"><p>Open a chat in this project to see its ${what}.</p><button type="button" class="st-btn secondary sm" data-av-open>Open its latest chat</button></div>`; $('[data-av-open]', body).onclick = async () => { await wrChat(); AV.shown = null; avDraw(); }; };
+const AV_DEF = {
+  running: {
+    tools: () => '<small class="av-sub">in every project</small>', full: () => openRunningAll(),
+    show: (b) => { b.innerHTML = '<div class="run-empty">Checking what runs…</div>'; delete b.dataset.sig; loadRunningAll().then(drawRunningAll); },
+  },
+  search: {
+    full: () => openChatSearch(CS.q, { dialog: true }), dialog: 'chatFind',
+    tools: () => avTool('clear', '✕', 'Clear the search'),
+    act: { clear: () => { CS.q = ''; const i = $('#csInput'); if (i) { i.value = ''; i.focus(); } runChatSearch(); } },
+    show: (b) => { const d = chatSearchDialog(); const box = $('.cs-box', d) || $('.cs-box'); if (box && box.parentElement !== b) b.append(box); $('#csInput').value = CS.q; drawChatSearchFilters(); runChatSearch(); },
+  },
+  servers: {
+    show: (b) => { const c = avChat(); if (!c) return avNeedChat(b, 'servers and pages'); closeServers(c); c.srvPop = { el: b, inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) }; b.innerHTML = '<div class="srv-empty">Loading…</div>'; renderServers(c); AV.srvChat = c; },
+    hide: () => { const c = AV.srvChat; if (c?.srvPop?.el?.closest?.('#avBodies')) closeServers(c); AV.srvChat = null; },
+  },
+  source: {
+    show: (b) => { const c = avChat(); if (!c) return avNeedChat(b, 'pull requests'); b.innerHTML = ''; renderPulls(c, b); },
+  },
+  extensions: {
+    tools: () => `<span class="st-segmented av-seg" role="radiogroup" aria-label="Which extensions">${[['mcp', 'MCP'], ['hooks', 'Hooks'], ['skills', 'Skills']].map(([k, l]) => `<button type="button" class="st-seg-btn ${AV.ext === k ? 'active' : ''}" role="radio" aria-checked="${AV.ext === k}" data-av="ext:${k}">${l}</button>`).join('')}</span>`,
+    show: (b) => avExtensions(b),
+  },
+  schedules: {
+    full: () => openSchedules(undefined, { dialog: true }), dialog: 'schedules',
+    tools: () => avTool('new', AV_ICO.plus, 'New schedule'),
+    act: { new: () => { SCHED.edit = blankSchedule(); drawSchedules(); $('#scName')?.focus(); } },
+    show: async (b) => { const el = avClaim('schedBody', b); if (!el) return; if (!el.innerHTML.trim()) el.innerHTML = '<div class="cx-loading">Loading schedules…</div>'; await loadSchedules(); drawSchedules(); },
+  },
+  spending: {
+    full: () => openCosts({ dialog: true }), dialog: 'costs',
+    show: async (b) => { const el = avClaim('costBody', b); if (!el) return; COSTS.q = ''; COSTS.projectsShown = 10; el.innerHTML = '<div class="cx-loading">Loading costs…</div>'; await drawCosts(); },
+  },
+};
+// Extensions: MCP servers (the same list as Settings → MCP servers, which saves at once), this project's hooks and
+// skills (each in the window it already has).
+function avExtensions(b) {
+  if (AV.ext === 'mcp') {
+    if (settingsOpen()) { b.innerHTML = '<div class="av-empty"><p>MCP servers are open in Settings right now.</p></div>'; return; }
+    b.innerHTML = '<div id="mcpPanel" class="av-mcp"></div>'; drawMcpPanel(); return;
+  }
+  const p = qfProject();
+  if (AV.ext === 'hooks') {
+    b.innerHTML = `<div class="av-cards">${[['hooks', 'Hooks'], ['perms', 'Permissions'], ['design', 'Design system']].map(([k, l]) => `<button type="button" class="av-card" data-pjx="${k}"><b>${l}</b><small>${esc(PJX[k][1])}</small></button>`).join('')}<p class="av-note">For ${esc(p?.name || 'this project')}.</p></div>`;
+    for (const x of b.querySelectorAll('[data-pjx]')) x.onclick = () => (x.dataset.pjx === 'perms' ? openPermissions({ kind: 'settings' }) : p && openProjectSub(p, x.dataset.pjx));
+    return;
+  }
+  b.innerHTML = '<div class="av-cards"><button type="button" class="av-card" data-sk><b>Skills</b><small>playbooks the agent can load: turn them on or off, write or import one (Settings → Skills)</small></button></div>';
+  $('[data-sk]', b).onclick = () => openSettings('skills');
+}
+// ⤢ moved a view's body back into its window: when that window closes, the view takes it back (drawn afresh).
+function avBackAfter(id) {
+  const d = id && document.getElementById(id); if (!d) return;
+  d.addEventListener('close', () => { if (AV.shown) { AV.shown = null; avDraw(); } }, { once: true });
+}
+// When Settings opens, a view's copy of a Settings list steps aside (both use the same element ids).
+function avPark() { const el = $('#avBodies #mcpPanel'); if (el) { el.removeAttribute('id'); el.innerHTML = ''; AV.shown = null; } }
+function avDraw() {
+  avChatsTools();
+  const panel = $('.shell')?.classList.contains('wr-run');
+  if (!panel) { if (AV.shown) AV_DEF[AV.shown]?.hide?.(); AV.shown = null; return; }
+  const v = AV.view, def = AV_DEF[v] || {}, tools = $('#avTools'), wp = $('#wsPanel');
+  wp.dataset.v = v; wp.setAttribute('aria-label', QF.viewById(v)?.label || 'View');
+  const bar = avBar(v, def.tools?.() || '', !!def.full);
+  if (tools.dataset.sig !== bar) { tools.dataset.sig = bar; tools.innerHTML = bar; }
+  const body = avBody(v);
+  for (const el of wp.querySelectorAll('.av-view')) el.hidden = el !== body;
+  if (AV.shown !== v) { if (AV.shown) AV_DEF[AV.shown]?.hide?.(); AV.shown = v; def.show?.(body); }
+}
+function avWireTools() {
+  $('#avTools')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-av]'); if (!b) return;
+    const k = b.dataset.av, def = AV_DEF[AV.view] || {};
+    if (k === 'full') { def.full?.(); return avBackAfter(def.dialog); }
+    if (k.startsWith('ext:')) { AV.ext = k.slice(4); AV.shown = null; delete $('#avTools').dataset.sig; return avDraw(); }
+    def.act?.[k]?.();
+  });
+  $('#avChatsTools')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-av]'); if (!b) return;
+    ({ chat: () => newChat(qfPid()), project: () => editProject(null), files: () => wrFiles(), fold: () => avFoldAll() })[b.dataset.av]?.();
+  });
+}
+// The Chats view's toolbar (in the sidebar itself, above the project tree).
+function avChatsTools() {
+  const el = $('#avChatsTools'); if (!el) return;
+  const all = (G.projects || []).filter((p) => !p.archived).map((p) => p.id), folded = all.length && all.every((id) => (G.foldedProjects || []).includes(id));
+  const bar = avBar('chats', avTool('chat', AV_ICO.plus, `New chat in ${qfProject()?.name || 'this project'}`) + avTool('project', AV_ICO.folder, 'New project') + avTool('files', AV_ICO.files, 'This project\'s files') + avTool('fold', AV_ICO.fold, folded ? 'Open every project' : 'Fold every project'));
+  if (el.dataset.sig !== bar) { el.dataset.sig = bar; el.innerHTML = bar; }
+}
+function avFoldAll() {
+  const all = (G.projects || []).filter((p) => !p.archived).map((p) => p.id), folded = all.every((id) => (G.foldedProjects || []).includes(id));
+  G.foldedProjects = folded ? [] : all; savePrefs(); renderSidebar(); avChatsTools();
 }
 // The pane's Servers and Files need a chat: the one on screen, else this project's first tab, else its newest chat.
 async function wrChat() {
@@ -9959,7 +10134,7 @@ async function wrChat() {
   if (!id) { uiAlert('Open a chat first: servers and files show in its pane.'); return null; }
   await showChat(id); return focused();
 }
-async function wrServers() { const c = await wrChat(); if (c) openTerminal(c, null, 'srv'); }
+async function wrServers() { if (avOn()) return avShow('servers'); const c = await wrChat(); if (c) openTerminal(c, null, 'srv'); }
 async function wrFiles() { const c = await wrChat(); if (c) setPaneTab('files'); }
 
 // ---------- the status bar ----------
@@ -10047,7 +10222,7 @@ function wsChrome() {
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
-  wrInit(); wtWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
+  wrInit(); avWireTools(); wtWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
   if (!WT.pid) wtLoad(G.landingProject || 'scratch');
   wrSync(); wsChrome();
 }
@@ -10108,10 +10283,9 @@ function qfEdit(op) {
 }
 function qfToggleSidebar() {
   if (isPhone()) return false;
-  const open = !G.sideHidden && !WR.run;
-  WR.run = false; G.sideHidden = open; savePrefs(); syncLayout();
+  if (avOn()) return avSet(AV.view, !!G.sideHidden);
+  G.sideHidden = !G.sideHidden; savePrefs(); syncLayout();
 }
-function qfShowSidebar() { WR.run = false; G.sideHidden = false; savePrefs(); syncLayout(); }
 async function qfKeepAwake() {
   const now = await window.ohDesktop.keepAwake().catch(() => null); if (!now) return;
   QFS.awake = (await window.ohDesktop.keepAwake(!now.on).catch(() => null))?.on ?? now.on;
@@ -10160,7 +10334,7 @@ const FRAME_ACTS = {
   searchChats: { run: () => openChatSearch() },
   // View
   palette: { run: () => openPalette() },
-  toggleSidebar: { run: () => qfToggleSidebar(), on: () => !G.sideHidden && !WR.run },
+  toggleSidebar: { run: () => qfToggleSidebar(), on: () => !G.sideHidden },
   maximise: { run: () => wsMaxToggle(PA.focus.gid), ok: () => !!focused() && !!PA.focus && !isPhone(), on: () => !!PA.focus && WK.max === PA.focus.gid },
   zoomIn: { run: () => zoomFor('app', 'in') },
   zoomOut: { run: () => zoomFor('app', 'out') },
@@ -10215,14 +10389,10 @@ const FRAME_ACTS = {
 // The lists some items open, built when the menu opens: { label, run, on?, ok?, key? } and '-'.
 const FRAME_SUBS = {
   theme: () => [[null, 'Follow Windows'], ['dark', 'Dark'], ['light', 'Light']].map(([v, label]) => ({ label, on: () => (G.theme || null) === v, run: () => { G.theme = v; applyTheme(); savePrefs(); } })),
-  places: () => [
-    { label: 'Home', run: () => goHome() },
-    { label: 'Chats', run: () => qfShowSidebar(), on: () => !G.sideHidden && !WR.run },
-    { label: 'Search inside chats', run: () => openChatSearch(), key: 'chatsearch' },
-    { label: 'Running', run: () => $('#runAllBtn')?.click(), on: () => WR.run },
-    { label: 'Schedules', run: () => $('#schedBtn')?.click() },
-    { label: 'Spending', run: () => openCosts() },
-    { label: 'News', run: () => openNews('updates') },
+  // The activity bar's views, each with its key; then Home and Settings.
+  views: () => [
+    ...[...QF.VIEWS, ...QF.VIEWS_BOTTOM].map((v) => ({ label: v.label, key: v.key, on: () => avOn() && !G.sideHidden && AV.view === v.id, run: () => avShow(v.id, { focus: v.id === 'search' }) })),
+    '-', { label: 'Home', run: () => goHome() }, { label: 'Settings', run: () => openSettings() },
   ],
   layouts: () => {
     const on = !!focused() && !isPhone(), mine = myLayouts();
@@ -10414,13 +10584,16 @@ function qfDraw() {
       const on = pid === cur, name = p?.name || pid;
       const tip = [name, `${money(p?.spent || 0, 4)} spent in its chats`, n ? `${n} need${n === 1 ? 's' : ''} you` : '', run ? 'something is running' : ''].filter(Boolean).join(' · ');
       return `<div class="qf-ptab ${on ? 'on' : ''}" style="${projStyle(p)}" data-p="${esc(pid)}" draggable="true">
-        <button type="button" class="qf-ptab-main" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" title="${esc(tip)}"><i class="qf-pdot" aria-hidden="true"></i><span class="qf-pname">${esc(name)}</span>${run ? '<i class="qf-prun" aria-label="running"></i>' : ''}${n ? `<b class="qf-pneeds" aria-label="${n} need you">${n}</b>` : ''}</button>
+        <button type="button" class="qf-ptab-main" role="tab" aria-label="${esc(name)}${n ? `, ${n} need${n === 1 ? 's' : ''} you` : ''}${run ? ', running' : ''}" aria-selected="${on}" tabindex="${on ? 0 : -1}" title="${esc(tip)}"><i class="qf-pdot" aria-hidden="true"></i><span class="qf-pname">${esc(name)}</span>${run ? '<i class="qf-prun" aria-label="running"></i>' : ''}${n ? `<b class="qf-pneeds" aria-label="${n} need you">${n}</b>` : ''}</button>
         ${one ? '' : `<button type="button" class="qf-px" tabindex="-1" aria-label="Close ${esc(name)}" title="Take it off this row (its chats and tabs are kept)">×</button>`}</div>`;
     }).join('');
   }
   box.querySelector('.qf-ptab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   $('#qfMore').hidden = box.scrollWidth <= box.clientWidth + 1;
   const kb = $('#paletteBtn kbd'); if (kb) kb.textContent = keyLabel('palette').replace(/\+/g, ' ');
+  // Something new in News: a dot on Help (What's new opens it).
+  $('#qfMenubar [data-m="8"]')?.classList.toggle('qf-new', !!$('#newsDot') && !$('#newsDot').hidden);
+  avBadges();
 }
 // A project tab clicked: its chat that was in front (else its first tab), or Home ready to start a chat there.
 async function qfShowProject(pid) {
@@ -10781,6 +10954,8 @@ const COSTS = { sort: (() => { try { return localStorage.getItem('oh-cost-sort')
 // A schedule starts a normal chat in its project with the saved prompt, model and mode. They run while QuorX runs
 // (the desktop app or its tray). The page polls for what they did: new chats, a chat waiting for you, one finished.
 const SCHED = { list: [], since: 0, edit: null, timer: 0, now: Date.now() };
+// The schedules list is on screen: in its window, or in the Schedules view.
+const schedShown = () => !!$('#schedules')?.open || !!$('#schedBody')?.closest?.('#avBodies') && !!$('#schedBody').getClientRects().length;
 const SCHED_STATUS = { starting: ['Starting', 'run'], running: ['Running', 'run'], waiting: ['Waits for you', 'wait'], done: ['Finished', 'ok'], failed: ['Failed', 'bad'], stopped: ['Stopped', 'bad'], skipped: ['Skipped', 'wait'] };
 const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
 const when2 = (t) => { if (!t) return '–'; const d = new Date(t), today = new Date(); const same = d.toDateString() === today.toDateString(); const tmr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toDateString() === d.toDateString(); return `${same ? 'Today' : tmr ? 'Tomorrow' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
@@ -10806,7 +10981,7 @@ setInterval(() => {
     if (el.textContent !== t) el.textContent = t;
     if (t === 'starting…' && !(SCHED.asked ??= new Set()).has(el.dataset.cd)) { SCHED.asked.add(el.dataset.cd); due = true; } // once per run time
   }
-  if (due && !SCHED.dueAsk) SCHED.dueAsk = setTimeout(async () => { SCHED.dueAsk = 0; await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, 4e3);
+  if (due && !SCHED.dueAsk) SCHED.dueAsk = setTimeout(async () => { SCHED.dueAsk = 0; await loadSchedules(); if (schedShown()) drawSchedules(); pollSchedules(); }, 4e3);
 }, 1000);
 // The sidebar's Schedules row: a run going on now (pulsing, amber when it waits for you), else how many are on, the
 // next run's countdown, and how many are paused.
@@ -10859,9 +11034,11 @@ async function scheduleNoticed(n) {
 // while a run is going on, so the sidebar and the list show it end when it does.
 function pollSchedules() {
   clearTimeout(SCHED.timer);
-  SCHED.timer = setTimeout(async () => { await loadSchedules(); if ($('#schedules')?.open) drawSchedules(); pollSchedules(); }, SCHED.list.some(schedLive) ? 5e3 : SCHED.list.length ? 30e3 : 120e3);
+  SCHED.timer = setTimeout(async () => { await loadSchedules(); if (schedShown()) drawSchedules(); pollSchedules(); }, SCHED.list.some(schedLive) ? 5e3 : SCHED.list.length ? 30e3 : 120e3);
 }
-async function openSchedules(editId) {
+async function openSchedules(editId, { dialog = false } = {}) {
+  if (!dialog && avOn()) { SCHED.edit = editId === 'new' ? blankSchedule() : null; avShow('schedules'); if (SCHED.list) drawSchedules(); return; }
+  avGive('schedBody');
   const d = $('#schedules');
   $('#schedBody').innerHTML = '<div class="cx-loading">Loading schedules…</div>';
   if (!d.open) d.showModal();
@@ -10897,6 +11074,8 @@ async function repeatReply(c, m) {
     chrome: !!c.tools?.chrome, chatId: c.id, when: { kind: 'every', minutes: 60 }, everyN: 1, everyUnit: 'hours' });
   SCHED.edit = e;
   await loadSchedules();
+  if (avOn()) { avShow('schedules'); return drawSchedules(); }
+  avGive('schedBody');
   if (!$('#schedules').open) $('#schedules').showModal();
   drawSchedules();
   $('#scName')?.focus();
@@ -10992,7 +11171,9 @@ function wireScheduleForm(body) {
     SCHED.edit = null; await loadSchedules(); drawSchedules();
   };
 }
-async function openCosts() {
+async function openCosts({ dialog = false } = {}) {
+  if (!dialog && avOn()) return avShow('spending');
+  avGive('costBody');
   COSTS.q = ''; COSTS.projectsShown = 10;
   $('#costBody').innerHTML = '<div class="cx-loading">Loading costs…</div>';
   if (!$('#costs').open) $('#costs').showModal();
@@ -11516,6 +11697,7 @@ function settingsPanels(S) {
 }
 
 function openSettings(cat) {
+  avPark(); // the Extensions view's MCP list shares its element ids with Settings' own
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
@@ -14859,16 +15041,17 @@ function renderPaneTabs(c) {
 const PR_STATES = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed'], ['all', 'All']];
 const prState = () => { try { const v = localStorage.getItem('oh-pr-state'); return PR_STATES.some(([k]) => k === v) ? v : 'open'; } catch { return 'open'; } };
 const PR_ICO = { failing: '✕', pending: '◌', passed: '✓', skipped: '–' };
-async function renderPulls(c) {
-  const body = $('#paneBody'); if (!body) return;
+// host: another place to draw them (the Source control view); without it, the pane's Pull requests tab.
+async function renderPulls(c, host = null) {
+  const body = host || $('#paneBody'); if (!body) return;
   const seq = (renderPulls.seq = (renderPulls.seq || 0) + 1);
   const st = prState();
   if (!body.querySelector('.prp')) body.innerHTML = '<div class="prp"><div class="prp-wait" role="status">Reading pull requests…</div></div>';
   const r = await getJ(`/api/pulls?project=${encodeURIComponent(c.projectId)}&chat=${encodeURIComponent(c.id)}&state=${st}`);
-  if (seq !== renderPulls.seq || !G.view.pulls || focused() !== c) return;
+  if (seq !== renderPulls.seq || (!host && (!G.view.pulls || focused() !== c)) || (host && !host.isConnected)) return;
   const box = $('.prp', body) || body;
   const head = (extra = '') => `<div class="prp-head"><b class="prp-repo">${r.repo ? `${GH_ICO} ${esc(r.repo)}` : 'Pull requests'}</b>${r.branch ? `<span class="wt-branch-tag" title="${c.wt ? 'This chat\'s own branch' : 'The project folder\'s current branch'}">⎇ ${esc(r.branch)}</span>` : ''}<span class="prp-sp"></span>${extra}<button type="button" class="prp-btn prp-refresh" title="Read them again">↻</button></div>`;
-  const wireHead = () => { const b = $('.prp-refresh', box); if (b) b.onclick = () => renderPulls(c); };
+  const wireHead = () => { const b = $('.prp-refresh', box); if (b) b.onclick = () => renderPulls(c, host); };
   if (r.error && !r.gh) { box.innerHTML = `${head()}<p class="prp-note">${esc(r.error)}</p>`; return wireHead(); }
   if (!r.repo) { box.innerHTML = `${head()}<p class="prp-note">This project has no GitHub repository (no remote on github.com), so there are no pull requests to show.</p>`; return wireHead(); }
   if (!r.gh?.installed || !r.gh?.signedIn) {
@@ -14894,8 +15077,8 @@ async function renderPulls(c) {
   box.innerHTML = `${head(seg)}${r.error ? `<p class="prp-note bad">${esc(r.error)}</p>` : ''}${r.prs.length > 6 ? '<div class="prp-filter"></div>' : ''}
     ${r.prs.length ? section('This chat\'s branch', mine) + section(mine.length ? 'Other pull requests' : 'Pull requests', rest) : `<p class="prp-note">No ${st === 'all' ? '' : `${st} `}pull requests${r.branch ? `. When one is opened from ${esc(r.branch)}, it shows here first` : ''}.</p>`}`;
   wireHead();
-  for (const b of box.querySelectorAll('[data-prs]')) b.onclick = () => { try { localStorage.setItem('oh-pr-state', b.dataset.prs); } catch { /* storage off */ } renderPulls(c); };
-  for (const b of box.querySelectorAll('.prp-sum')) b.onclick = () => { (G.prOpen ||= new Map()).set(Number(b.closest('[data-pr]').dataset.pr), b.getAttribute('aria-expanded') !== 'true'); renderPulls(c); };
+  for (const b of box.querySelectorAll('[data-prs]')) b.onclick = () => { try { localStorage.setItem('oh-pr-state', b.dataset.prs); } catch { /* storage off */ } renderPulls(c, host); };
+  for (const b of box.querySelectorAll('.prp-sum')) b.onclick = () => { (G.prOpen ||= new Map()).set(Number(b.closest('[data-pr]').dataset.pr), b.getAttribute('aria-expanded') !== 'true'); renderPulls(c, host); };
   for (const b of box.querySelectorAll('.prp-fix')) b.onclick = () => { const [n, i] = b.dataset.fix.split(':').map(Number); const p = r.prs.find((x) => x.number === n); if (p) fixCheckInChat(c, r, p, p.checks[i], b); };
   const ff = $('.prp-filter', box); if (ff) listFilter(ff, { key: 'pulls', rows: () => box.querySelectorAll('.prp-card'), placeholder: 'Find a pull request, branch or author', label: 'Whose' });
 }

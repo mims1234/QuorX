@@ -17,7 +17,7 @@ const tabJumps = Array.from({ length: 9 }, (_, i) => ({
  */
 export const SHORTCUTS = [
   { id: 'palette', group: 'find', keys: 'Ctrl+K', label: 'Search chats, commands, settings and files' },
-  { id: 'chatsearch', group: 'find', keys: 'Ctrl+Shift+F', label: 'Search inside chats', help: 'Your messages and the agent’s replies, with filters. Also from the search box.' },
+  { id: 'chatsearch', group: 'find', keys: 'Ctrl+Shift+F', label: 'Search inside chats', help: 'Your messages and the agent’s replies, with filters: the Search view (in a window of its own on a phone).' },
   { id: 'chatsearch.filters', group: 'find', keys: 'Alt+P · Alt+F · Alt+D', label: 'In Search inside chats: which projects, who wrote it, when', fixed: true },
   { id: 'find', group: 'find', keys: 'Ctrl+F', label: 'Find in the tab you are using', help: 'The chat you are typing in, or the group you used last. Inside a page of the Browser tab, Ctrl+F always finds in that page.' },
   { id: 'find.step', group: 'find', keys: 'Enter', label: 'Next match (Shift+Enter: the one before)', fixed: true, help: 'In the find bar. Esc closes it.' },
@@ -44,6 +44,14 @@ export const SHORTCUTS = [
   { id: 'zoom.reset', group: 'zoom', keys: 'Ctrl+0', label: 'Back to 100%', fixed: true },
   // The window: the menu bar's View and Edit menus read their keys from these rows, so the two never disagree.
   { id: 'view.sidebar', group: 'view', keys: 'Ctrl+B', label: 'Show or hide the sidebar' },
+  // The activity bar's views (Search is chatsearch above). Pressed again while its view shows, a key hides the sidebar.
+  { id: 'view.chats', group: 'view', keys: 'Ctrl+Shift+E', label: 'Chats view' },
+  { id: 'view.running', group: 'view', keys: 'Ctrl+Shift+U', label: 'Running view', help: 'Everything running, in every project; what needs you on top.' },
+  { id: 'view.servers', group: 'view', keys: '', label: 'Servers & pages view' },
+  { id: 'view.source', group: 'view', keys: 'Ctrl+Shift+G', label: 'Source control view', help: 'This project\'s pull requests and this chat\'s branch.' },
+  { id: 'view.extensions', group: 'view', keys: 'Ctrl+Shift+X', label: 'Extensions view', help: 'MCP servers, hooks and skills.' },
+  { id: 'view.schedules', group: 'view', keys: '', label: 'Schedules view' },
+  { id: 'view.spending', group: 'view', keys: '', label: 'Spending view' },
   { id: 'view.fullscreen', group: 'view', keys: 'F11', label: 'Full screen', fixed: true },
   { id: 'menu.focus', group: 'view', keys: 'Alt', label: 'Go to the menu bar', fixed: true, help: 'Press and let go of Alt, then ← → between menus and ↑ ↓ inside one.' },
   { id: 'edit.undo', group: 'edit', keys: 'Ctrl+Z', label: 'Undo typing', fixed: true },

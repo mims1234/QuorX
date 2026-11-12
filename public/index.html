@@ -71,20 +71,16 @@
 </header>
 
 <div class="shell">
-<!-- The rail: Chats (the sidebar slides out from here), Running, Servers and Files. With the sidebar closed it also
-     carries the buttons the sidebar had (moved here by wrInit in app.js). -->
-<nav class="ws-rail" id="wsRail" aria-label="Panels">
-  <div class="wr-top wr-extra"></div>
-  <button type="button" class="wr-btn" data-rail="chats" data-tip="Projects and chats" aria-label="Projects and chats" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12.5h5"/></svg></button>
-  <button type="button" class="wr-btn" data-rail="servers" data-tip="Servers: this project's servers and pages" aria-label="Servers"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></svg></button>
-  <button type="button" class="wr-btn" data-rail="files" data-tip="Files: this project's files, each previewed" aria-label="Files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
-  <div class="wr-sp"></div>
-  <div class="wr-foot wr-extra"></div>
-</nav>
+<!-- The activity bar: the big views the sidebar shows (Chats, Search, Running, Servers & pages, Source control,
+     Extensions, Schedules), then Spending and Settings at the bottom. Drawn by "the activity bar" in app.js from
+     public/frame-model.js; clicking the view that is open hides the sidebar (Ctrl+B). -->
+<nav class="ws-rail av-bar-act" id="wsRail" aria-label="Views"></nav>
 <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
   <div class="sb-expanded">
     <!-- On wider screens the app's title row lives here (moved from the top bar by placeChrome in app.js). -->
     <div class="sb-titlebar" id="sbTitlebar"></div>
+    <!-- With the activity bar: the Chats view's own toolbar (title, New chat, New project, Files, Collapse all). -->
+    <div class="av-tools av-chats-tools" id="avChatsTools"></div>
     <!-- Navigation: one compact row each, with its own icon. -->
     <nav class="sb-nav" aria-label="Main">
       <button type="button" class="sb-nav-row nav-home" id="homeBtn" title="Home: the start screen (new chat, open a folder, recent chats)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h5v-5.5h3V20h5V9.5"/></svg><span>Home</span></button>
@@ -136,9 +132,12 @@
 <div class="sidebar-backdrop" id="sideBackdrop"></div>
 <div class="resizer" id="sideResizer" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabindex="0" title="Drag to resize · double-click to reset"></div>
 <!-- The rail's Running panel: the Running list, in the sidebar's place. -->
-<aside class="ws-panel" id="wsPanel" aria-label="Running">
-  <div class="wp-head"><b>Running</b><small>in every project</small><span class="wp-sp"></span><button type="button" class="wp-close" id="wpClose" aria-label="Close the Running panel" title="Close">✕</button></div>
-  <div class="wp-body" id="wpBody"></div>
+<!-- The sidebar for every view but Chats: the view's own toolbar, then its body (each view keeps its own, so switching
+     back finds it as it was). The Running list keeps #wpBody. -->
+<aside class="ws-panel" id="wsPanel" aria-label="View">
+  <div class="av-tools" id="avTools"></div>
+  <div class="wp-body av-view" id="wpBody" data-v="running" hidden></div>
+  <div class="av-bodies" id="avBodies"></div>
 </aside>
 <div class="ws-main">
 <!-- Back / forward, then the open chats of this project as tabs; on a phone, a switcher and a menu instead. -->

@@ -47,7 +47,7 @@ export const MENUS = [
   { name: 'View', items: [
     { label: 'Go to or run…', act: 'palette', key: 'palette' }, '-',
     { label: 'Sidebar', act: 'toggleSidebar', key: 'view.sidebar' },
-    { label: 'Places', sub: 'places' }, '-',
+    { label: 'Views', sub: 'views' }, '-',
     { label: 'Layout', sub: 'layouts' },
     { label: 'Maximise group', act: 'maximise' }, '-',
     { label: 'Zoom in', act: 'zoomIn', key: 'zoom.in', only: 'desk' },
@@ -162,6 +162,31 @@ export function itemByLetter(items, letter, i = -1) {
     if (it && it !== '-' && !it.disabled && String(it.label).trim().toLowerCase().startsWith(l)) return j;
   }
   return -1;
+}
+
+// ---------- the activity bar ----------
+// The big views the sidebar shows, top to bottom; Spending sits at the bottom with ⚙ Settings (not a view: it opens
+// Settings). key: the shortcuts-table row that opens the view (some start with no key; set one in Settings → Shortcuts).
+export const VIEWS = [
+  { id: 'chats', label: 'Chats', key: 'view.chats' },
+  { id: 'search', label: 'Search', key: 'chatsearch' },
+  { id: 'running', label: 'Running', key: 'view.running' },
+  { id: 'servers', label: 'Servers & pages', key: 'view.servers' },
+  { id: 'source', label: 'Source control', key: 'view.source' },
+  { id: 'extensions', label: 'Extensions', key: 'view.extensions' },
+  { id: 'schedules', label: 'Schedules', key: 'view.schedules' },
+];
+export const VIEWS_BOTTOM = [{ id: 'spending', label: 'Spending', key: 'view.spending' }];
+export const viewById = (id) => [...VIEWS, ...VIEWS_BOTTOM].find((v) => v.id === id) || null;
+
+/**
+ * An activity-bar click (or a view's key): the view that is open with the sidebar showing hides the sidebar, as in
+ * VS Code; anything else opens that view. → { view, open }.
+ */
+export function pickView({ view = 'chats', open = true } = {}, id) {
+  if (!viewById(id)) return { view, open };
+  if (open && view === id) return { view, open: false };
+  return { view: id, open: true };
 }
 
 // ---------- the open project tabs (row 2) ----------
