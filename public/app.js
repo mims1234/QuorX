@@ -2096,18 +2096,18 @@ const providerOf = (id) => String(id).replace(/^~/, '').split('/')[0] || 'other'
 // Models of an app on this PC (⚙ Settings → Providers) or of OpenCode Go (⚙ Settings → Providers) are the source,
 // a slash, and its own id.
 // The model makers' own APIs (server/directapi.js) run with the user's key, billed per call at their prices.
-const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)', 'refuseless-api': 'Refuseless' };
+const DIRECT_NAME = { 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Google Gemini', 'moonshot-api': 'Moonshot (Kimi)', 'meta-api': 'Meta (Llama API)', 'xai-api': 'xAI (Grok)', 'deepseek-api': 'DeepSeek', 'mistral-api': 'Mistral AI', 'zai-api': 'Z.AI (GLM)', 'qwen-api': 'Alibaba Qwen', 'minimax-api': 'MiniMax', 'groq-api': 'Groq', 'cerebras-api': 'Cerebras', 'refuseless-api': 'Refuseless' };
 const SOURCE_NAME = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code', ...DIRECT_NAME, 'opencode-local': 'OpenCode on this PC', 'ollama-local': 'Ollama on this PC', 'claude-local': 'Claude Code on this PC', 'grok-local': 'Grok Build on this PC' };
 // Where in ⚙ Settings each source is set up.
 const srcWhere = () => 'Providers';
 // Each source's own logo (public/icons/brand), in the text colour (Claude's in its orange), with its name on hover.
-const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok', 'openai-api': 'openai', 'anthropic-api': 'anthropic', 'gemini-api': 'gemini', 'moonshot-api': 'kimi', 'meta-api': 'meta', 'refuseless-api': 'refuseless' };
+const SOURCE_LOGO = { openrouter: 'openrouter', 'opencode-go': 'opencode', commandcode: 'commandcode', 'opencode-local': 'opencode', 'ollama-local': 'ollama', 'claude-local': 'claude', 'grok-local': 'grok', 'openai-api': 'openai', 'anthropic-api': 'anthropic', 'gemini-api': 'gemini', 'moonshot-api': 'kimi', 'meta-api': 'meta', 'xai-api': 'grok', 'deepseek-api': 'deepseek', 'mistral-api': 'mistral', 'zai-api': 'zai', 'qwen-api': 'qwen', 'minimax-api': 'minimax', 'groq-api': 'groq', 'cerebras-api': 'cerebras', 'refuseless-api': 'refuseless' };
 const srcLogo = (k, title = k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k] || k) => SOURCE_LOGO[k] ? `<span class="src-logo src-logo-${SOURCE_LOGO[k]}" style="--ico:url('icons/brand/${SOURCE_LOGO[k]}.svg')" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>` : DIRECT_NAME[k] ? `<span class="src-tag" title="${esc(title)}">${esc(SOURCE_SHORT[k])}</span>` : esc(title);
-const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'refuseless-api': 'Refuseless', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
+const SOURCE_SHORT = { 'opencode-go': 'Go', commandcode: 'Command Code', 'openai-api': 'OpenAI', 'anthropic-api': 'Anthropic', 'gemini-api': 'Gemini', 'moonshot-api': 'Kimi', 'meta-api': 'Meta', 'xai-api': 'xAI', 'deepseek-api': 'DeepSeek', 'mistral-api': 'Mistral', 'zai-api': 'Z.AI', 'qwen-api': 'Qwen', 'minimax-api': 'MiniMax', 'groq-api': 'Groq', 'cerebras-api': 'Cerebras', 'refuseless-api': 'Refuseless', 'opencode-local': 'This PC', 'ollama-local': 'Ollama', 'claude-local': 'Claude Code', 'grok-local': 'Grok Build' };
 // The sources offered, as words: "OpenCode Go, Claude Code or Grok Build".
 const srcApps = () => { const t = Object.keys(SOURCE_NAME).map((k) => SOURCE_NAME[k].replace(/ on this PC$/, '')); return t.length > 1 ? `${t.slice(0, -1).join(', ')} or ${t.at(-1)}` : t[0] || ''; };
 const sourceOfId = (id) => { const s = String(id || ''), h = s.split('/')[0]; return SOURCE_NAME[h] && s.length > h.length + 1 ? h : null; };
-const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', meta: 'Meta', moonshotai: 'Moonshot AI', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+const PROVIDER_NAME = (p) => ({ 'x-ai': 'xAI', 'z-ai': 'Z.AI', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', 'meta-llama': 'Meta', meta: 'Meta', moonshotai: 'Moonshot AI', mistralai: 'Mistral', deepseek: 'DeepSeek', qwen: 'Qwen', minimax: 'MiniMax', groq: 'Groq', cerebras: 'Cerebras', nvidia: 'NVIDIA', cohere: 'Cohere', inclusionai: 'inclusionAI', openrouter: 'OpenRouter', 'black-forest-labs': 'Black Forest Labs', elevenlabs: 'ElevenLabs', ...SOURCE_NAME }[p] || p.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 const cleanName = (m) => String(m.name || m.id).replace(/\s*\(free\)\s*$/i, '').replace(/^[^:]+:\s*/, '');
 const ctxText = (n) => (!n ? '' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - sec) / 86400; return d < 1 ? 'today' : d < 30 ? `${Math.round(d)}d ago` : d < 365 ? `${Math.round(d / 30)}mo ago` : `${+(d / 365).toFixed(1)}y ago`; };
@@ -8334,6 +8334,14 @@ const SRC_GUIDE = {
   'gemini-api': { what: 'Runs Gemini on Google’s API (its OpenAI-compatible endpoint) with your key, billed by Google per call at its prices. Free-tier keys work too, within Google’s free limits.' },
   'moonshot-api': { what: 'Runs Kimi on Moonshot AI’s own API with your key, billed by Moonshot per call at its prices. Thinking models get their reasoning back on each step, as Moonshot asks.' },
   'meta-api': { what: 'Runs Meta’s models on Meta’s developer API with your key, billed by Meta per call. A model without a published price shows “price unknown” and counts as $0 rather than a guess.' },
+  'xai-api': { what: 'Runs Grok on xAI’s own API with your key, billed by xAI per call at its prices (with vision, native tool calls and context-tier pricing).' },
+  'deepseek-api': { what: 'Runs DeepSeek on DeepSeek’s own API with your key, billed by DeepSeek per call at its prices (including prompt-cache discounts and reasoning passed back between steps).' },
+  'mistral-api': { what: 'Runs Mistral, Devstral and Codestral on Mistral AI’s own API with your key, billed by Mistral per call at its prices.' },
+  'zai-api': { what: 'Runs GLM models on Z.AI’s pay-per-use API with your key, billed per call at Z.AI’s prices. For Zhipu BigModel (China), set the address to https://open.bigmodel.cn/api/paas/v4.' },
+  'qwen-api': { what: 'Runs Qwen models on Alibaba Cloud Model Studio (DashScope) with your key, billed per call at Alibaba’s prices. For China, set the address to https://dashscope.aliyuncs.com/compatible-mode/v1.' },
+  'minimax-api': { what: 'Runs MiniMax models on MiniMax’s API with your key, billed per call at MiniMax’s prices (with prompt caching and thinking effort over its Anthropic-compatible endpoint).' },
+  'groq-api': { what: 'Runs open-weight models on Groq’s fast LPU inference cloud with your key, billed per call (free developer tier keys work too, within Groq’s limits).' },
+  'cerebras-api': { what: 'Runs open-weight models on Cerebras’s fast wafer-scale inference cloud with your key, billed per call at Cerebras’s prices.' },
   'refuseless-api': { what: 'Runs open-weight models with their refusals removed (GLM and others) on Refuseless’s API with your key, paid from your Refuseless credits. Its API publishes no prices, so its models show “price unknown” and count as $0 here; the balance below is what is left.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
 };
@@ -8416,7 +8424,7 @@ function drawProviders(say = null) {
   const box = $('#stProviders'); if (!box) return;
   const P = pvState(), all = pvAll(), q = P.q.trim().toLowerCase();
   const inTab = (x) => P.tab === 'all' || pvKind(x) === P.tab;
-  const hit = (x) => !q || [x.name, x.id, x.short, x.appName].some((s) => String(s || '').toLowerCase().includes(q)) || (q === 'llama' && x.id === 'meta-api');
+  const hit = (x) => !q || [x.name, x.id, x.short, x.appName].some((s) => String(s || '').toLowerCase().includes(q)) || (q === 'llama' && x.id === 'meta-api') || (q === 'zhipu' && x.id === 'zai-api') || (q === 'dashscope' && x.id === 'qwen-api');
   const shown = all.filter((x) => inTab(x) && hit(x));
   if (P.sel && !all.some((x) => x.id === P.sel)) P.sel = null;
   const groups = P.tab === 'all' ? ['openrouter', 'plan', 'direct', 'local'] : [P.tab];

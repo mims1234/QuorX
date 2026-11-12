@@ -19,6 +19,17 @@ const MD = {
   anthropic: { models: { 'claude-test-5': { id: 'claude-test-5', name: 'Claude Test 5', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }], modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 200000, output: 64000 }, cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } } } },
   google: { models: { 'gemini-test-flash': { id: 'gemini-test-flash', name: 'Gemini Test Flash', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high'] }], modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 0.3, output: 2.5, cache_read: 0.03 } } } },
   moonshotai: { models: { 'kimi-test': { id: 'kimi-test', name: 'Kimi Test', tool_call: true, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, cost: { input: 0.6, output: 2.5, cache_read: 0.15 } } } },
+  xai: { models: {
+    'grok-4.7': { id: 'grok-4.7', name: 'Grok 4.7', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh'] }], modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 2, output: 6, cache_read: 0.5 }, canonical_model_id: 'xai/grok-4.7' },
+    'grok-imagine-video': { id: 'grok-imagine-video', tool_call: false, modalities: { input: ['text'], output: ['video'] } },
+  } },
+  deepseek: { models: { 'deepseek-v4-pro': { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', tool_call: true, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, cost: { input: 0.66, output: 1.98, cache_read: 0.022 }, canonical_model_id: 'deepseek/deepseek-v4-pro' } } },
+  mistral: { models: { 'codestral-latest': { id: 'codestral-latest', name: 'Codestral', tool_call: true, modalities: { input: ['text'], output: ['text'] }, cost: { input: 0.3, output: 0.9 } } } },
+  zai: { models: { 'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', tool_call: true, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, cost: { input: 1.4, output: 4.4, cache_read: 0.26 }, canonical_model_id: 'zhipuai/glm-5.3' } } },
+  alibaba: { models: { 'qwen3.7-plus': { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 0.4, output: 1.6 }, canonical_model_id: 'alibaba/qwen3.7-plus' } } },
+  minimax: { models: { 'MiniMax-M3.1-Flash': { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }], modalities: { input: ['text', 'image'], output: ['text'] }, cost: { input: 0.15, output: 0.6, cache_read: 0.015 }, canonical_model_id: 'minimax/MiniMax-M3.1-Flash' } } },
+  groq: { models: { 'qwen/qwen3.8-27b': { id: 'qwen/qwen3.8-27b', name: 'Qwen 3.8 27B', tool_call: true, modalities: { input: ['text'], output: ['text'] }, cost: { input: 0.29, output: 0.59 }, canonical_model_id: 'alibaba/qwen3.8-27b' }, 'allam-2-7b': { id: 'allam-2-7b', tool_call: false, modalities: { input: ['text'], output: ['text'] }, cost: { input: 0, output: 0 } } } },
+  cerebras: { models: { 'gpt-oss-120b': { id: 'gpt-oss-120b', name: 'GPT OSS 120B', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }], modalities: { input: ['text'], output: ['text'] }, cost: { input: 0.35, output: 0.75 }, canonical_model_id: 'openai/gpt-oss-120b' } } },
 };
 const seen = []; // every request the fake got: { method, url, headers, body }
 const sse = (res, frames, { named = false } = {}) => {
@@ -45,6 +56,9 @@ const server = http.createServer((req, res) => {
     if (/bad-key/.test(auth)) {
       if (req.url.startsWith('/anthropic')) return json(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
       if (req.url.startsWith('/gemini')) return json(400, [{ error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } }]);
+      if (req.url.startsWith('/xai')) return json(400, { code: 'invalid-argument', error: 'Incorrect API key provided. You can obtain an API key from https://console.x.ai.' });
+      if (req.url.startsWith('/mistral')) return json(401, { detail: 'Invalid API Key' });
+      if (req.url.startsWith('/cerebras')) return json(401, { message: 'Wrong API Key', type: 'invalid_request_error', code: 'wrong_api_key' });
       return json(401, { error: { message: 'Incorrect API key provided: bad-key…', type: 'invalid_request_error', code: 'invalid_api_key' } });
     }
     // OpenAI
@@ -78,13 +92,28 @@ const server = http.createServer((req, res) => {
     if (req.url === '/refuse/v1/models') return json(200, { object: 'list', data: [{ id: 'glm-test-abliterated', object: 'model', created: 1770000000, owned_by: 'refuseless', abliterated: true, context_length: 1048576 }, { id: 'embed-test' }] });
     if (req.url === '/refuse/v1/credits') return json(200, { object: 'credits', balance: 10, reserved: 0.25, available: 9.75, key_limit: null, unit: 'usd', updated_at: 1793900000 });
     if (req.url === '/refuse/v1/chat/completions') return sse(res, [{ id: 'r1', choices: [{ delta: { reasoning_content: 'Fine.' } }] }, ...toolFrames({ prompt_tokens: 500, completion_tokens: 50 })]);
+    // xAI, DeepSeek, Mistral, MiniMax, Groq, Cerebras
+    if (req.url === '/xai/v1/models') return json(200, { data: [{ id: 'grok-4.7' }, { id: 'grok-imagine-video' }] });
+    if (req.url === '/deepseek/models') return json(200, { data: [{ id: 'deepseek-v4-pro' }] });
+    if (req.url === '/deepseek/chat/completions') return sse(res, [{ id: 'ds1', choices: [{ delta: { reasoning_content: 'Step.' } }] }, ...toolFrames({ prompt_tokens: 1000, completion_tokens: 100, prompt_cache_hit_tokens: 800 })]);
+    if (req.url === '/mistral/v1/models') return json(200, { data: [{ id: 'codestral-latest' }, { id: 'mistral-embed' }] });
+    if (req.url === '/mistral/v1/chat/completions') return sse(res, toolFrames({ prompt_tokens: 600, completion_tokens: 60 }));
+    if (req.url === '/minimax/anthropic/v1/models') return json(404, { error: { message: 'not found' } });
+    if (req.url === '/minimax/anthropic/v1/messages') return sse(res, [
+      { type: 'message_start', message: { id: 'mm_1', model: 'MiniMax-M3.1-Flash', usage: { input_tokens: 300, cache_read_input_tokens: 200, output_tokens: 0 } } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'MiniMax OK.' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 25 } },
+    ], { named: true });
+    if (req.url === '/groq/v1/models') return json(200, { data: [{ id: 'qwen/qwen3.8-27b' }, { id: 'allam-2-7b' }, { id: 'whisper-large-v3' }] });
+    if (req.url === '/cerebras/v1/models') return json(200, { data: [{ id: 'gpt-oss-120b' }] });
+    if (req.url === '/cerebras/v1/chat/completions') return sse(res, toolFrames({ prompt_tokens: 400, completion_tokens: 40 }));
     json(404, { error: { message: `no route ${req.url}` } });
   });
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 process.env.QX_MODELS_DEV = `${BASE}/models.dev`;
-for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'META_MODEL_API_KEY', 'LLAMA_API_KEY', 'REFUSELESS_API_KEY']) delete process.env[k];
+for (const k of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'META_MODEL_API_KEY', 'LLAMA_API_KEY', 'XAI_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'ZAI_API_KEY', 'ZHIPU_API_KEY', 'DASHSCOPE_API_KEY', 'MINIMAX_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'REFUSELESS_API_KEY']) delete process.env[k];
 test.after(() => server.close());
 
 const D = await import('../server/directapi.js');
@@ -422,4 +451,60 @@ test("Refuseless: a call's real cost from the key's spend, when no other call ov
     const g = D.spendStart('refuseless-api', 'k-still', 'http://x', fetchFn, waits);
     assert.equal(await g.end(true), null);
   }
+});
+
+test('xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq and Cerebras: wire quirks, cache hits, routing and auth errors', async () => {
+  for (const id of ['xai-api', 'deepseek-api', 'mistral-api', 'zai-api', 'qwen-api', 'minimax-api', 'groq-api', 'cerebras-api']) {
+    assert.ok(S.SOURCE_IDS.includes(id), id);
+  }
+  assert.deepEqual([D.devOf('zai-api', 'https://open.bigmodel.cn/api/paas/v4'), D.devOf('qwen-api', 'https://dashscope.aliyuncs.com/compatible-mode/v1'), D.devOf('minimax-api', 'https://api.minimax.cn/anthropic/v1')], ['zhipuai', 'alibaba-cn', 'minimax-cn']);
+  assert.deepEqual([D.wireOf('minimax-api', 'https://api.minimax.io/anthropic/v1'), D.wireOf('minimax-api', 'https://api.minimax.io/v1')], ['messages', 'chat']);
+
+  // xAI: filters non-tool video models, normalizes maker to x-ai, and classifies string 400 auth errors.
+  const xai = await D.directModels('xai-api', { key: 'xai-test-0123456789abc', base: `${BASE}/xai/v1` });
+  assert.deepEqual(xai.map((m) => [m.id, m.maker, m.price]), [['xai-api/grok-4.7', 'x-ai', [2, 6]]]);
+  const badXai = await D.directModels('xai-api', { key: 'bad-key-0123456789abc', base: `${BASE}/xai/v1` }).catch((e) => e);
+  assert.equal(S.failureKind(badXai), 'auth');
+  assert.match(badXai.message, /Incorrect API key/);
+
+  // DeepSeek: maps prompt_cache_hit_tokens into cached_tokens and passes back reasoning_content.
+  const [ds] = await D.directModels('deepseek-api', { key: 'sk-ds-test-0123456789', base: `${BASE}/deepseek` });
+  const dsOut = await D.directStream('deepseek-api', { model: ds.id, tools: TOOLS, messages: write() }, sig(), null, null, { info: ds, key: 'sk-ds-test-0123456789', base: `${BASE}/deepseek` });
+  assert.deepEqual([dsOut.passBack, dsOut.usage.prompt_tokens_details?.cached_tokens], [{ reasoning_content: 'Step.' }, 800]);
+  assert.ok(Math.abs(S.priced(ds, dsOut.usage).cost - (200 * 0.66 + 800 * 0.022 + 100 * 1.98) / 1e6) < 1e-12);
+
+  // Mistral: drops stream_options, maps seed -> random_seed, rewrites tool_call ids to 9 alphanumeric chars, and reads { detail } auth errors.
+  const [ms] = await D.directModels('mistral-api', { key: 'ms-test-0123456789abc', base: `${BASE}/mistral/v1` });
+  assert.equal(ms.id, 'mistral-api/codestral-latest');
+  await D.directStream('mistral-api', {
+    model: ms.id, seed: 42, tools: TOOLS,
+    messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: '', tool_calls: [{ id: 'call_very_long_id_1', type: 'function', function: { name: 'write_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'call_very_long_id_1', content: 'ok' }, { role: 'user', content: 'next' }],
+  }, sig(), null, null, { info: ms, key: 'ms-test-0123456789abc', base: `${BASE}/mistral/v1` });
+  const msReq = seen.findLast((x) => x.url === '/mistral/v1/chat/completions').body;
+  assert.deepEqual([msReq.stream_options, msReq.seed, msReq.random_seed], [undefined, undefined, 42]);
+  const tid = msReq.messages[1].tool_calls[0].id;
+  assert.match(tid, /^[a-zA-Z0-9]{9}$/);
+  assert.equal(msReq.messages[2].tool_call_id, tid, 'assistant tool_call id and tool_result id stay paired');
+  assert.equal(S.failureKind(await D.directModels('mistral-api', { key: 'bad-key-0123456789abc', base: `${BASE}/mistral/v1` }).catch((e) => e)), 'auth');
+
+  // MiniMax: falls back to models.dev when /models returns 404, and streams over Anthropic Messages with x-api-key.
+  const [mm] = await D.directModels('minimax-api', { key: 'mm-test-0123456789abc', base: `${BASE}/minimax/anthropic/v1` });
+  assert.deepEqual([mm.id, mm.wire, mm.price], ['minimax-api/MiniMax-M3.1-Flash', 'messages', [0.15, 0.6]]);
+  const mmOut = await D.directStream('minimax-api', { model: mm.id, reasoning: { effort: 'high' }, messages: write() }, sig(), null, null, { info: mm, key: 'mm-test-0123456789abc', base: `${BASE}/minimax/anthropic/v1` });
+  assert.equal(mmOut.text, 'MiniMax OK.');
+
+  // Groq & Cerebras: non-routable inference clouds (`routable: false`), filter non-tool/whisper models, extract real makers, strip parallel_tool_calls on Cerebras.
+  const groq = await D.directModels('groq-api', { key: 'gsk_test_0123456789abc', base: `${BASE}/groq/v1` });
+  assert.deepEqual(groq.map((m) => [m.id, m.maker]), [['groq-api/qwen/qwen3.8-27b', 'qwen']]);
+  const [cb] = await D.directModels('cerebras-api', { key: 'csk-test-0123456789abc', base: `${BASE}/cerebras/v1` });
+  assert.deepEqual([cb.id, cb.maker], ['cerebras-api/gpt-oss-120b', 'openai']);
+  await D.directStream('cerebras-api', { model: cb.id, seed: 7, parallel_tool_calls: true, tools: TOOLS, messages: write() }, sig(), null, null, { info: cb, key: 'csk-test-0123456789abc', base: `${BASE}/cerebras/v1` });
+  const cbReq = seen.findLast((x) => x.url === '/cerebras/v1/chat/completions').body;
+  assert.deepEqual([cbReq.seed, cbReq.parallel_tool_calls], [undefined, undefined]);
+  assert.equal(S.failureKind(await D.directModels('cerebras-api', { key: 'bad-key-0123456789abc', base: `${BASE}/cerebras/v1` }).catch((e) => e)), 'auth');
+
+  const statuses = await S.sourceStatus({ versions: false });
+  assert.equal(statuses.find((x) => x.id === 'deepseek-api').routable, true);
+  assert.equal(statuses.find((x) => x.id === 'groq-api').routable, false);
+  assert.equal(statuses.find((x) => x.id === 'cerebras-api').routable, false);
 });
