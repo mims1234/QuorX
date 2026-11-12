@@ -30,6 +30,7 @@ import { claudeStream, claudeModels, claudeError, effortFor } from '../server/cl
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
 import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe } from '../server/acp.js';
 import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
+import { LOCAL_HTTP_IDS, normalizeRoot, ensureLocalHttp, localHttpModels, localHttpBody, localHttpStream } from '../server/localhttp.js';
 
 // ---------- Apps on this PC: the main model through OpenCode on this computer (server/sources.js) ----------
 // A Go plan model as OpenCode on this PC lists it.
@@ -1442,6 +1443,84 @@ test('Ollama lists the pulled models that call tools, takes calls on /api/chat w
     const mid = async () => nd([{ message: { content: 'Hal' }, done: false }, { error: 'model runner has unexpectedly stopped' }]);
     await assert.rejects(ollamaStream({ model: 'ollama-local/qwen3:8b', messages: [] }, new AbortController().signal, null, null, { info, fetchFn: mid, ensure: async () => 'http://127.0.0.1:11434' }), /runner has unexpectedly stopped/);
   }
+});
+
+// ---------- Local OpenAI-compatible servers on this PC (server/localhttp.js): LM Studio, Foundry Local, llama.cpp ----------
+test('LM Studio, Foundry Local and llama.cpp list tool-capable local models, adapt endpoints/ports, and stream at $0', async () => {
+  for (const id of ['lmstudio-local', 'foundry-local', 'llamacpp-local']) assert.ok(LOCAL_HTTP_IDS.includes(id) && SOURCE_IDS.includes(id), id);
+  assert.deepEqual([normalizeRoot('0.0.0.0:1234/v1', 1234), normalizeRoot('http://localhost:1234/api/v1/', 1234), normalizeRoot('::1', 8080)], ['http://127.0.0.1:1234', 'http://localhost:1234', 'http://[::1]:8080']);
+
+  const jsonRes = (j, status = 200) => ({ ok: status < 400, status, headers: new Headers(), json: async () => j, text: async () => JSON.stringify(j) });
+  const sseRes = (frames) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`data: ${JSON.stringify(f)}\n\n`); yield new TextEncoder().encode('data: [DONE]\n\n'); })() });
+
+  { // LM Studio: native /api/v1/models filters out embeddings and non-tool models, reads loaded context + vision + quant, and streams free
+    const lmsFetch = async (url, init) => {
+      if (url.endsWith('/api/v1/models')) return jsonRes({ models: [
+        { type: 'llm', publisher: 'google', key: 'google/gemma-4-26b', display_name: 'Gemma 4 26B', quantization: { name: 'Q4_K_M' }, params_string: '26B', loaded_instances: [{ id: 'g', config: { context_length: 32768 } }], max_context_length: 262144, capabilities: { vision: true, trained_for_tool_use: true, reasoning: { allowed_options: ['off', 'low', 'high'] } } },
+        { type: 'llm', publisher: 'x', key: 'plain-base', display_name: 'Plain Base', capabilities: { trained_for_tool_use: false } },
+        { type: 'embedding', key: 'nomic-embed' },
+      ] });
+      if (url.endsWith('/v1/chat/completions')) return sseRes([
+        { choices: [{ delta: { content: 'Built.' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.js"}' } }] }, finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { prompt_tokens: 300, completion_tokens: 25 } },
+      ]);
+      return jsonRes({ error: `unexpected ${url}` }, 404);
+    };
+    const list = await localHttpModels('lmstudio-local', { fetchFn: lmsFetch });
+    assert.deepEqual(list.map((m) => [m.id, m.name, m.maker, m.ctx, m.in, m.plan, m.efforts]), [['lmstudio-local/google/gemma-4-26b', 'Gemma 4 26B · Q4_K_M', 'google', 32768, ['text', 'image'], 'free', ['low', 'high']]]);
+    const out = await localHttpStream('lmstudio-local', { model: list[0].id, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: list[0], fetchFn: lmsFetch });
+    assert.deepEqual([out.text, out.provider, out.toolCalls[0].function.name, sourcePriced(list[0], out.usage)], ['Built.', 'LM Studio', 'write_file', { cost: 0 }]);
+  }
+
+  { // Foundry Local: discovers dynamic port via `foundry service status`, filters Whisper & non-tool models, and maps seed -> random_seed
+    await assert.rejects(ensureLocalHttp('foundry-local', { find: () => null }), (e) => e.kind === 'notinstalled');
+    const run = (_cmd, _args, _opts, cb) => cb(null, 'Model management service is running on http://127.0.0.1:5273/openai/status\n', '');
+    let bodySeen = null;
+    const fFetch = async (url, init) => {
+      if (url === 'http://127.0.0.1:5273/openai/status') return jsonRes({ Endpoints: ['http://127.0.0.1:5273'] });
+      if (url === 'http://127.0.0.1:5273/openai/models') return jsonRes(['Phi-4-mini-instruct-cuda-gpu', 'whisper-tiny', 'no-tools-cpu']);
+      if (url === 'http://127.0.0.1:5273/foundry/list') return jsonRes({ models: [
+        { name: 'Phi-4-mini-instruct-cuda-gpu', displayName: 'Phi-4 Mini', publisher: 'Microsoft', task: 'chat-completion', supportsToolCalling: true, runtime: { executionProvider: 'CUDA' } },
+        { name: 'no-tools-cpu', displayName: 'No Tools', task: 'chat-completion', supportsToolCalling: false },
+      ] });
+      if (url === 'http://127.0.0.1:5273/v1/models') return jsonRes(null, 404);
+      if (url === 'http://127.0.0.1:5273/v1/chat/completions') { bodySeen = JSON.parse(init.body); return sseRes([{ choices: [{ delta: { content: 'Foundry OK.' } }] }, { choices: [], usage: { prompt_tokens: 40, completion_tokens: 5 } }]); }
+      return jsonRes({}, 404);
+    };
+    const list = await localHttpModels('foundry-local', { find: () => 'foundry.exe', run, fetchFn: fFetch });
+    assert.deepEqual(list.map((m) => [m.id, m.name, m.maker, m.plan]), [['foundry-local/Phi-4-mini-instruct-cuda-gpu', 'Phi-4 Mini · CUDA', 'microsoft', 'free']]);
+    const out = await localHttpStream('foundry-local', { model: list[0].id, seed: 9, parallel_tool_calls: true, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: list[0], find: () => 'foundry.exe', run, fetchFn: fFetch });
+    assert.equal(out.text, 'Foundry OK.');
+    assert.deepEqual([bodySeen.stream_options, bodySeen.parallel_tool_calls, bodySeen.seed, bodySeen.random_seed], [undefined, undefined, undefined, 9]);
+  }
+
+  { // llama.cpp: falls back from :8080 to default :9931, cleans .gguf path names, reads /props n_ctx, skips TTS/incomplete, and passes reasoning_content
+    const llamaFetch = async (url) => {
+      if (url.startsWith('http://127.0.0.1:8080')) throw new Error('ECONNREFUSED');
+      if (url === 'http://127.0.0.1:9931/health') return jsonRes({ status: 'ok' });
+      if (url === 'http://127.0.0.1:9931/props') return jsonRes({ default_generation_settings: { n_ctx: 16384 } });
+      if (url === 'http://127.0.0.1:9931/v1/models') return jsonRes({ data: [
+        { id: '../models/Qwen3-Coder-30B-Q4_K_M.gguf', architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, meta: { n_ctx_train: 131072 } },
+        { id: 'tts-only.gguf', architecture: { input_modalities: ['text'], output_modalities: ['audio'] } },
+        { id: 'downloading.gguf', status: { value: 'incomplete' } },
+      ] });
+      if (url === 'http://127.0.0.1:9931/v1/chat/completions') return sseRes([{ choices: [{ delta: { reasoning_content: 'Think.' } }] }, { choices: [{ delta: { content: 'Llama OK.' } }] }, { choices: [], usage: { prompt_tokens: 90, completion_tokens: 12 } }]);
+      return jsonRes({}, 404);
+    };
+    const list = await localHttpModels('llamacpp-local', { fetchFn: llamaFetch });
+    assert.deepEqual(list.map((m) => [m.id, m.name, m.ctx, m.in, m.maker]), [['llamacpp-local/../models/Qwen3-Coder-30B-Q4_K_M.gguf', 'Qwen3-Coder-30B-Q4_K_M', 16384, ['text', 'image'], 'qwen']]);
+    const out = await localHttpStream('llamacpp-local', { model: list[0].id, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, { info: list[0], fetchFn: llamaFetch });
+    assert.deepEqual([out.text, out.passBack], ['Llama OK.', { reasoning_content: 'Think.' }]);
+  }
+
+  // Configurable Address in Settings without a routing switch.
+  setSourceOptions('lmstudio-local', { base: 'http://127.0.0.1:1235' });
+  assert.equal(baseFor('lmstudio-local'), 'http://127.0.0.1:1235');
+  assert.throws(() => setSourceOptions('lmstudio-local', { route: 'direct' }), /no routing switch/);
+  const st = (await sourceStatus({ versions: false })).find((x) => x.id === 'lmstudio-local');
+  assert.deepEqual([st.local, st.billing, !!st.direct, st.hasBase, st.base], [true, 'free', false, true, 'http://127.0.0.1:1235']);
+  setSourceOptions('lmstudio-local', { base: '' });
 });
 
 test('Jev on Command Code: a decider seat on the plan, asked like OpenRouter’s Decisions API, answered in the same shape', async () => {
