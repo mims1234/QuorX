@@ -660,3 +660,18 @@ test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ f
   const add = app.slice(app.indexOf('function paneAddMenu('), app.indexOf('\n}\n', app.indexOf('function paneAddMenu(')));
   for (const k of ['New chat', 'Browser page', 'Terminal', 'Files', 'Plan', 'Steps', 'Settings']) assert.ok(add.includes(k), `＋ offers ${k}`);
 });
+
+test('Single: every tab in one row; the chat and its pane share the space; a project starts in it', () => {
+  assert.equal(W.LAYOUT_ORDER[0], 'single', 'Single heads the Layout list');
+  const r = W.fitLayout(W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout, W.LAYOUTS.single);
+  assert.deepEqual(W.groups(r.layout).map((g) => g.id), ['chat', 'g1'], 'one chat group and one pane group');
+  assert.deepEqual(r.removed, ['g2'], 'the other groups go (their file tabs move over)');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  for (const fn of ['const wsSingle = ', 'function wsFrontFor(', 'function wsSingleStrip(', 'function wsSingleWire(']) assert.ok(app.includes(fn), fn);
+  const front = app.slice(app.indexOf('function wsFrontFor('), app.indexOf('\n}\n', app.indexOf('function wsFrontFor(')));
+  assert.match(front, /!WP\.agent/, 'what the agent opens never pulls the pane in front');
+  assert.match(app, /WK\.preset = ok \? r\.preset \|\| null : 'single'/, 'a project with no saved layout starts in Single');
+  const strip = app.slice(app.indexOf('function wsSingleStrip('), app.indexOf('\n}\n', app.indexOf('function wsSingleStrip(')));
+  for (const k of ["'t:trace', '🧭', 'Steps'", "'t:art'", 'p:', 'k:all', "'t:files'", 'f:']) assert.ok(strip.includes(k), `the row has ${k}`);
+  assert.ok(strip.indexOf("'t:trace'") < strip.indexOf("'t:art'"), 'Steps sits right after the chats');
+});
