@@ -28,7 +28,7 @@ import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
 import { grokStream, grokModels, grokEffort, grokArgs, GROK_ENV, repeats } from '../server/groklocal.js';
-import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe } from '../server/acp.js';
+import { ACP_IDS, ACP_SOURCES, acpModels, acpStream, acpEffort, findAcpExe, quorxFor, SEARCH_PAGE } from '../server/acp.js';
 import { ollamaModels, ollamaEntry, ollamaBody, ollamaMessages, ollamaStream, ollamaBase, localOllama, ctxFor } from '../server/ollamalocal.js';
 import { LOCAL_HTTP_IDS, normalizeRoot, ensureLocalHttp, localHttpModels, localHttpBody, localHttpStream } from '../server/localhttp.js';
 
@@ -964,6 +964,28 @@ test('ACP sources: all eight subscription-login CLIs register, list grouped mode
   }
 });
 
+test('ACP built-in tools: a web search, a page, a command, a file read and a file search become QuorX calls; edits never do', () => {
+  const T = (...n) => n.map((name) => ({ type: 'function', function: { name } }));
+  const all = T('fetch_url', 'shell', 'read_file', 'search_files', 'write_file');
+  const q = (s) => SEARCH_PAGE + encodeURIComponent(s);
+  assert.deepEqual(quorxFor({ tool: 'Web search: dow today', title: 'Web search: dow today', kind: 'fetch' }, all), ['fetch_url', { url: q('dow today') }], 'Cursor: the query is in the title');
+  assert.deepEqual(quorxFor({ tool: 'web_search', input: { query: 'nasdaq close' } }, all), ['fetch_url', { url: q('nasdaq close') }], 'Grok-style name with a query');
+  assert.deepEqual(quorxFor({ tool: 'WebSearch', input: { search_term: 'rust 2026 edition' }, kind: 'search' }, all), ['fetch_url', { url: q('rust 2026 edition') }], 'a web search wins over a file search');
+  assert.deepEqual(quorxFor({ tool: 'Fetch', kind: 'fetch', input: { url: 'https://example.com/docs' } }, all), ['fetch_url', { url: 'https://example.com/docs' }]);
+  assert.deepEqual(quorxFor({ tool: 'Fetch', kind: 'fetch', title: 'Fetch: https://example.com/a' }, all), ['fetch_url', { url: 'https://example.com/a' }], 'a URL in the title');
+  assert.deepEqual(quorxFor({ tool: 'Terminal', kind: 'execute', input: { command: 'npm test' } }, all), ['shell', { command: 'npm test' }]);
+  assert.deepEqual(quorxFor({ tool: 'run_terminal_cmd', input: { cmd: 'git status' } }, all), ['shell', { command: 'git status' }]);
+  assert.deepEqual(quorxFor({ tool: 'Read', kind: 'read', input: { file_path: 'src/a.js' } }, all), ['read_file', { path: 'src/a.js' }]);
+  assert.deepEqual(quorxFor({ tool: 'Grep', kind: 'search', input: { pattern: 'TODO' } }, all), ['search_files', { query: 'TODO' }]);
+  // Never guessed: edits, unknown kinds, missing arguments, plain http, or a QuorX tool that isn't offered this step.
+  assert.equal(quorxFor({ tool: 'Edit', kind: 'edit', input: { path: 'a.js', new_string: 'x' } }, all), null);
+  assert.equal(quorxFor({ tool: 'Think', kind: 'think', input: {} }, all), null);
+  assert.equal(quorxFor({ tool: 'Terminal', kind: 'execute', input: {} }, all), null);
+  assert.equal(quorxFor({ tool: 'Fetch', kind: 'fetch', input: { url: 'http://example.com' } }, all), null);
+  assert.equal(quorxFor({ tool: 'Web search: x', title: 'Web search: x', kind: 'fetch' }, T('write_file')), null);
+  assert.equal(quorxFor({ tool: 'Read', kind: 'read', title: 'Read google.js', input: { path: 'google.js' } }, T('fetch_url')), null, 'a file named google is no web search');
+});
+
 test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied native permissions, zero-usage fallback and Stop', async () => {
   { // Streams thought + text, reads <quorx_call>, sends base64 pictures, lowers yolo mode to ask, and strips OPENROUTER_API_KEY
     const { r, e, call, shown, thought, prepped } = await viaFakeAcp('antigravity-local', 'normal', ACP_BODY);
@@ -992,6 +1014,17 @@ test('ACP stream: runs in an empty sandbox with safe mode, pictures, denied nati
     assert.equal(droid.e, undefined, droid.e?.message);
     assert.equal(droid.call.droidNoUpdate, 'true');
     assert.equal(droid.r.toolCalls[0]?.function.name, 'write_file');
+    // A built-in web search (Cursor's) becomes QuorX's fetch_url of a search page when fetch_url is offered: the reply
+    // carries on under QuorX's approvals instead of stopping on "reached for a built-in tool".
+    const FETCH = { type: 'function', function: { name: 'fetch_url', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } };
+    const ws = await viaFakeAcp('cursor-local', 'websearch', { ...ACP_BODY, model: 'cursor-local/grok-4.7', tools: [...ACP_BODY.tools, FETCH] }, { exe: 'cursor-agent.exe' });
+    assert.equal(ws.e, undefined, ws.e?.message);
+    assert.deepEqual(ws.r.toolCalls.map((c) => [c.function.name, JSON.parse(c.function.arguments)]), [['fetch_url', { url: `${SEARCH_PAGE}${encodeURIComponent('stock market news today Dow S&P Nasdaq')}` }]]);
+    assert.match(ws.r.text, /market headlines/);
+    // Without fetch_url this step, it still fails as before (after one reminder): nothing is guessed.
+    const wsOff = await viaFakeAcp('cursor-local', 'websearch', { ...ACP_BODY, model: 'cursor-local/grok-4.7' }, { exe: 'cursor-agent.exe' });
+    assert.match(wsOff.e?.message || '', /reached for a built-in tool \(Web search[^)]*\), which QuorX keeps off\. This chat has no web access: turn on Browser/);
+    assert.match(wsOff.call.requests.filter((r) => r.method === 'session/prompt').at(-1)?.params?.prompt?.[0]?.text || '', /\[QuorX\] Your last answer tried a built-in web search/, 'the second go is told to answer without the web');
     const stuck = await viaFakeAcp('antigravity-local', 'perm_always', ACP_BODY);
     assert.equal(failureKind(stuck.e), 'shape');
     assert.match(stuck.e.message, /run_command/);

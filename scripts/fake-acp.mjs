@@ -75,6 +75,11 @@ process.stdin.on('data', (d) => {
       }
 
       const chunk = (sessionUpdate, text) => say({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate, content: { type: 'text', text } } } });
+      if (mode === 'websearch') { // Cursor's way: a line of text, then its own web search as a tool call (QuorX cancels it)
+        chunk('agent_message_chunk', 'Checking today’s market headlines.');
+        say({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: sid, update: { sessionUpdate: 'tool_call', toolCallId: 'tc_ws', title: 'Web search: stock market news today Dow S&P Nasdaq', kind: 'fetch', status: 'pending', rawInput: {} } } });
+        continue;
+      }
       chunk('agent_thought_chunk', 'Plan via ACP.');
       chunk('agent_message_chunk', `Building now.\n<quorx_call key="${key}">{"name":"write_file",`);
       chunk('agent_message_chunk', `"arguments":{"path":"app.js"}}</quorx_call>`);
