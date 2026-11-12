@@ -1,13 +1,12 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // The Ollama on this computer as a model source ("Ollama on this PC" in ⚙ Settings → Providers): the models the
 // user pulled, run on this computer at no cost, and the Ollama cloud models they signed in for (ollama signin).
-//   - Its server is the one the Ollama app runs (http://127.0.0.1:11434, or OLLAMA_HOST). When it isn't running and
-//     a call needs it, QuorX starts `ollama serve` hidden and leaves it running, as the Ollama app would.
+//   - Its server is the one the Ollama app runs (http://127.0.0.1:11434, or OLLAMA_HOST). QuorX never starts it: when
+//     it isn't running, a call says so, and the user starts Ollama when they want it.
 //   - The list is the models pulled (GET /api/tags), each asked what it can do (POST /api/show): only those that call
 //     tools are chat models here, since the agent works through tools.
 //   - Calls go to the native /api/chat, not the OpenAI-style endpoint: only the native one takes a context size, and
 //     Ollama's default is too small for QuorX's instructions and tools, which it would cut without saying so.
-import { spawn } from 'node:child_process';
 import { findOnPath } from './opencodelocal.js';
 
 export const OLLAMA_ID = 'ollama-local';
@@ -33,33 +32,22 @@ const portOf = (base) => { const x = new URL(base); return Number(x.port) || (x.
 export const ctxFor = (info = {}) => Number(process.env.OLLAMA_CONTEXT_LENGTH) || Math.min(Number(info.ctx) || 32768, 32768);
 
 const err = (m, x = {}) => Object.assign(new Error(m), x);
-let started = null; // the `ollama serve` QuorX started: { proc, at }
 let seenAt = 0; // when its server last answered
 async function up(base, ms = 2500) {
   try { const r = await fetch(`${base}/api/version`, { signal: AbortSignal.timeout(ms) }); if (!r.ok) return null; seenAt = Date.now(); return (await r.json()).version || '?'; } catch { return null; }
 }
-/** The server's address, started first when it isn't running. Throws notinstalled or network. */
-export async function ensureOllama({ find = findOnPath, start = spawn, readyMs = 60e3 } = {}) {
+/**
+ * The server's address when Ollama is running. QuorX never starts it: many computers don't have Ollama, and the user
+ * starts it when they want it (the Ollama app, or ollama serve). Throws notinstalled or network.
+ */
+export async function ensureOllama({ find = findOnPath } = {}) {
   const base = ollamaBase();
   if (await up(base)) return base;
-  const exe = find('ollama');
-  if (!exe) throw err('Ollama is not installed on this computer (ollama.com/download), or not on PATH.', { kind: 'notinstalled' });
-  // Only a local address can be started from here; one elsewhere is the user's to start.
-  if (!localOllama(base)) throw err(`Ollama at ${base} isn’t answering.`, { kind: 'network' });
-  if (!started || started.proc.exitCode !== null) {
-    const proc = start(exe, ['serve'], { windowsHide: true, detached: true, stdio: 'ignore' });
-    proc.on?.('error', () => {});
-    proc.unref?.();
-    started = { proc, at: Date.now() };
-  }
-  for (const t = Date.now(); Date.now() - t < readyMs;) {
-    if (await up(base, 1500)) return base;
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  throw err('Ollama’s server didn’t start. Open the Ollama app, then test again.', { kind: 'network' });
+  if (localOllama(base) && !find('ollama')) throw err('Ollama is not installed on this computer (ollama.com/download), or not on PATH.', { kind: 'notinstalled' });
+  throw err(localOllama(base) ? 'Ollama isn’t running. Start the Ollama app (or run ollama serve), then try again.' : `Ollama at ${base} isn’t answering.`, { kind: 'network' });
 }
-/** What Settings shows of the server: running or not, and whether QuorX started it. */
-export const ollamaServer = () => ({ running: Date.now() - seenAt < 120e3, port: portOf(ollamaBase()), startedHere: !!started && started.proc.exitCode === null });
+/** What Settings shows of the server: running or not. */
+export const ollamaServer = () => ({ running: Date.now() - seenAt < 120e3, port: portOf(ollamaBase()), startedHere: false });
 
 async function getJSON(url, init = {}, ms = 15000) {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });

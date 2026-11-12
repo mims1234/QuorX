@@ -693,7 +693,7 @@ test('a chat reports what it has spent, and while a reply runs how much is that 
     ledger.set(`seed-${id}`, { project: 'p2', chat: id, cost: 2.5 });
     try {
       // The $2.50 is in the ledger but not in the chat's file (as for a rewound reply): reported as unsavedCost.
-      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0, unsavedCost: 2.5, isDefault: false });
+      assert.deepEqual(budgetState(id), { budget: 10, spent: 2.5, left: 7.5, running: false, runningCost: 0, unsavedCost: 2.5, planValue: 0, runningPlan: 0, isDefault: false });
       liveRuns.set(`live-${id}`, { project: 'p2', chat: id, cost: 0.75 });
       liveRuns.set(`other-${id}`, { project: 'p2', chat: 'elsewhere', cost: 5 });
       const st = budgetState(id);
@@ -703,6 +703,23 @@ test('a chat reports what it has spent, and while a reply runs how much is that 
       assert.equal(st.left, 6.75);
       assert.equal(st.spent - st.runningCost, 2.5);
     } finally { ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); liveRuns.delete(`other-${id}`); }
+  }
+  { // sub value (calls on a plan, at list price) counts toward the budget too, and is reported apart
+    const id = `cp${Date.now().toString(36)}`;
+    setBudget(id, 5);
+    ledger.set(`seed-${id}`, { project: 'p3', chat: id, cost: 0, plan: 1.5 }); // a Go reply that was stopped before saving
+    try {
+      assert.equal(budgetState(id).spent, 1.5);
+      assert.equal(budgetState(id).planValue, 1.5);
+      liveRuns.set(`live-${id}`, { project: 'p3', chat: id, cost: 0.25, plan: 2 });
+      const st = budgetState(id);
+      assert.equal(st.spent, 3.75, 'money and sub value both count');
+      assert.equal(st.runningCost, 2.25);
+      assert.equal(st.runningPlan, 2);
+      assert.equal(st.planValue, 3.5);
+      assert.throws(() => setBudget(id, 3), /already spent \$3\.7500/);
+      assert.equal(projectSpend('p3').spent, 0.25, "a project's spend stays money paid");
+    } finally { ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); }
   }
 });
 
@@ -737,6 +754,13 @@ test('budget in YOLO: no call at the budget, a running reply may finish up to th
   { // the warning comes once the chat passes 85%
     const { bodies } = await run((body, i) => (i < 2 ? costly('', [['list_files', {}]], 0.45) : reply('done')), { budget: 1 });
     assert.match(toolResults(bodies[2]).at(-1), /The chat's budget is almost used up \(\$0\.90 of \$1\.00\)/);
+  }
+  { // a model on a plan costs nothing per call, but its sub value counts: past budget + 10% it is stopped too
+    const onPlan = () => ({ ...reply('', [['list_files', {}]]), usage: { cost: 0, plan_cost: 0.6 } });
+    const { bodies, done } = await run(onPlan, { budget: 1 });
+    assert.equal(bodies.length, 2);
+    assert.equal(done.stats.stop, 'budget');
+    assert.equal(done.stats.budgetStop, 'hard');
   }
   { // a reply with no chat (a benchmark, a test) has no budget at all
     const { bodies, done } = await run((body, i) => (i < 4 ? costly('', [['list_files', {}]], 0.6) : reply('done')));

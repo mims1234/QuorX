@@ -196,7 +196,7 @@ function summarise(c) {
     agents: lay.map((col) => col.name), model: lay[0]?.setup?.model || null, preview: String(lastBot?.content || '').replace(/\s+/g, ' ').slice(0, 90),
     messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0), plan,
     artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models, uses,
-    // Replies whose cost is saved in this file (the budget ledger counts the others itself).
+    // Replies whose cost (and sub value) is saved in this file (the budget ledger counts the others itself).
     runIds: [...msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId), ...(c.agent?.extraUsage || []).filter((x) => x.runId).map((x) => x.runId)],
   };
 }
@@ -322,7 +322,7 @@ export function projectChatsSpend(projectId) {
 /** What one chat's saved file says it cost, and which replies those costs come from. */
 export function chatSavedSpend(chatId) {
   const c = chatId ? summaries().find((x) => x.id === chatId) : null;
-  return { cost: c?.cost || 0, runIds: new Set(c?.runIds || []) };
+  return { cost: c?.cost || 0, plan: c?.plan || 0, runIds: new Set(c?.runIds || []) };
 }
 /** Per-project counts for the sidebar: { [projectId]: { chats, active, cost, lastAt } }. */
 export function projectChatStats() {

@@ -261,6 +261,8 @@ const slim = (m, kind) => ({
   id: m.id, name: m.name, ctx: m.context_length, kind, created: m.created || 0,
   in: m.architecture?.input_modalities || [], out: m.architecture?.output_modalities || [],
   price: [Number(m.pricing?.prompt || 0) * 1e6, Number(m.pricing?.completion || 0) * 1e6],
+  // Cache prices per M tokens, where OpenRouter lists them (a source model priced at OpenRouter's rate uses them too).
+  ...(m.pricing?.input_cache_read != null || m.pricing?.input_cache_write != null ? { cachePrice: [m.pricing.input_cache_read != null ? Number(m.pricing.input_cache_read) * 1e6 : null, m.pricing.input_cache_write != null ? Number(m.pricing.input_cache_write) * 1e6 : null] } : {}),
   tools: (m.supported_parameters || []).includes('tools'),
   temp: (m.supported_parameters || []).includes('temperature'),
   reasoning: (m.supported_parameters || []).some((x) => x === 'reasoning' || x === 'include_reasoning'),
@@ -270,6 +272,8 @@ const slim = (m, kind) => ({
   maxOut: m.top_provider?.max_completion_tokens || null,
   desc: String(m.description || '').replace(/\s+/g, ' ').slice(0, 220),
 });
+/** OpenRouter's chat models as last fetched, without waiting on the network (null before the first fetch). */
+export const cachedChatModels = () => cache.chat?.v || null;
 export const chatModels = () => cached('chat', async () => {
   const j = await (await fetch(`${BASE}/api/v1/models`)).json();
   return j.data.filter((m) => !m.id.endsWith(':batch')).map((m) => slim(m, 'chat'));

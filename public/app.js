@@ -1751,11 +1751,20 @@ async function loadChatBudget(c) {
   return r;
 }
 // What it has spent so far: the server's figure, with a running reply's own live cost swapped in when it is newer.
+// Both count money paid and sub value (calls on a plan, at list price).
 function chatSpent(c) {
   const b = c.bud; if (!b) return 0;
   const m = c.running && c.agent.messages.findLast((x) => x.role === 'assistant' && x.live);
-  return m?.liveCost != null ? Math.max(b.spent, b.spent - (b.runningCost || 0) + m.liveCost) : b.spent;
+  return m?.liveCost != null ? Math.max(b.spent, b.spent - (b.runningCost || 0) + m.liveCost + (m.livePlan || 0)) : b.spent;
 }
+// The part of a chat's spend that is sub value, for the budget's hint.
+function chatSubValue(c) {
+  const b = c.bud; if (!b) return 0;
+  const m = c.running && c.agent.messages.findLast((x) => x.role === 'assistant' && x.live);
+  const v = Number(b.planValue) || 0;
+  return m?.liveCost != null ? Math.max(v, v - (Number(b.runningPlan) || 0) + (m.livePlan || 0)) : v;
+}
+const subValueNote = (v) => (v >= 0.00005 ? `Includes $${v.toFixed(4)} of sub value: calls on a subscription, counted at list price (the same model's OpenRouter price) so the budget sees every call.` : '');
 function drawBudgetChip(c) {
   const el = c.el && $('.cmp-budget', c.el.root);
   if (!el) return;
@@ -1763,7 +1772,8 @@ function drawBudgetChip(c) {
   const share = has ? (b.budget > 0 ? spent / b.budget : 1) : 0, state = !has ? 'none' : share >= 1 ? 'full' : share >= 0.85 ? 'near' : 'ok';
   el.dataset.state = state;
   el.innerHTML = `<span aria-hidden="true">💵</span><span class="cb-spent">$${spent.toFixed(spent < 1 ? 3 : 2)}</span><span class="cb-of">${!b ? '' : has ? `of $${b.budget.toFixed(b.budget < 10 ? 2 : 0)}` : 'no limit'}</span>`;
-  el.title = `This chat's budget${!b ? '' : has ? `: $${spent.toFixed(4)} spent of $${b.budget.toFixed(2)} ($${Math.max(0, b.budget - spent).toFixed(2)} left)` : `: no limit ($${spent.toFixed(4)} spent)`}\nEverything this chat calls counts: the agent, deciders, helpers, checks and paid media. Click to change it.`;
+  const sub = subValueNote(chatSubValue(c));
+  el.title = `This chat's budget${!b ? '' : has ? `: $${spent.toFixed(4)} spent of $${b.budget.toFixed(2)} ($${Math.max(0, b.budget - spent).toFixed(2)} left)` : `: no limit ($${spent.toFixed(4)} spent)`}${sub ? `\n${sub}` : ''}\nEverything this chat calls counts: the agent, deciders, helpers, checks and paid media. Click to change it.`;
   el.setAttribute('aria-label', el.title.split('\n')[0]);
 }
 // The editor: − / $ / ＋, quick +$1 +$5 +$10 ×2, never below what is already spent. It can be raised while a reply runs
@@ -1798,7 +1808,8 @@ function editBudget(c, suggest, anchor) {
       if (document.activeElement !== input) input.value = value.toFixed(2);
       input.min = floor().toFixed(2);
       const share = value > 0 ? Math.min(1, spent / value) : 1;
-      $('.bp-spent', pop).innerHTML = `<b>$${spent.toFixed(4)}</b> spent of ${money2(value)} <small>· min ${money2(floor())}</small>`;
+      const sv = chatSubValue(c);
+      $('.bp-spent', pop).innerHTML = `<b>$${spent.toFixed(4)}</b> spent of ${money2(value)} <small>· min ${money2(floor())}</small>${sv >= 0.00005 ? `<small class="bp-sub" title="${esc(subValueNote(sv))}">incl. $${sv.toFixed(4)} sub value at list price</small>` : ''}`;
       const bar = $('.bp-bar i', pop); bar.style.width = `${(share * 100).toFixed(1)}%`; bar.className = share >= 1 ? 'full' : share >= 0.85 ? 'near' : '';
       $('.bp-minus', pop).disabled = value <= floor() + 1e-9;
     };
@@ -2034,8 +2045,9 @@ const listWord = (p) => `$${p[0].toFixed(2)}/$${p[1].toFixed(2)}`;
 const shortPrice = (id) => { const m = G.byId.get(id); const lp = m && listPriceOf(m); return !m || m.kind !== 'chat' ? '' : m.priceUnknown ? 'price unknown' : m.plan === 'plan' ? `${planName(m)} plan${lp ? ` · ≈ ${listWord(lp)}` : ''}` : m.source && m.plan === 'free' ? 'free' : m.priceFromApp ? 'per call' : `$${m.price[0].toFixed(2)}/$${m.price[1].toFixed(2)}`; };
 function priceText(m, extra = {}) {
   const lp = listPriceOf(m);
-  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${lp ? ` · list price ≈ $${lp[0].toFixed(2)} in / $${lp[1].toFixed(2)} out per M tokens${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}` : ''}`;
-  if (m.source && m.priceFromApp) return `Billed per call to the API key ${SOURCE_NAME[m.source] || m.source} is signed in with; each reply shows what it cost`;
+  if (m.source && m.plan === 'plan') return `${SOURCE_NAME[m.source] || m.source} plan: nothing to pay per call (your subscription's usage limits apply)${lp ? ` · list price ≈ $${lp[0].toFixed(2)} in / $${lp[1].toFixed(2)} out per M tokens${m.refFrom ? ` (${m.refFrom} on OpenRouter)` : sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}. Calls count toward the chat's budget at this price` : '. No list price is known, so its calls count as $0 toward the budget'}`;
+  if (m.source && m.priceFromApp) return `Billed per call to the API key ${SOURCE_NAME[m.source] || m.source} is signed in with; each reply shows what it cost${m.refFrom ? ` (a call without its figure counts at ${m.refFrom}'s OpenRouter price)` : ''}`;
+  if (m.priceRef) return `Billed per call by ${SOURCE_NAME[m.source] || m.source}, which names no price for it: counted at ${m.priceRef}'s price on OpenRouter, $${m.price[0].toFixed(3)} in / $${m.price[1].toFixed(2)} out per M tokens${m.source === 'refuseless-api' ? '. Each call is then set to what the key really spent, when no other call overlapped it' : ''}`;
   // A maker's API model models.dev has no sane price for: its calls count as $0, marked unknown, never a guess.
   if (m.priceUnknown) return `Billed per call by ${SOURCE_NAME[m.source] || m.source}, at a price QuorX doesn’t know yet: its calls count as $0 here (marked unknown) rather than a guess. Check the price on the provider’s site`;
   if (m.source && m.plan === 'free') return `Free on ${SOURCE_NAME[m.source] || m.source}, if it lets apps other than its own use it (when it doesn’t, the reply stops and says so). Free models may be rate limited, and their providers may use prompts to improve them`;
@@ -2103,10 +2115,11 @@ const agoDate = (sec) => { if (!sec) return ''; const d = (Date.now() / 1000 - s
 function priceCell(m) {
   const n = priceNum(m), usd = (x, d = 2) => (x > 0 && x < 0.01 ? `$${Number(x.toPrecision(2))}` : `$${x.toFixed(d)}`);
   // A Go model also shows its list price: what a call counts against the plan's limits.
-  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${listPriceOf(m) ? `<span class="mp-plan-list" title="List price${sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}: what a call counts against your plan's limits. You don't pay it per call."><span class="mp-money">≈ ${usd(listPriceOf(m)[0])}</span><small>in</small><span class="mp-money">${usd(listPriceOf(m)[1])}</span><small>out /M</small></span>` : ''}`;
+  if (m.plan === 'plan') return `<span class="mp-plan">${esc(planName(m))} plan</span>${listPriceOf(m) ? `<span class="mp-plan-list" title="List price${m.refFrom ? ` (${esc(m.refFrom)} on OpenRouter)` : sanePrice(m.listPrice) ? '' : ' (the same model on OpenRouter)'}: counted toward the chat's budget, and what a call counts against your plan's limits. You don't pay it per call."><span class="mp-money">≈ ${usd(listPriceOf(m)[0])}</span><small>in</small><span class="mp-money">${usd(listPriceOf(m)[1])}</span><small>out /M</small></span>` : ''}`;
   if (m.priceFromApp) return '<small>billed per call</small>';
   if (m.priceUnknown) return '<small class="mp-unknown" title="The provider bills each call, but QuorX has no price for this model yet: its calls count as $0 here, marked unknown.">price unknown</small>';
   if (n === 0 || /:free$/.test(m.id)) return '<span class="mp-free">Free</span>';
+  if (m.priceRef && m.kind === 'chat') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small><small class="mp-ref" title="${esc(SOURCE_NAME[m.source] || m.source)} names no price for it: counted at ${esc(m.priceRef)}'s OpenRouter price">≈ OR</small>`;
   if (m.kind === 'chat' || m.kind === 'listen') return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision' && m.chatDecider) return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision') return `<span class="mp-money">${usd(m.price[0], 3)}</span><small>/M in</small>`;
@@ -3045,7 +3058,7 @@ function traceCostHTML(c, m) {
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     ${(() => { const bp = byProvider(models); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
-    ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
+    ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions; counts toward the chat's budget</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
   </div>`;
 }
 // ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
@@ -5418,7 +5431,8 @@ function replyInfoHTML(s, when) {
     ${s.plan?.of ? row('Plan', `${s.plan.done} of ${s.plan.of} done`) : ''}
     ${s.changed?.length ? row('Files changed', s.changed.length) : ''}
     ${s.mediaSpent ? row('Media', money(s.mediaSpent, 4)) : ''}
-    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</span><b>${v.calls}× · ${money(v.cost || 0, 5)}</b></span>`).join('')}` : ''}
+    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}${v.refModel ? ` <i title="No price from ${esc(SOURCE_NAME[sourceOfId(m)] || 'the source')}: counted at ${esc(v.refModel)}'s OpenRouter price (list price, no discount)">≈ OpenRouter price</i>` : ''}</span><b>${v.calls}× · ${money(v.cost || 0, 5)}${planTotal(v.planCost) ? ` <small>+ sub ${money(v.planCost, 4)}</small>` : ''}</b></span>`).join('')}` : ''}
+    ${planTotal(s.planCost) ? '<span class="fi-note">Sub value counts toward the chat\'s budget, so every call is capped.</span>' : ''}
   </span></span>`;
 }
 // The breakdown opens above its ? and stays inside the window. It's drawn in one floating box on the page itself:
@@ -5800,7 +5814,7 @@ function traceRows(m) {
     if (e.t === 'llm_start') { llmAt[e.step] = out.length; llmModel[e.step] = e.model; row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace" data-think="${e.step}"><summary>💭 Thinking · ${thinkWords(m, e.step)} words</summary><div class="tt-body"></div></details>` : ''}`, 'think'); }
     else if (e.t === 'llm_done') {
       const i = llmAt[e.step] ?? -1;
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid)">sub value ${money(e.planCost, 4)}</span>` : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== llmModel[e.step] ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid). It counts toward the chat's budget.">sub value ${money(e.planCost, 4)}</span>` : ''}${e.refModel ? ` <span class="tr-ref" title="${esc(SOURCE_NAME[e.source] || 'The source')} gave no price for this call, so it is counted at ${esc(e.refModel)}'s price on OpenRouter (list price, no discount).">≈ OpenRouter price</span>` : ''}${e.costUnknown ? ' <span class="tr-ref" title="No price is known for this model, here or on OpenRouter: it counts as $0.">price unknown</span>' : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== llmModel[e.step] ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');
@@ -6697,7 +6711,7 @@ async function followRun(c, m, open) {
         }
         if (m.callPrep && e.t === 'tool') delete m.callPrep[e.step];
         if (m.callPrep && ['llm_start', 'done', 'error', 'llm_retry'].includes(e.t)) m.callPrep = {};
-        if (e.t === 'spend') { m.liveCost = e.cost; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
+        if (e.t === 'spend') { m.liveCost = e.cost; m.livePlan = e.planCost || 0; m.liveCalls = e.calls; m.liveTokens = [e.tokensIn, e.tokensOut]; m.liveByModel = e.byModel || m.liveByModel; liveSpend(c, m); continue; }
         // A new step: what the step before it said stays where it said it (in the steps), so the text below the steps
         // is only ever what is being written now.
         if (e.t === 'llm_start' && lastStep >= 0 && e.step !== lastStep && m.content.length > stepStart) {
