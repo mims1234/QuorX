@@ -8208,7 +8208,7 @@ WS.defineTabKind('running', { render: () => { const c = focused(); if (c) openTe
 WS.defineTabKind('servers', { render: () => { const c = focused(); if (c?.el) toggleServers(c); } });
 // Something came to the front: recorded for back / forward (‹ ›, Alt+← / Alt+→, the mouse's side buttons). A pane
 // tab or a file also names the chat it was in, so stepping back to it brings that chat back first.
-const wsSeen = (kind, id, extra) => { if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
+const wsSeen = (kind, id, extra) => { wsFrontFor(kind); if (id != null && WK.history.push({ kind, id, ...extra })) queueMicrotask(() => wsChrome()); };
 function inArea(a, fn) {
   const was = AREA, wc = CTX.chat;
   if (!a) return fn();
@@ -8493,7 +8493,10 @@ function wsPlace() {
   // Some groups hidden (◧, a maximised group, a chat group with no chat now): the rest share the space, without bars.
   const rs = shown.length === 1 ? { groups: { [shown[0]]: { x: 0, y: 0, w: W, h: H } }, bars: [] } : WS.rects(whole ? WK.lay : WS.keepGroups(WK.lay, shown), { x: 0, y: 0, w: W, h: H }, WS_GAP);
   if (!whole) rs.bars = [];
-  const key = JSON.stringify([rs.groups, rs.bars.map((b) => [b.x, b.y, b.w, b.h])]);
+  // Single: the chat and its one pane group share the whole space; only the one in front (WK.front) is drawn.
+  const one = wsSingle() && singleArea();
+  if (one && shown.includes(WS.CHAT_GROUP)) { const full = { x: 0, y: 0, w: W, h: H }; rs.groups = { [WS.CHAT_GROUP]: full, [one.gid]: full }; rs.bars = []; }
+  const key = JSON.stringify([rs.groups, rs.bars.map((b) => [b.x, b.y, b.w, b.h]), one ? WK.front : '']);
   WP.rects = rs.groups;
   if (key === WP.key) return;
   WP.key = key;
@@ -8507,6 +8510,7 @@ function wsPlace() {
   const side = PA.list.some((a) => rs.groups[a.gid]);
   pane.style.display = side ? '' : 'none';
   for (const a of PA.list) { a.el.hidden = !rs.groups[a.gid]; put(a.el, rs.groups[a.gid]); a.el.classList.toggle('maxed', WK.max === a.gid && shown.length === 1); }
+  if (one && shown.includes(WS.CHAT_GROUP)) { const chatFront = WK.front !== 'pane'; const cb = chatBox(0); if (cb) cb.style.display = chatFront ? '' : 'none'; one.el.style.display = chatFront ? 'none' : ''; one.el.hidden = chatFront; pane.style.display = chatFront ? 'none' : ''; }
   wsBars(rs.bars);
   deskPlace(true);
 }
@@ -8906,7 +8910,7 @@ async function wsApplyLayout(key) {
   // Each group shows the pane tab the layout gives it (its file tabs stay in its strip).
   for (const [gid, kind] of Object.entries(r.kinds)) { const a = areaOf(gid); if (a) inArea(a, () => { G.view = paneView(focused(), kind); }); }
   setPaneHidden(!!shape.focus, true);
-  WK.preset = key;
+  WK.preset = key; if (key === 'single') WK.front = 'chat';
   if (chatsChanged) renderPanes(); else { syncLayout(); eachArea(renderPane); paneMarkAreas(); }
   paneSave(); wsChrome(); wsLayoutsDraw(); deskPlace(true); window.dispatchEvent(new Event('resize'));
 }
@@ -9169,7 +9173,7 @@ function paneChat(c) {
   const r = c ? wsLoad(c) : null;
   const ok = r?.layout && WS.findGroup(r.layout, WS.CHAT_GROUP) && WS.sideGroups(r.layout).length;
   const lay = ok ? r.layout : wsDefaultLayout();
-  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : null; queueMicrotask(() => wsLayoutsDraw());
+  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : 'single'; WK.front = 'chat'; queueMicrotask(() => wsLayoutsDraw()); // a project's first layout: Single (every tab in one row)
   PA.saved = '';
   const side = WS.sideGroups(lay).slice(0, PANE_MAX_AREAS);
   if (a0.gid !== side[0].id) { const old = a0.gid; a0.st.dsk = null; bindArea(a0, side[0].id); wsForget(old); }
@@ -9866,6 +9870,7 @@ function wtWire() {
     const t = e.target.closest('.wt-tab'); if (!t) return;
     if (e.target.closest('.wt-x')) return wtClose(t.dataset.c);
     if (t.dataset.c !== curId()) { showChat(t.dataset.c); if (isPhone()) setMView('chat'); }
+    else if (wsSingle()) wsSetFront('chat'); // Single: the chat comes back in front of its pane
   });
   box.addEventListener('auxclick', (e) => { const t = e.target.closest('.wt-tab'); if (t && e.button === 1) { e.preventDefault(); wtClose(t.dataset.c); } });
   box.addEventListener('mousedown', (e) => { if (e.button === 1 && e.target.closest('.wt-tab')) e.preventDefault(); }); // no autoscroll
@@ -9947,6 +9952,83 @@ function wtList(anchor) {
   (m.querySelector('.lf-q') || m.querySelector('.wt-lrow.on') || m.querySelector('.wt-lrow'))?.focus();
 }
 
+// ---------- Single: every tab in one row ----------
+// The default arrangement (Layout › Single): one group whose strip holds every tab next to each other, the project's
+// open chats, then the chat's 🧭 Steps, its plans, each browser page, each terminal and the project's files, every
+// tab naming whose it is. Clicking one shows it in that one group. Under the hood the chat group and the chat's pane
+// group share the whole space and only the one in front is drawn (WK.front), so nothing is rebuilt or reloaded: a page
+// stays loaded and a terminal keeps its screen while the chat is in front. Splitting (a layout, Split right, a drag)
+// leaves Single and every group shows its own strip again. What the agent opens never pulls the pane in front of you.
+const singleArea = () => { const side = WS.sideGroups(WK.lay); return side.length === 1 ? areaOf(side[0].id) : null; };
+const wsSingle = () => WK.preset === 'single' && !isPhone() && !POP && G.panes.length === 1 && !!singleArea();
+// What you brought to the front decides which side shows: a chat → the chat; a tab or file → the pane (not when the
+// agent opened it).
+function wsFrontFor(kind) {
+  if (!wsSingle()) return;
+  const f = kind === 'chat' ? 'chat' : (kind === 'tab' || kind === 'file') && !WP.agent ? 'pane' : null;
+  if (f) wsSetFront(f);
+}
+function wsSetFront(f) {
+  if (WK.front === f) return;
+  WK.front = f; WP.key = '';
+  queueMicrotask(() => { wsPlace(); wsChrome(); });
+}
+// The one strip: in #wsTop after the chat tabs, while Single is on (the pane group's own strip steps aside).
+function wsSingleStrip() {
+  const box = $('#wtPaneTabs'); if (!box) return;
+  const on = wsSingle();
+  document.body.classList.toggle('ws-single', on);
+  box.hidden = !on;
+  if (!on) { if (box.dataset.sig) { box.innerHTML = ''; delete box.dataset.sig; } return; }
+  const a = singleArea(), c = G.open.get(G.panes[0]); if (!a || !c) return;
+  const front = WK.front === 'pane', owner = clip(c.title || 'this chat', 22), t = termState(spaceOf(c));
+  const cur = front ? inArea(a, () => (G.view.ftab ? `f:${G.view.ftab}` : G.view.browser ? `p:${activeBTab(c)?.sid || ''}` : G.view.term ? `k:${t.filter || 'all'}` : `t:${paneTab()}`)) : '';
+  const pages = browserTabs(c), terms = t.terms || [];
+  const items = [
+    ['t:trace', '🧭', 'Steps', owner],
+    ['t:art', '📄', 'Plan', owner],
+    ...(pages.length ? pages.map((x) => [`p:${x.sid}`, x.agent ? '🤖' : '🌐', pageLabel(x), clip(pageOwner(c, x), 22), x]) : [['t:browser', '🌐', 'Browser', owner]]),
+    ['k:all', '⌨', 'Terminal', 'Project'],
+    ...terms.map((u) => [`k:${u.id}`, '⌨', u.name || 'Terminal', 'yours']),
+    ['t:files', '📁', 'Files', 'Project'],
+    ...fileTabs(a.gid).map((id) => { const st = WK.tabs.get(id)?.st || {}, f = st.f || {}; return [`f:${id}`, '📄', baseName(f.label || f.name || 'File'), clip((G.open.get(st.chat) || c).title || owner, 22)]; }),
+  ];
+  const sig = JSON.stringify([items.map((x) => x.slice(0, 4)), cur, DESK ? pages.map((x) => G.sound?.tabs?.[x.sid] || null) : 0]);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = items.map(([k, ico, label, own, page]) => `<span class="wt-ptab ${k === cur ? 'on' : ''}" role="tab" tabindex="${k === cur ? 0 : -1}" aria-selected="${k === cur}" data-k="${esc(k)}" title="${esc(`${label} · ${own}`)}"><span class="wp-ico" aria-hidden="true">${ico}</span><span class="pp-name">${esc(clip(label, 26))}</span><span class="pp-own">· ${esc(own)}</span>${page && DESK ? sndMark(page) : ''}${page && !page.agent ? `<button type="button" class="pp-x" data-close="${esc(page.sid)}" tabindex="-1" aria-label="Close ${esc(label)}">×</button>` : ''}</span>`).join('')
+    + '<button type="button" class="wt-padd" data-pa="add" aria-haspopup="menu" title="Open a tab: chat, browser page, terminal, files, plan, Steps or Settings" aria-label="Open a tab">＋</button><button type="button" class="wt-pmore" data-pa="more" aria-haspopup="menu" title="Split, move, follow the agent, save the layout" aria-label="More for this group">⋯</button>';
+  box.querySelector('.wt-ptab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function wsSingleWire() {
+  const box = $('#wtPaneTabs'); if (!box) return;
+  box.addEventListener('click', (e) => {
+    const a = singleArea(), c = G.open.get(G.panes[0]); if (!a || !c) return;
+    const add = e.target.closest('[data-pa]');
+    if (add) return add.dataset.pa === 'add' ? paneAddMenu(Object.assign(e, { anchor: add }), a) : wsGroupMenu(Object.assign(e, { anchor: add }), a);
+    const tab = e.target.closest('.wt-ptab'); if (!tab) return;
+    const k = tab.dataset.k, v = k.slice(2);
+    if (e.target.closest('.bt-snd')) { e.stopPropagation(); return setSound('tab', { sid: v, muted: !G.sound?.tabs?.[v]?.muted }); }
+    if (e.target.closest('.pp-x')) return closeBTab(c, v);
+    wsSetFront('pane');
+    PA.focus = a; AREA = a;
+    inArea(a, () => {
+      if (k.startsWith('t:')) setPaneTab(v);
+      else if (k.startsWith('p:')) showPageTab(v);
+      else if (k.startsWith('k:')) openTerminal(c, v, 'term');
+      else if (k.startsWith('f:')) wsShowFileTab(a, v);
+    });
+  });
+  box.addEventListener('contextmenu', (e) => {
+    const tab = e.target.closest('.wt-ptab'), a = singleArea(), c = G.open.get(G.panes[0]); if (!tab || !a || !c) return;
+    const k = tab.dataset.k;
+    if (k.startsWith('p:')) return pageTabMenu(e, c, k.slice(2));
+    if (k.startsWith('f:')) return wsTabMenu(e, a, { type: 'file', tid: k.slice(2) });
+    if (k.startsWith('t:')) return wsTabMenu(e, a, { type: 'pane', tab: k.slice(2), from: a });
+  });
+  box.addEventListener('keydown', (e) => { const t = e.target.closest('.wt-ptab'); if (t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); t.click(); } });
+  box.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && box.scrollWidth > box.clientWidth) { e.preventDefault(); box.scrollLeft += e.deltaY; } }, { passive: false });
+}
 // ---------- the activity bar: the sidebar's views ----------
 // Like VS Code's: the bar on the far left picks WHAT the sidebar shows (public/frame-model.js VIEWS): Chats (the
 // sidebar as it always was), Search (search inside chats), Running, Servers & pages, Source control (pull requests),
@@ -10237,7 +10319,7 @@ addEventListener('focus', () => { const id = G.panes?.[0]; if (id && G.unseen?.h
 // Everything above, drawn again: after the sidebar redraws (chat states), and when the Running list or servers change.
 function wsChrome() {
   if (!$('#wsTop')) return;
-  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw(); qfDraw();
+  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw(); qfDraw(); wsSingleStrip();
   const nb = $('#wsBack'), nf = $('#wsFwd');
   if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
   if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
@@ -10245,7 +10327,7 @@ function wsChrome() {
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
-  wrInit(); avWireTools(); wtWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
+  wrInit(); avWireTools(); wtWire(); wsSingleWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
   if (!WT.pid) wtLoad(G.landingProject || 'scratch');
   wrSync(); wsChrome();
 }
@@ -15326,6 +15408,7 @@ function renderPaneTabs(c) {
   for (const b of box.querySelectorAll('[data-tab]')) { const on = b.dataset.tab === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
   drawFileTabs(box);
   drawPageTabs(box, c);
+  queueMicrotask(wsSingleStrip);
   const n = planArts(c).length;
   $('[data-tab="art"] .pt-n', box).textContent = n || '';
   // The Terminal tab counts what runs (its Running section lists them) and turns amber while a command runs.
@@ -15338,6 +15421,10 @@ function renderPaneTabs(c) {
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
   // Pull requests: only for a project whose folder has a GitHub repo (its remote).
   const pt = $('[data-tab="pulls"]', box); if (pt) pt.hidden = !(c && G.projects.find((p) => p.id === c.projectId)?.github) && t !== 'pulls';
+  // With the activity bar, pull requests have one home: the Source control view (the tab stays only while it is open).
+  if (pt && avOn()) pt.hidden = t !== 'pulls';
+  // Every tab says whose it is: this group's chat (files and the terminal belong to the project).
+  if (c) for (const b of box.querySelectorAll('[data-tab]')) { const base = b.dataset.baseTitle ??= b.title || ''; b.title = `${base}\n· ${['files', 'term'].includes(b.dataset.tab) ? 'Project' : clip(c.title || 'this chat', 40)}`; }
 }
 // ---------- the Pull requests tab ----------
 // The project's GitHub pull requests, read through the GitHub command line (server/pulls.js): this chat's branch
@@ -15643,6 +15730,7 @@ function paneAddMenu(e, area) {
     ...(c ? [
       ['🌐 Browser page', here(() => { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl')?.focus()); })],
       ['⌨ Terminal', here(() => openTerminal(c, null, 'term'))],
+      ['⌨ New terminal', here(() => { const t = termState(spaceOf(c)), id = termNew(t); termSave(t); openTerminal(c, id, 'term'); })],
       ['📁 Files', here(() => setPaneTab('files'))],
       ['📄 Plan', here(() => setPaneTab('art'))],
       ['🧭 Steps', here(() => setPaneTab('trace'))],
