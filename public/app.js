@@ -8895,7 +8895,8 @@ function chatChanges(c) {
   return (c?.agent?.messages || []).filter((m) => m.role === 'assistant' && !m.live && !m.undone).reduce((n, m) => n + Math.max(0, (m.stats?.changed?.length || 0) - (m.undoneFiles?.length || 0)), 0);
 }
 const chatHasSteps = (c) => !!c?.agent?.messages?.some((m) => m.role === 'assistant' && m.runId);
-const wsOpenChats = () => [...new Set([...G.panes, ...WT.tabs])].filter((id) => chatInfo(id));
+// Open chats of this project only (a chat left on screen from another project does not count).
+const wsOpenChats = () => { const pid = primaryChat()?.projectId; return [...new Set([...G.panes, ...WT.tabs])].filter((id) => chatInfo(id) && chatProject(id) === pid); };
 function wsLayoutWhy(key) {
   if (isPhone()) return 'A phone shows one group at a time';
   if (!primaryChat()) return 'Open a chat first';
@@ -8929,7 +8930,7 @@ async function wsApplyLayout(key, { pair = null } = {}) {
   if (pair && pair[0] !== G.panes[0] && chatInfo(pair[0])) await showChat(pair[0], 0);
   const shape0 = layoutOf(key), c = primaryChat();
   if (!shape0 || !c || isPhone()) return;
-  let chat2 = pair ? pair[1] : G.panes[1] || null, shape = shape0;
+  let chat2 = pair ? pair[1] : (G.panes[1] && chatProject(G.panes[1]) === c.projectId ? G.panes[1] : null), shape = shape0;
   if (pair && !(await getChat(chat2))) return;
   if (shape.chats === 2 && !chat2) {
     const other = WT.tabs.find((id) => !G.panes.includes(id) && chatInfo(id));
@@ -9026,7 +9027,7 @@ function wsLayoutMenu(anchor) {
   m.onclick = async (ev) => {
     if (ev.target.closest('.wl-save')) { close(); return wsSaveLayoutAs(); }
     const pre = ev.target.closest('.wl-item[data-ly]');
-    if (pre) { if (pre.getAttribute('aria-disabled') === 'true') return flashTip(pre, pre.title, 2200); close(); return wsLayoutPick(pre.dataset.ly, anchor); }
+    if (pre) { if (pre.getAttribute('aria-disabled') === 'true') return flashTip(pre, $('.wl-why', pre)?.textContent || '', 2200); close(); return wsLayoutPick(pre.dataset.ly, anchor); }
     const row = ev.target.closest('.wl-row'); if (!row) return;
     const id = row.dataset.id, list = myLayouts(), x = list.find((y) => y.id === id); if (!x) return;
     if (ev.target.closest('.wl-apply')) { close(); return wsLayoutPick(`my:${id}`, anchor); }
@@ -9057,7 +9058,7 @@ const newProjectLayout = () => { const k = uiOf(G.settings || {}).newLayout; ret
 // there is something to show. Only in a preset (not Single, Focus or a layout of your own), only over the group's
 // body (its tabs and toolbar stay usable), and never over a real page (it only shows when there is none).
 let lyHintRaf = 0;
-function wsHintsQueue() { if (!lyHintRaf) lyHintRaf = requestAnimationFrame(() => { lyHintRaf = 0; wsHintsDraw(); }); }
+function wsHintsQueue() { if (!lyHintRaf) lyHintRaf = setTimeout(() => { lyHintRaf = 0; wsHintsDraw(); }, 30); }
 function wsHintFor(a) {
   const key = WS.layoutKey(WK.preset);
   if (!WS.LAYOUTS[key] || key === 'single' || key === 'focus' || isPhone() || G.paneHidden) return null;
@@ -12689,7 +12690,7 @@ function wireSettings() {
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
-    if (act === 'applyLayout') { const b = e.target.closest('[data-ly]'); if (b.getAttribute('aria-disabled') === 'true') return flashTip(b, b.title, 2200); await wsLayoutPick(b.dataset.ly, b); stRefresh(); return; }
+    if (act === 'applyLayout') { const b = e.target.closest('[data-ly]'); if (b.getAttribute('aria-disabled') === 'true') return flashTip(b, $('.lt-why', b)?.textContent || '', 2200); await wsLayoutPick(b.dataset.ly, b); stRefresh(); return; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
     if (act === 'reportBundle') reportProblem();
