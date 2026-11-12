@@ -19,9 +19,10 @@ import { parseSetup as mcpParse, saveServers as mcpSave, listServers as mcpList,
 import { planOf, costSummary } from '../server/store.js';
 import { sourceOf, sourceStream, sameOnOpenRouter, failureKind, noteSourceResult, sourceSkip, forgetSourceHealth, priced as sourcePriced, chatAny } from '../server/sources.js';
 import { SECRET_FILES } from '../server/keys.js';
-import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
+import { SOURCE_IDS, SOURCE_FILE, sourceOn, sourceOffWhy, blockedLocal, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, baseFor, withRefPrices, keyFor, movedModel, sourceModels, sourceStatus } from '../server/sources.js';
 import { goModels, goEntry, goBody, goStream, goAccount, effortFor as goEffort } from '../server/opencodego.js';
 import { ccModels, ccEntry, ccStream, messagesBody, toMessages, ccAccount, planName as ccPlanName, ccDecisionModels, ccDecisions } from '../server/commandcode.js';
+import { CODING_PLAN_IDS, planModels, planStream, planCheck, wireFor, devBucketFor } from '../server/codingplans.js';
 import { toolPrompt, renderTranscript, parseToolCalls, textFilter, notRun } from '../server/textcalls.js';
 import { localStream, localModels } from '../server/opencodelocal.js';
 import { claudeStream, claudeModels, claudeError, effortFor } from '../server/claudelocal.js';
@@ -725,7 +726,7 @@ test('OpenCode on this PC lists every text model of its connected providers, pri
 });
 
 // ---------- Claude Code on this PC (claudelocal.js), against scripts/fake-claude.mjs ----------
-const FAKE_CLAUDE = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'fake-claude.mjs');
+const FAKE_CLAUDE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fake-claude.mjs');
 async function viaFakeClaude(mode, body, opts = {}) {
   const log = path.join(tempDir('fake-claude-'), 'call.json');
   const keep = { mode: process.env.FAKE_CLAUDE_MODE, log: process.env.FAKE_CLAUDE_LOG, or: process.env.OPENROUTER_API_KEY };
@@ -1151,6 +1152,101 @@ test('Command Code streams Claude over Messages and other models over chat into 
     assert.equal(failureKind(down), 'server');
     await assert.rejects(ccStream({ model: 'commandcode/deepseek/deepseek-v4-pro', messages: [] }, new AbortController().signal, null, null, { info, fetchFn }), /no Command Code key/);
   }
+});
+
+// ---------- Flat-rate Coding Plan subscriptions (server/codingplans.js): Z.AI, Kimi, Alibaba, MiniMax ----------
+const PLAN_DEV = {
+  'zai-coding-plan': { models: {
+    'glm-5.3': { id: 'glm-5.3', name: 'GLM-5.3', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }], interleaved: { field: 'reasoning_content' }, modalities: { input: ['text'], output: ['text'] }, limit: { context: 1000000, output: 131072 }, cost: { input: 0, output: 0 }, canonical_model_id: 'zhipuai/glm-5.3' },
+    'glm-5.3-flash': { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1000000, output: 131072 }, cost: { input: 0, output: 0 } },
+  } },
+  zai: { models: { 'glm-5.3': { id: 'glm-5.3', cost: { input: 1.4, output: 4.4, cache_read: 0.28 } } } },
+  'kimi-code-plan-global': { models: {
+    'kimi-for-coding': { id: 'kimi-for-coding', name: 'kimi-for-coding', tool_call: true, temperature: false, reasoning: true, reasoning_options: [{ type: 'effort', values: ['none', 'low', 'high', 'max'] }], interleaved: { field: 'reasoning_content' }, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1048576, output: 32768 }, cost: { input: 0, output: 0 }, canonical_model_id: 'moonshotai/kimi-k2.8-preview' },
+    k3: { id: 'k3', name: 'Kimi K3', tool_call: true, temperature: false, reasoning: true, interleaved: { field: 'reasoning_content' }, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1048576, output: 131072 }, cost: { input: 0, output: 0 }, canonical_model_id: 'moonshotai/kimi-k3' },
+  } },
+  'alibaba-coding-plan': { models: {
+    'qwen3.7-plus': { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', tool_call: true, reasoning: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1000000, output: 64000 }, cost: { input: 0, output: 0 }, canonical_model_id: 'alibaba/qwen3.7-plus' },
+  } },
+  'alibaba-token-plan': { models: {
+    'qwen3.8-max': { id: 'qwen3.8-max', name: 'Qwen3.8 Max', tool_call: true, reasoning: true, modalities: { input: ['text'], output: ['text'] }, limit: { context: 262144, output: 65536 }, cost: { input: 0, output: 0 } },
+    'wan2.7-image': { id: 'wan2.7-image', name: 'Wan Image', modalities: { input: ['text'], output: ['image'] }, cost: { input: 0, output: 0 } },
+  } },
+  'minimax-coding-plan': { models: {
+    'MiniMax-M3.1-Flash': { id: 'MiniMax-M3.1-Flash', name: 'MiniMax-M3.1-Flash', tool_call: true, reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }], modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 1000000, output: 524288 }, cost: { input: 0, output: 0 }, canonical_model_id: 'minimax/MiniMax-M3.1-Flash' },
+  } },
+};
+
+test('Coding Plan subscriptions register as plans with configurable regional addresses, models.dev/OpenRouter prices, and chat + Messages streaming', async () => {
+  for (const id of ['zai-coding', 'kimi-coding', 'alibaba-coding', 'minimax-coding']) {
+    assert.ok(CODING_PLAN_IDS.includes(id) && SOURCE_IDS.includes(id), id);
+  }
+  // Regional and protocol adaptation from the base URL.
+  assert.deepEqual([devBucketFor('zai-coding', 'https://open.bigmodel.cn/api/coding/paas/v4'), devBucketFor('kimi-coding', 'https://api.kimi.com/coding/v1'), devBucketFor('alibaba-coding', 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1'), devBucketFor('minimax-coding', 'https://api.minimax.cn/anthropic/v1')], ['zhipuai-coding-plan', 'kimi-code-plan-cn', 'alibaba-token-plan', 'minimax-cn-coding-plan']);
+  assert.deepEqual([wireFor('zai-coding', 'https://api.z.ai/api/anthropic'), wireFor('minimax-coding', 'https://api.minimax.io/anthropic/v1'), wireFor('minimax-coding', 'https://api.minimax.io/v1')], ['messages', 'messages', 'chat']);
+
+  // Browsing before a key is added uses models.dev, picks up maker pay-as-you-go fallback prices, and leaves non-text models out.
+  const zai = await planModels('zai-coding', { fetchJSON: async () => PLAN_DEV });
+  assert.deepEqual(zai.map((m) => [m.id, m.maker, m.plan, m.planLabel, m.listPrice]), [['zai-coding/glm-5.3', 'z-ai', 'plan', 'Z.AI', [1.4, 4.4]], ['zai-coding/glm-5.3-flash', 'z-ai', 'plan', 'Z.AI', [0, 0]]]);
+  const pricedFlash = withRefPrices(zai, [{ id: 'z-ai/glm-5.3-flash', price: [0.2, 0.8] }])[1];
+  assert.deepEqual([pricedFlash.listPrice, pricedFlash.refFrom], [[0.2, 0.8], 'z-ai/glm-5.3-flash']);
+  const aliToken = await planModels('alibaba-coding', { base: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', fetchJSON: async () => PLAN_DEV });
+  assert.deepEqual(aliToken.map((m) => m.id), ['alibaba-coding/qwen3.8-max'], 'image models in Token Plan are left out');
+
+  // Settings keeps them in Subscriptions (not direct), with a configurable Address and no routing switch.
+  setSourceOptions('kimi-coding', { base: 'https://api.kimi.com/coding/v1' });
+  assert.equal(baseFor('kimi-coding'), 'https://api.kimi.com/coding/v1');
+  assert.throws(() => setSourceOptions('kimi-coding', { route: 'direct' }), /no routing switch/);
+  const st = (await sourceStatus({ versions: false })).find((x) => x.id === 'kimi-coding');
+  assert.deepEqual([st.billing, st.local, !!st.direct, st.hasBase, st.base], ['plan', false, false, true, 'https://api.kimi.com/coding/v1']);
+  setSourceOptions('kimi-coding', { base: '' });
+
+  // Chat streaming (Kimi For Coding: temp omitted, reasoning_content passed back, cached_tokens mapped) & Anthropic streaming (MiniMax M Plan).
+  const sse = (frames, raw = false) => ({ ok: true, status: 200, headers: new Headers(), body: (async function* () { for (const f of frames) yield new TextEncoder().encode(`data: ${JSON.stringify(f)}\n\n`); if (!raw) yield new TextEncoder().encode('data: [DONE]\n\n'); })() });
+  const kimiList = await planModels('kimi-coding', { fetchJSON: async () => PLAN_DEV });
+  let kimiReq = null;
+  const kimiRes = await planStream('kimi-coding', { model: 'kimi-coding/kimi-for-coding', temperature: 0.4, reasoning: { effort: 'high' }, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, {
+    info: kimiList[0], key: 'sk-kimi-0123456789abcdef',
+    fetchFn: async (url, init) => { kimiReq = { url, body: JSON.parse(init.body) }; return sse([{ choices: [{ delta: { reasoning_content: 'Think.' } }] }, { choices: [{ delta: { content: 'Done.' } }] }, { choices: [], usage: { prompt_tokens: 400, completion_tokens: 30, cached_tokens: 250 } }]); },
+  });
+  assert.equal(kimiReq.url, 'https://api.kimi.ai/coding/v1/chat/completions');
+  assert.equal(kimiReq.body.temperature, undefined, 'kimi-for-coding refuses temperature');
+  assert.equal(kimiReq.body.reasoning_effort, 'high');
+  assert.deepEqual([kimiRes.text, kimiRes.passBack, kimiRes.usage.prompt_tokens_details], ['Done.', { reasoning_content: 'Think.' }, { cached_tokens: 250 }]);
+
+  const mmList = await planModels('minimax-coding', { fetchJSON: async () => PLAN_DEV });
+  let mmReq = null;
+  const mmRes = await planStream('minimax-coding', { model: 'minimax-coding/MiniMax-M3.1-Flash', reasoning: { effort: 'xhigh' }, messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal, null, null, {
+    info: mmList[0], key: 'sk-cp-0123456789abcdef',
+    fetchFn: async (url, init) => {
+      mmReq = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return sse([
+        { type: 'message_start', message: { id: 'm1', model: 'MiniMax-M3.1-Flash', usage: { input_tokens: 200, cache_read_input_tokens: 100 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Step.' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sigM' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'OK' } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 12 } },
+      ], true);
+    },
+  });
+  assert.equal(mmReq.url, 'https://api.minimax.io/anthropic/v1/messages');
+  assert.equal(mmReq.headers['x-api-key'], 'sk-cp-0123456789abcdef');
+  assert.equal(mmReq.body.output_config?.effort, 'xhigh');
+  assert.deepEqual([mmRes.text, mmRes.passBack], ['OK', { cc_thinking: [{ type: 'thinking', thinking: 'Step.', signature: 'sigM' }] }]);
+
+  // Connection check: 401 on /models fails as auth; Alibaba's public /models still runs a 16-token call so a bad key is caught.
+  const badKey = async () => ({ ok: false, status: 401, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'Invalid Authentication' } }) });
+  const authErr = await planCheck('zai-coding', { key: 'bad-0123456789abcdef', fetchFn: badKey, fetchJSON: async () => PLAN_DEV }).catch((x) => x);
+  assert.equal(failureKind(authErr), 'auth');
+  let aliChatCalled = false;
+  await planCheck('alibaba-coding', {
+    key: 'sk-sp-0123456789abcdef', fetchJSON: async () => PLAN_DEV,
+    fetchFn: async (url) => (/\/models$/.test(url)
+      ? { ok: true, status: 200, headers: new Headers(), json: async () => ({ data: [{ id: 'qwen3.7-plus' }] }) }
+      : (aliChatCalled = true, sse([{ choices: [{ delta: { content: 'OK' } }] }, { choices: [], usage: { prompt_tokens: 8, completion_tokens: 1 } }]))),
+  });
+  assert.equal(aliChatCalled, true, 'Alibaba’s public /models still checks the key with a tiny call');
 });
 
 // ---------- Ollama on this PC (server/ollamalocal.js) ----------

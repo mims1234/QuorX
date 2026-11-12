@@ -28,6 +28,7 @@ import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
+import { CODING_PLANS, CODING_PLAN_IDS, planModels, planStream, planCheck } from './codingplans.js';
 import { DIRECT, DIRECT_IDS, isDirect, cleanBase, directModels, directStream, directAccount, directDeciders, directDecisions, deciderReal } from './directapi.js';
 
 const DATA = path.join(HOME, 'data');
@@ -53,6 +54,11 @@ export const SOURCES = {
     site: 'https://commandcode.ai', keyUrl: 'https://commandcode.ai/studio', docs: 'https://commandcode.ai/docs/provider',
     keyHint: 'An API key from Command Code Studio. Every plan but Go has API access (GOAT, Pro, Max, Teams, Provider).',
   },
+  // Flat-rate Coding Plan subscriptions over their APIs (codingplans.js), with the user's plan key.
+  ...Object.fromEntries(CODING_PLAN_IDS.map((id) => {
+    const p = CODING_PLANS[id];
+    return [id, { id, name: p.name, short: p.short, app: null, billing: 'plan', local: false, needsKey: true, planApi: true, env: p.env[0], envs: p.env, site: p.site, keyUrl: p.keyUrl, docs: p.docs, keyHint: p.keyHint, base: p.base }];
+  })),
   // Claude Code on this computer (claudelocal.js): the subscription or API key it is signed in with.
   [CLAUDE_ID]: {
     id: CLAUDE_ID, name: 'Claude Code on this PC', short: 'Claude Code', app: 'claude', billing: 'mixed', local: true,
@@ -94,6 +100,13 @@ const APPS = {
   // Its list is public too; a call and the check need the key. Its models name the plan the key is on (GOAT plan).
   [CC_ID]: { list: async () => { const [l, a] = await Promise.all([ccModels(), sourceAccount(CC_ID).catch(() => null)]); return a?.plan ? l.map((m) => ({ ...m, planLabel: a.plan })) : l; },
     account: () => ccAccount(keyFor(CC_ID)?.key), stream: (b, sg, t, th, o) => ccStream(b, sg, t, th, { ...o, key: keyFor(CC_ID)?.key }), check: async () => { const k = keyFor(CC_ID)?.key; if (!k) throw Object.assign(new Error('Add your Command Code key first.'), { kind: 'auth' }); await ccCheck(k, await ccModels()); }, server: () => ({ api: true }) },
+  // Coding Plan subscriptions: browsable from models.dev; calls and checks use the plan key (and any custom address).
+  ...Object.fromEntries(CODING_PLAN_IDS.map((id) => [id, {
+    list: () => planModels(id, { key: keyFor(id)?.key, base: baseFor(id) }),
+    stream: (b, sg, t, th, o) => planStream(id, b, sg, t, th, { ...o, key: keyFor(id)?.key, base: baseFor(id) }),
+    check: () => planCheck(id, { key: keyFor(id)?.key, base: baseFor(id) }),
+    server: () => ({ api: true }),
+  }])),
   // A maker's API lists its models only with the key, so the list is the check, and costs nothing.
   ...Object.fromEntries(DIRECT_IDS.map((id) => [id, {
     list: () => directModels(id, { key: keyFor(id)?.key, base: baseFor(id) }),
@@ -134,8 +147,8 @@ export function keyFor(id) {
   for (const e of def.envs || [def.env]) if (e && process.env[e]) return { key: process.env[e], from: 'env', env: e };
   return null;
 }
-/** The address a maker's API is called at: the one set in ⚙ Settings, else its own. */
-export const baseFor = (id) => (SOURCES[id]?.direct ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
+/** The address an API source with a configurable base is called at: the one set in ⚙ Settings, else its own. */
+export const baseFor = (id) => (SOURCES[id]?.base ? cleanBase(load()[id]?.base) || SOURCES[id].base : null);
 /** For a maker's API: whether its models also take the place of the same models on OpenRouter ('direct'), or not ('openrouter'). */
 export const routeOf = (id) => (SOURCES[id]?.direct && load()[id]?.route === 'direct' ? 'direct' : 'openrouter');
 const mask = (k) => (k.length > 16 ? `${k.slice(0, 6)}••••••••${k.slice(-4)}` : '••••••••');
@@ -154,15 +167,16 @@ export function sourceOffWhy(id) {
 // What is kept: each source's switch, the key of one that takes a key, and a maker's API's own address and routing.
 // Anything else an older version saved here goes.
 const tidy = (all) => Object.fromEntries(Object.entries(all).filter(([k]) => Object.hasOwn(SOURCES, k)).map(([k, v]) => [k, { on: !!v?.on, ...(SOURCES[k].needsKey && typeof v?.key === 'string' && v.key ? { key: v.key, added: v.added || 0 } : {}),
-  ...(SOURCES[k].direct && cleanBase(v?.base) ? { base: cleanBase(v.base) } : {}), ...(SOURCES[k].direct && v?.route === 'direct' ? { route: 'direct' } : {}) }]));
+  ...(SOURCES[k].base && cleanBase(v?.base) ? { base: cleanBase(v.base) } : {}), ...(SOURCES[k].direct && v?.route === 'direct' ? { route: 'direct' } : {}) }]));
 /**
- * A maker's API's options: `base`, the address its calls go to ('' for its own), and `route`, whether OpenRouter's ids
- * of the same models run on it ('direct') or stay on OpenRouter ('openrouter').
+ * An API source's options: `base`, the address its calls go to ('' for its own), and for a maker's API `route`, whether
+ * OpenRouter's ids of the same models run on it ('direct') or stay on OpenRouter ('openrouter').
  */
 export function setSourceOptions(id, { base, route } = {}) {
   known(id);
   const d = SOURCES[id];
-  if (!d.direct) throw new Error(`${d.name} has no options to set.`);
+  if (!d.direct && !d.base) throw new Error(`${d.name} has no options to set.`);
+  if (route !== undefined && !d.direct) throw new Error(`${d.name} has no routing switch.`);
   const s = tidy(load()), cur = { ...(s[id] || { on: false }) };
   if (base !== undefined) {
     const b = cleanBase(base);
@@ -482,8 +496,8 @@ export const kindWords = (k) => KIND_WORDS[k] || KIND_WORDS.unknown;
 const SOURCE_KINDS = new Set(['notinstalled', 'network']);
 export function noteSourceResult(id, model, err, { now = Date.now() } = {}) {
   if (!err) { health.set(id, { ok: true, at: now, model, fails: 0 }); if (model) modelHealth.delete(`${id}|${model}`); return; }
-  // A maker's API has one key and one account for all its models: a refused key or spent credit is the whole source's.
-  const kind = failureKind(err), scoped = !SOURCE_KINDS.has(kind) && !(SOURCES[id]?.direct && (kind === 'auth' || kind === 'quota'));
+  // A maker's or coding-plan API has one key and one account for all its models: a refused key or spent plan is the whole source's.
+  const kind = failureKind(err), scoped = !SOURCE_KINDS.has(kind) && !((SOURCES[id]?.direct || SOURCES[id]?.planApi) && (kind === 'auth' || kind === 'quota'));
   // A model-sized failure with no model named (the connection test) is shown in Settings but skips nothing.
   const key = scoped ? (model ? `${id}|${model}` : null) : id;
   const prev = (key && (scoped ? modelHealth.get(key) : (health.get(key)?.scoped ? null : health.get(key)))) || {};
@@ -651,7 +665,8 @@ export async function sourceStatus({ versions = true } = {}) {
       on: !!s[id]?.on && ready(id), local: !def.needsKey, installed: ready(id), server: APPS[id].server(), install: def.install, appName: def.appName,
       ...(APPS[id].account ? { account: true } : {}),
       ...(def.needsKey ? { needsKey: true, env: k?.env || def.env, key: k ? { masked: mask(k.key), from: k.from, added: s[id]?.added || 0 } : null } : {}),
-      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), routable: def.routable, envs: def.envs } : {}),
+      ...(def.direct ? { direct: true, base: baseFor(id), defaultBase: def.base, route: routeOf(id), routable: def.routable, envs: def.envs }
+        : def.base ? { hasBase: true, base: baseFor(id), defaultBase: def.base, envs: def.envs } : {}),
       app_: v ? { installed: true, version: v.version } : { installed: false },
       models: models.filter((m) => m.source === id).length, catalogueError: catalogue?.errors?.[id] || null,
       last: h ? { ok: !!h.ok, at: h.at, kind: h.kind || null, why: h.why || null, until: h.until || 0, model: h.model || null, scoped: !!h.scoped } : null,
