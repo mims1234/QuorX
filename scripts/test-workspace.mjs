@@ -669,9 +669,34 @@ test('Single: every tab in one row; the chat and its pane share the space; a pro
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   for (const fn of ['const wsSingle = ', 'function wsFrontFor(', 'function wsSingleStrip(', 'function wsSingleWire(']) assert.ok(app.includes(fn), fn);
   const front = app.slice(app.indexOf('function wsFrontFor('), app.indexOf('\n}\n', app.indexOf('function wsFrontFor(')));
-  assert.match(front, /!WP\.agent/, 'what the agent opens never pulls the pane in front');
+  assert.match(front, /if \(WP\.agent\) return/, 'what the agent opens never pulls the pane in front');
   assert.match(app, /WK\.preset = ok \? r\.preset \|\| null : 'single'/, 'a project with no saved layout starts in Single');
   const strip = app.slice(app.indexOf('function wsSingleStrip('), app.indexOf('\n}\n', app.indexOf('function wsSingleStrip(')));
   for (const k of ["'t:trace', '🧭', 'Steps'", "'t:art'", 'p:', 'k:all', "'t:files'", 'f:']) assert.ok(strip.includes(k), `the row has ${k}`);
   assert.ok(strip.indexOf("'t:trace'") < strip.indexOf("'t:art'"), 'Steps sits right after the chats');
+});
+
+test('a chat inside a pane group: hosts are checked, saved, and sizes on the smaller layout write back', () => {
+  let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout; // chat | col(g1 g2)
+  assert.deepEqual(W.cleanHosts(lay, { chat: 'g1' }), { chat: 'g1' });
+  assert.deepEqual(W.cleanHosts(lay, { chat: 'chat2' }), {}, 'never inside another chat group');
+  assert.deepEqual(W.cleanHosts(lay, { chat: 'g9' }), {}, 'the group must exist');
+  assert.deepEqual(W.cleanHosts(lay, { g1: 'g2' }), {}, 'only a chat group is hosted');
+  assert.deepEqual(W.cleanHosts(lay, { chat: 'g1', chat2: 'g1' }), { chat: 'g1' }, 'one chat per group');
+  const back = W.parse(W.serialise(lay, {}, [], { hosts: { chat: 'g2' } }));
+  assert.deepEqual(back.hosts, { chat: 'g2' }, 'saved with the layout');
+  assert.deepEqual(W.parse(W.serialise(lay, {}, [])).hosts, {});
+  // The chat's slot gives way: the pane groups share the space; a resize there lands in the whole layout.
+  const part = W.keepGroups(lay, ['g1', 'g2']);
+  assert.deepEqual(W.groups(part).map((g) => g.id), ['g1', 'g2']);
+  const bars = W.rects(part, { x: 0, y: 0, w: 1000, h: 800 }, 6).bars;
+  assert.equal(bars.length, 1, 'the bar between the two pane groups is still there');
+  const resized = W.resizePair(part, bars[0].path, bars[0].i, 600, 194);
+  const full = W.writeBack(lay, resized);
+  assert.equal(W.groups(full).length, 3, 'the chat group stays in the whole layout');
+  const g1 = W.findGroup(full, 'g1').w, g2 = W.findGroup(full, 'g2').w;
+  assert.ok(Math.abs(g1 / (g1 + g2) - 600 / 794) < 0.01, 'g1 and g2 keep the new split');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  for (const fn of ['function wsHosted(', 'function wsHostChat(', 'function wsUnhost(', 'function drawHostTab(', 'async function wsHostChatById(']) assert.ok(app.includes(fn), fn);
+  assert.match(app, /hosts: WK\.hosts/, 'hosts are saved with the project layout');
 });
