@@ -25,6 +25,7 @@ import { findOnPath, localModels, localStream, ensureLocalServer, localServer, L
 import { failureKind } from './errors.js';
 import { claudeModels, claudeStream, claudeAuth, claudeRunning, CLAUDE_ID } from './claudelocal.js';
 import { grokModels, grokStream, grokRunning, GROK_ID } from './groklocal.js';
+import { ACP_SOURCES, ACP_IDS, acpModels, acpStream, acpRunning } from './acp.js';
 import { goModels, goStream, goCheck, goAccount, GO_ID } from './opencodego.js';
 import { ollamaModels, ollamaStream, ensureOllama, ollamaServer, OLLAMA_ID } from './ollamalocal.js';
 import { ccModels, ccStream, ccCheck, ccAccount, ccDecisionModels, ccDecisions, CC_ID } from './commandcode.js';
@@ -74,6 +75,8 @@ export const SOURCES = {
     // the desktop tool: the model says it can't, instead of starting and stalling.
     noDesktop: 'Grok Build models in QuorX read text only and stop short of long steps like drawing, so 🖥 Computer use is off with them. Pick a Claude Code model, or an OpenRouter model that sees pictures, to use apps on this computer.',
   },
+  // Subscription-login ACP CLIs on this computer (acp.js): Antigravity, Codex, Gemini CLI, Copilot, Cursor, Droid, Kimi, Qwen.
+  ...ACP_SOURCES,
   // The model makers' own APIs (directapi.js), each with the user's key, billed per call at the provider's prices.
   ...Object.fromEntries(DIRECT_IDS.map((id) => {
     const d = DIRECT[id];
@@ -86,6 +89,8 @@ const APPS = {
   [CLAUDE_ID]: { list: () => claudeModels(), stream: claudeStream, check: () => claudeAuth({ refresh: true }), server: () => ({ running: claudeRunning() > 0, calls: claudeRunning(), perCall: true }) },
   // Listing Grok's models starts it and signs in, so it is the check too.
   [GROK_ID]: { list: () => grokModels(), stream: grokStream, check: async () => {}, server: () => ({ running: grokRunning() > 0, calls: grokRunning(), perCall: true }) },
+  // Listing an ACP CLI's models opens a session and checks its sign-in without calling a model.
+  ...Object.fromEntries(ACP_IDS.map((id) => [id, { list: () => acpModels(id), stream: (b, sg, t, th, o) => acpStream(id, b, sg, t, th, o), check: async () => {}, server: () => ({ running: acpRunning(id) > 0, calls: acpRunning(id), perCall: true }) }])),
   // Ollama's server is started when it isn't running; listing its models is the check.
   [OLLAMA_ID]: { list: () => ollamaModels(), stream: ollamaStream, check: () => ensureOllama(), server: ollamaServer },
   // Go's list is public; a call and the check need the key.
@@ -140,7 +145,8 @@ export const baseFor = (id) => (SOURCES[id]?.direct ? cleanBase(load()[id]?.base
 export const routeOf = (id) => (SOURCES[id]?.direct && load()[id]?.route === 'direct' ? 'direct' : 'openrouter');
 const mask = (k) => (k.length > 16 ? `${k.slice(0, 6)}••••••••${k.slice(-4)}` : '••••••••');
 // Whether it can run at all: an app installed on this computer, or a key for an API.
-const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : !!findOnPath(d.app)); };
+const appBin = (d) => (d ? (d.apps || [d.app]).find((a) => a && findOnPath(a)) || null : null);
+const ready = (id) => { const d = SOURCES[id]; return !!d && (d.needsKey ? !!keyFor(id) : !!appBin(d)); };
 /** Whether a source's models show in the pickers: switched on, and its app installed (or its key in). */
 export const sourceOn = (id) => !!load()[id]?.on && ready(id);
 /** Why a source's models can't run now (no key, not installed, switched off), or ''. */
@@ -148,7 +154,7 @@ export function sourceOffWhy(id) {
   const d = SOURCES[id];
   if (!d) return 'no such source';
   if (d.needsKey && !keyFor(id)) return `${d.name} has no key yet (⚙ Settings → Providers)`;
-  if (!d.needsKey && !findOnPath(d.app)) return `${d.name} is not installed (⚙ Settings → Providers)`;
+  if (!d.needsKey && !appBin(d)) return `${d.name} is not installed (⚙ Settings → Providers)`;
   return sourceOn(id) ? '' : `${d.name} is switched off (⚙ Settings → Providers)`;
 }
 // What is kept: each source's switch, the key of one that takes a key, and a maker's API's own address and routing.
@@ -181,7 +187,7 @@ export function setSourceOn(id, on) {
   known(id);
   const d = SOURCES[id];
   if (on && d.needsKey && !keyFor(id)) throw new Error(`Add your ${d.name} key first.`);
-  if (on && !d.needsKey && !findOnPath(d.app)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
+  if (on && !d.needsKey && !appBin(d)) throw new Error(`${d.appName} is not installed on this computer (${d.install}).`);
   const s = tidy(load());
   s[id] = { ...(s[id] || {}), on: !!on };
   save(s);
@@ -239,7 +245,7 @@ export function movedModel(id) {
 // ---------- the apps on this computer ----------
 // "opencode --version", found on PATH (cached ten minutes).
 const apps = new Map();
-export function appVersion(name, { refresh = false, run = execFile } = {}) {
+export function appVersion(name, { refresh = false, run = execFile, env } = {}) {
   const c = apps.get(name);
   if (c && !refresh && Date.now() - c.at < 10 * 60e3) return Promise.resolve(c.v);
   return new Promise((resolve) => {
@@ -247,7 +253,7 @@ export function appVersion(name, { refresh = false, run = execFile } = {}) {
     if (!f) { apps.set(name, { v: null, at: Date.now() }); return resolve(null); }
     // A .cmd runs through cmd.exe; /s strips the outer pair of quotes, so the quoted path keeps its own.
     const cmd = /\.(cmd|bat)$/i.test(f) ? [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${f}" --version"`]] : [f, ['--version']];
-    run(cmd[0], cmd[1], { timeout: 15000, windowsHide: true, windowsVerbatimArguments: /\.(cmd|bat)$/i.test(f) }, (err, out) => {
+    run(cmd[0], cmd[1], { timeout: 15000, windowsHide: true, windowsVerbatimArguments: /\.(cmd|bat)$/i.test(f), ...(env ? { env: { ...process.env, ...env } } : {}) }, (err, out) => {
       const v = err ? null : (String(out).match(/\d+\.\d+\.\d+[\w.-]*/) || [null])[0];
       const res = { path: f, version: v };
       apps.set(name, { v: res, at: Date.now() });
@@ -267,7 +273,7 @@ const LISTERS = Object.fromEntries(Object.entries(APPS).map(([id, a]) => [id, a.
 // Listing OpenCode, Claude Code or Grok Build starts the app, and Ollama may not be there at all, so opening QuorX
 // never lists them: their last list is kept on disk (data/source-lists.json) and the pickers show that. An app is
 // listed again when the user asks (Refresh, Test, switching it on) or right after a call to it (it is running then).
-const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID]);
+const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID, ...ACP_IDS]);
 const SAVED_LISTS = path.join(DATA, 'source-lists.json');
 let savedLists = null;
 const fromDisk = new Set(); // sources whose list this session is the saved copy
@@ -656,7 +662,8 @@ export async function sourceStatus({ versions = true } = {}) {
   return Promise.all(SOURCE_IDS.map(async (id) => {
     const def = SOURCES[id], h = health.get(id);
     // The app's version: looked up when Settings shows this page, else whatever was found last.
-    const v = !def.app ? null : versions ? await appVersion(def.app) : apps.get(def.app)?.v ?? null;
+    const bin = !def.app ? null : appBin(def) || def.app;
+    const v = !bin ? null : versions ? await appVersion(bin, { env: def.envVars }) : apps.get(bin)?.v ?? null;
     const k = keyFor(id);
     return {
       id, name: def.name, short: def.short, app: def.app, billing: def.billing, site: def.site, keyUrl: def.keyUrl, docs: def.docs, keyHint: def.keyHint,
