@@ -10399,14 +10399,17 @@ function wrInit() {
   try { const v = localStorage.getItem(AV_KEY); if (QF.viewById(v)) AV.view = v; } catch { /* storage off */ }
   const btn = (v) => `<button type="button" class="wr-btn" data-view="${v.id}" aria-label="${esc(v.label)}" aria-pressed="false">${AV_ICO[v.id] || ''}<i class="av-badge" hidden></i></button>`;
   rail.innerHTML = QF.VIEWS.map(btn).join('') + '<div class="wr-sp"></div>' + QF.VIEWS_BOTTOM.map(btn).join('')
+    // ⟳ above ⚙: the same restart as the menu's (wrRestart turns amber when the harness has newer server code).
+    + `<button type="button" class="wr-btn" id="wrRestart" data-act="restart" title="Restart the harness (loads server changes)" aria-label="Restart the harness"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>`
     + `<button type="button" class="wr-btn" data-act="settings" data-tip="Settings" aria-label="Settings">${ICO.gear}</button>`;
   // Running keeps the button the Running list already counts on (its badge and tip are drawn by drawRunBadge).
   const run = $('#railRunning'), ph = $('[data-view="running"]', rail);
   if (run && ph) { ph.replaceWith(run); run.className = 'wr-btn'; run.dataset.view = 'running'; run.setAttribute('aria-pressed', 'false'); }
   // Caught first, so the Running button's own click (the window, for phones) doesn't run here.
   rail.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-view], [data-act="settings"]'); if (!b) return;
+    const b = e.target.closest('[data-view], [data-act="settings"], [data-act="restart"]'); if (!b) return;
     e.stopPropagation(); e.preventDefault();
+    if (b.dataset.act === 'restart') return $('#restartBtn')?.disabled ? undefined : restartHarness();
     if (b.dataset.act) return openSettings();
     avPick(b.dataset.view, { focus: b.dataset.view === 'search' });
   }, true);
@@ -17577,7 +17580,7 @@ async function checkStale() {
   const stale = old || r?.stale;
   el.hidden = !stale;
   if (stale) noteAdd({ kind: 'warn', title: 'Restart the harness to load the latest changes', text: old ? 'It started before its latest server changes' : `${r.stale.file || 'Its server code'} changed after it started`, key: 'stale' }, { once: true });
-  for (const b of ['#restartBtn', '#railRestart'].map((q) => $(q)).filter(Boolean)) { b.classList.toggle('stale', !!stale); if (stale) b.title = 'Restart needed: the harness has newer server code than it is running. Click to restart.'; }
+  for (const b of ['#restartBtn', '#railRestart', '#wrRestart'].map((q) => $(q)).filter(Boolean)) { b.classList.toggle('stale', !!stale); if (stale) b.title = 'Restart needed: the harness has newer server code than it is running. Click to restart.'; }
   if (stale) el.title = old ? 'The harness was started before its latest server changes. Restart it (stop it, then run npm start) to load them; pages already load fresh.' : `${r.stale.file} changed after the harness started. Restart it (stop it, then run npm start) to load the latest server code; pages already load fresh.`;
 }
 setInterval(checkStale, 30000);
@@ -18062,11 +18065,12 @@ async function restartHarness() {
   const btn = $('#restartBtn'), note = $('#staleNote'), head = $('#stHeadRestart');
   const before = (await getJ('/api/config'))?.started;
   btn.disabled = true; btn.classList.add('spinning'); btn.title = 'Restarting…';
+  const rail = $('#wrRestart'); if (rail) { rail.disabled = true; rail.classList.add('spinning'); }
   if (head) { head.disabled = true; head.textContent = '⟳ Restarting…'; }
   if (note) { note.hidden = false; note.textContent = '⟳ Restarting the harness…'; }
   // An older desktop window (opened before this feature) has no restart of its own: the harness restarts itself.
   const r = DESK && typeof window.ohDesktop.restartHarness === 'function' ? await window.ohDesktop.restartHarness() : await postJ('/api/harness/restart');
-  const idle = () => { btn.disabled = false; btn.classList.remove('spinning'); if (head) { head.disabled = false; head.textContent = '⟳ Restart harness'; } };
+  const idle = () => { btn.disabled = false; btn.classList.remove('spinning'); if (rail) { rail.disabled = false; rail.classList.remove('spinning'); }if (head) { head.disabled = false; head.textContent = '⟳ Restart harness'; } };
   if (r && r.ok === false) { uiAlert(`Restart failed: ${r.error}`); idle(); return; }
   // Wait for the fresh copy (it reports a new start time), then reload the page against it.
   for (let i = 0; i < 80; i++) {
@@ -18460,7 +18464,7 @@ function newsClick(e) {
   document.addEventListener('click', (e) => {
     if (!NEWS.open) return;
     const hit = e.target.closest('#sidebar button, #sidebar a, #sidebar [role="button"], #sidebar .sb-chat-item, #mnav button, #brandHome');
-    if (!hit || hit.closest('#newsBtn, #railNews, #sbCollapseBtn, #sbExpandBtn, #railSearch, #settingsBtn, #railSettings, #themeBtn, #railTheme, #paletteBtn, #restartBtn, #railRestart, .sb-tools')) return;
+    if (!hit || hit.closest('#newsBtn, #railNews, #sbCollapseBtn, #sbExpandBtn, #railSearch, #settingsBtn, #railSettings, #themeBtn, #railTheme, #paletteBtn, #restartBtn, #railRestart, #wrRestart, .sb-tools')) return;
     closeNews();
   }, true);
   window.addEventListener('hashchange', () => { const m = /^#news(?:\/(.*))?$/.exec(location.hash); if (m) openNews(m[1] || 'updates'); });

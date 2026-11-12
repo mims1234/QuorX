@@ -19,6 +19,9 @@ body.ws-on .ws-rail { display: flex; flex-direction: column; align-items: center
 .ws-rail .wr-btn svg, .ws-rail .sb-rail-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .ws-rail .wr-btn:hover, .ws-rail .sb-rail-btn:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 .ws-rail .wr-btn:focus-visible, .ws-rail .sb-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ⟳ spins while the harness restarts. */
+.ws-rail #wrRestart.spinning { cursor: progress; }
+.ws-rail #wrRestart.spinning svg { animation: ohSpin 1s linear infinite; transform-origin: 50% 50%; }
 /* The open panel's button: a bar on its left edge and the accent colour. */
 .ws-rail .wr-btn.on, .ws-rail .sb-rail-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .ws-rail .wr-btn.on::before, .ws-rail .sb-rail-btn.on::before { content: ""; position: absolute; left: -7px; top: 7px; bottom: 7px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
