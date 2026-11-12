@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { HOME, decisionModels } from './openrouter.js';
+import { HOME, decisionModels, chatModels, cachedChatModels } from './openrouter.js';
 import { renameSoon } from './fsretry.js';
 import { findOnPath, localModels, localStream, ensureLocalServer, localServer, LOCAL_ID } from './opencodelocal.js';
 import { failureKind } from './errors.js';
@@ -263,6 +263,34 @@ const dropCatalogue = (id) => { if (catalogue) catalogue = { ...catalogue, ids: 
 const per = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
 // How each source lists its models (the app itself, started when needed).
 const LISTERS = Object.fromEntries(Object.entries(APPS).map(([id, a]) => [id, a.list]));
+// ---------- apps on this PC: started only when the user uses them ----------
+// Listing OpenCode, Claude Code or Grok Build starts the app, and Ollama may not be there at all, so opening QuorX
+// never lists them: their last list is kept on disk (data/source-lists.json) and the pickers show that. An app is
+// listed again when the user asks (Refresh, Test, switching it on) or right after a call to it (it is running then).
+const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID]);
+const SAVED_LISTS = path.join(DATA, 'source-lists.json');
+let savedLists = null;
+const fromDisk = new Set(); // sources whose list this session is the saved copy
+function readSaved() {
+  if (savedLists) return savedLists;
+  try { const j = JSON.parse(fs.readFileSync(SAVED_LISTS, 'utf8')); savedLists = j && typeof j === 'object' ? j : {}; } catch { savedLists = {}; }
+  return savedLists;
+}
+function saveList(id, list) {
+  savedLists = { ...readSaved(), [id]: { at: Date.now(), list } };
+  try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(`${SAVED_LISTS}.tmp`, JSON.stringify(savedLists)); renameSoon(`${SAVED_LISTS}.tmp`, SAVED_LISTS); } catch { /* kept in memory */ }
+}
+// The saved lists of these sources go into the catalogue, nothing is started.
+function useSaved(ids) {
+  const s = readSaved(), at = { ...(catalogue?.at || {}) }, errs = { ...(catalogue?.errors || {}) }, old = catalogue?.list || [];
+  for (const id of ids) {
+    at[id] = s[id]?.at || 0;
+    if (s[id]?.list?.length) { delete errs[id]; fromDisk.add(id); }
+    else errs[id] = `${SOURCES[id].name} isn’t listed yet: QuorX starts it only when you ask. Press Test in ⚙ Settings → Providers, or Refresh in the model picker.`;
+  }
+  const keepIds = (catalogue?.ids || []).filter((id) => !ids.includes(id));
+  catalogue = { at, ids: [...keepIds, ...ids], list: [...old.filter((m) => keepIds.includes(m.source)), ...ids.flatMap((id) => (Array.isArray(s[id]?.list) ? s[id].list : []).filter((m) => !blockedLocal(m.id)))], errors: errs };
+}
 let refreshing = null; // the refresh under way: { ids, p }
 function refreshLists(ids, listers) {
   if (refreshing && ids.every((id) => refreshing.ids.includes(id))) return refreshing.p;
@@ -275,13 +303,17 @@ function refreshLists(ids, listers) {
     for (const id of ids) {
       at[id] = now;
       if (!sourceOn(id)) { delete errs[id]; got[id] = []; continue; }
-      if (got[id]?.length) { delete errs[id]; continue; }
+      if (got[id]?.length) { delete errs[id]; fromDisk.delete(id); if (ON_PC.has(id)) saveList(id, got[id]); continue; }
       // A list that failed, or came back empty, keeps its last good copy.
       errs[id] = errors[id] || `${SOURCES[id].name} listed no models QuorX can use`;
       got[id] = old.filter((m) => m.source === id);
     }
     const keepIds = (catalogue?.ids || []).filter((id) => !ids.includes(id));
     catalogue = { at, ids: [...keepIds, ...ids], list: [...old.filter((m) => keepIds.includes(m.source)), ...ids.flatMap((id) => got[id] || [])], errors: errs };
+    // Reference prices from OpenRouter's list: at once from the copy already fetched, else once it arrives (tests
+    // that bring their own lists bring no OpenRouter list either).
+    if (cachedChatModels()) reprice();
+    else if (!Object.keys(listers).length) chatModels().then(reprice, () => {});
   }).finally(() => { if (refreshing === job) refreshing = null; }) };
   refreshing = job;
   return job.p;
@@ -292,17 +324,25 @@ function refreshLists(ids, listers) {
  * with no list yet (or `refresh`) is waited for. `all`: every source, on or not (Settings shows how many each has).
  * `listers`: tests put their own lists in place of the apps'.
  */
-export async function sourceModels({ refresh = false, all = false, listers = {} } = {}) {
+// An app on this PC is never listed here unless `refresh` or `listNow` names it (see ON_PC above).
+// `forModel`: a chat is about to use this model, so its app is listed now when there is no saved list of it yet.
+export async function sourceModels({ refresh = false, all = false, listers = {}, listNow = [], forModel = null } = {}) {
+  const fm = forModel ? sourceOf(forModel)?.source : null;
+  if (fm && ON_PC.has(fm) && !catalogue?.list.some((m) => m.id === forModel) && !readSaved()[fm]?.list?.some((m) => m.id === forModel)) listNow = [...listNow, fm];
   const want = SOURCE_IDS.filter((id) => all || sourceOn(id));
   if (!want.length) return [];
   const now = Date.now();
-  const missing = want.filter((id) => !catalogue?.ids.includes(id));
-  const stale = want.filter((id) => !missing.includes(id) && now - (catalogue.at?.[id] || 0) > (catalogue.errors?.[id] ? 60e3 : 3600e3));
+  const lazy = (id) => ON_PC.has(id) && !listNow.includes(id);
+  const missing = want.filter((id) => !catalogue?.ids.includes(id) || listNow.includes(id));
+  const stale = want.filter((id) => !missing.includes(id) && !lazy(id) && now - (catalogue.at?.[id] || 0) > (catalogue.errors?.[id] ? 60e3 : 3600e3));
   if (refresh) await refreshLists(want, listers);
   else {
-    if (missing.length) await refreshLists(missing, listers);
+    if (missing.some(lazy)) useSaved(missing.filter(lazy));
+    if (missing.some((id) => !lazy(id))) await refreshLists(missing.filter((id) => !lazy(id)), listers);
     if (stale.length) refreshLists(stale, listers).catch(() => {});
   }
+  // OpenRouter's list may have arrived since the catalogue was priced (the first listing doesn't wait for it).
+  if (!Object.keys(listers).length) reprice();
   return catalogue.list.filter((m) => want.includes(m.source));
 }
 /** A source model's catalogue entry from the list already loaded, or null. */
@@ -327,6 +367,77 @@ export function sameOnOpenRouter(id, orList = [], info = sourceInfo(id)) {
   if (!hits.length) return null;
   const v = VENDOR[cv] || cv;
   return hits.find((x) => x.split('/')[0] === v) || hits[0];
+}
+
+// ---------- reference prices ----------
+// Every call counts toward the chat's budget at a price. When a source gives no money figure of its own, the same
+// model's price on OpenRouter (its list price, no discount) stands in:
+//   - plan models (OpenCode Go, Command Code, Ollama cloud, a Claude or Grok subscription): what a call counted against
+//     the plan. Claude Code and Grok Build price each call themselves, and their figure comes first; Go and Command
+//     Code are counted at OpenRouter's price, then models.dev's list price when OpenRouter has no such model.
+//   - a maker's API model models.dev has no price for (and Refuseless, which lists none): billed per call, so counted
+//     at OpenRouter's price for the same model, marked as such.
+//   - a model in OpenCode with no price from a subscription connected there (Copilot, a coding plan): a plan.
+//   - Claude Code or Grok Build on an API key: their own figure, and OpenRouter's price for a call cut off before it.
+// Free means free: a model on this computer, a free API or tier (NVIDIA's, a -free variant).
+// A model OpenRouter doesn't have keeps what it had: unknown stays unknown ($0, marked), never a guess.
+// A $0 model in OpenCode is free (a local model, NVIDIA's free API, a router's free tier) unless its provider is a
+// subscription: those are plans, priced like any other.
+const SUB_PROVIDER = /^(github-copilot|zai-coding-plan|zhipuai-coding-plan|kimi-for-coding|minimax-coding-plan|alibaba-coding-plan|moonshotai-coding|chutes-plan)/i;
+const ORIG = new WeakMap(); // repriced entry → the entry as its source listed it (so pricing again starts over)
+const refCost = (x) => ({ input: x.price[0], output: x.price[1], ...(x.cachePrice?.[0] != null ? { cache_read: x.cachePrice[0] } : {}), ...(x.cachePrice?.[1] != null ? { cache_write: x.cachePrice[1] } : {}) });
+const sanePair = (p) => Array.isArray(p) && p.length >= 2 && p.slice(0, 2).every((v) => Number.isFinite(Number(v)) && v >= 0 && v <= 500) && (p[0] > 0 || p[1] > 0);
+/** The same model in OpenRouter's chat list, for its price (null when there is none). */
+export function orTwin(m, orList = []) {
+  const chat = orList.filter((x) => x?.id && (!x.kind || x.kind === 'chat') && !/:(free|batch)$/.test(x.id));
+  const byId = new Map(chat.map((x) => [x.id, x]));
+  const name = String(m.modelID || m.realId || '').toLowerCase();
+  // Claude Code names its models by family (opus, sonnet): the newest of that family on OpenRouter.
+  if (m.source === CLAUDE_ID && /^[a-z]+$/.test(name)) return chat.filter((x) => x.id.startsWith(`anthropic/claude-${name}`)).sort((a, b) => (b.created || 0) - (a.created || 0))[0] || null;
+  // Grok Build's ids carry suffixes OpenRouter's don't (grok-4.7-fast-reasoning is x-ai/grok-4.7-fast).
+  if (m.providerID === 'x-ai' && name) { const parts = name.split('-'); for (let n = parts.length; n >= 2; n--) { const x = byId.get(`x-ai/${parts.slice(0, n).join('-')}`); if (x) return x; } }
+  const hit = sameOnOpenRouter(m.id, chat.map((x) => ({ ...x, tools: true })), m);
+  if (hit) return byId.get(hit) || null;
+  // Names with a size tag, a variant or a date on the end: gpt-oss:120b-cloud (Ollama), glm-5.3-abliterated
+  // (Refuseless), claude-haiku-4-5-20251001 (Command Code).
+  const bare = name.split('/').pop().replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').replace(/-(abliterated|fast|cloud)$/i, '');
+  const sized = bare.replace(/:(\d+(?:\.\d+)?[bkmt])(?:-cloud)?$/i, '-$1').replace(/:.*$/, ''), plain = bare.replace(/:.*$/, '');
+  for (const want of [...new Set([sized, plain])]) {
+    const hits = chat.filter((x) => norm(x.id.split('/').pop()) === norm(want));
+    if (hits.length) return hits.find((x) => x.id.split('/')[0] === (VENDOR[m.maker] || m.maker)) || hits[0];
+  }
+  return null;
+}
+/** Source models with their reference prices (see above), from OpenRouter's chat list. */
+export function withRefPrices(list = [], orList = []) {
+  return list.map((m) => {
+    const b = ORIG.get(m) || m;
+    const out = repriced(b, orList);
+    if (out !== b) ORIG.set(out, b);
+    return out;
+  });
+}
+function repriced(b, orList) {
+  if (!b?.source || b.kind !== 'chat' || b.unusable) return b;
+  // A -free variant on a maker's API (Refuseless's): free, not unknown.
+  if (b.priceUnknown && /-free$/i.test(String(b.realId || ''))) { const { priceUnknown: _u, ...rest } = b; return { ...rest, plan: 'free', price: [0, 0], cost: {} }; }
+  if (b.plan === 'free' && !(b.source === LOCAL_ID && SUB_PROVIDER.test(String(b.providerID || '')) && !/-free$/i.test(String(b.realId || '')))) return b;
+  if (!(b.plan === 'plan' || b.plan === 'free' || b.priceUnknown || b.priceFromApp)) return b;
+  const x = orTwin(b, orList);
+  if (!x || !sanePair(x.price)) return b;
+  const ref = { model: x.id, cost: refCost(x) }, list = [x.price[0], x.price[1]];
+  if (b.plan === 'plan') return { ...b, ref, listPrice: list, refFrom: x.id };
+  // No price in OpenCode, not a local model: a subscription connected there.
+  if (b.plan === 'free') return { ...b, plan: 'plan', planLabel: b.providerName || b.providerID || 'OpenCode', ref, listPrice: list, refFrom: x.id };
+  if (b.priceFromApp) return { ...b, ref, refFrom: x.id };
+  const { priceUnknown: _u, ...rest } = b;
+  return { ...rest, price: list, cost: ref.cost, priceRef: x.id, refFrom: x.id };
+}
+/** Prices the loaded catalogue again with OpenRouter's list as last fetched. */
+// Only when that list is newer than the one the catalogue was priced with (cheap to call often).
+export function reprice() {
+  const or = cachedChatModels();
+  if (catalogue && or?.length && catalogue.pricedWith !== or) catalogue = { ...catalogue, list: withRefPrices(catalogue.list, or), pricedWith: or };
 }
 
 // ---------- OpenRouter's ids on a maker's own API (⚙ Settings → Providers → "OpenRouter's ids run here") ----------
@@ -471,7 +582,7 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   const s = sourceOf(body.model);
   if (!s) throw Object.assign(new Error(`${body.model} is not a source model`), { kind: 'request' });
   // Right after a restart (a summary before anything loaded the list) the list is loaded first.
-  if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
+  if (!given && !sourceInfo(body.model)) await sourceModels({ forModel: body.model }).catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
   // A model its app keeps for itself (OpenCode's own free ones): refused here, before a call goes out.
@@ -479,6 +590,8 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs, ...(onCall ? { onCall } : {}) });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
+  // The app answered, so it is running: its list (the saved copy until now) is brought up to date in the background.
+  if (fromDisk.has(s.source)) { fromDisk.delete(s.source); refreshLists([s.source], {}).catch(() => {}); }
   return out;
 }
 /**
@@ -489,15 +602,29 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
 // No single call costs more than this: a figure above it (a bad price record, a misread report) counts as unknown, 0.
 export const CALL_COST_MAX = 50;
 const saneCall = (x) => Number.isFinite(x) && x >= 0 && x <= CALL_COST_MAX;
+// Where a call's figure came from, for the page: plan_ref / cost_ref 'app' (the app's own), 'openrouter' (the same
+// model's price there, ref_model naming it) or 'list' (models.dev's list price).
 export function priced(info, u = {}) {
   const said = u.cost !== null && u.cost !== '' && u.cost !== undefined && Number.isFinite(Number(u.cost)) ? Number(u.cost) : null;
-  if (info?.plan === 'plan') return { cost: said != null && saneCall(said) ? said : 0, plan_cost: Number(u.plan_cost) > 0 ? Number(u.plan_cost) : costOf(info, u) };
+  const ref = info?.ref?.cost ? info.ref : null;
+  const atRef = () => costOf({ cost: ref.cost }, u);
+  if (info?.plan === 'plan') {
+    // Claude Code and Grok Build price each call themselves; the plans with an API (Go, Command Code) are counted at
+    // OpenRouter's price, not the app's or a discounted one.
+    const app = Number(u.plan_cost) > 0 && saneCall(Number(u.plan_cost)) ? Number(u.plan_cost) : null;
+    const appFirst = info.source === CLAUDE_ID || info.source === GROK_ID;
+    const from = appFirst && app != null ? 'app' : ref ? 'openrouter' : app != null ? 'app' : 'list';
+    const v = from === 'app' ? app : from === 'openrouter' ? atRef() : costOf(info, u);
+    return { cost: said != null && saneCall(said) ? said : 0, plan_cost: saneCall(v) ? v : 0, plan_ref: from, ...(from === 'openrouter' ? { ref_model: ref.model } : {}) };
+  }
   if (said != null) return saneCall(said) ? { cost: said } : { cost: 0, cost_unknown: true };
   if (info?.plan === 'free') return { cost: 0 };
+  // Claude Code or Grok Build on an API key that sent no figure: OpenRouter's price for the same model.
+  if (info?.priceFromApp && ref) { const c = atRef(); return saneCall(c) ? { cost: c, estimated_cost: true, cost_ref: 'openrouter', ref_model: ref.model } : { cost: 0, estimated_cost: true, cost_unknown: true }; }
   // A model whose price isn't known costs 0 here, marked unknown, rather than a guess.
   if (info?.priceUnknown) return { cost: 0, estimated_cost: true, cost_unknown: true };
   const c = costOf(info, u);
-  return saneCall(c) ? { cost: c, estimated_cost: true } : { cost: 0, estimated_cost: true, cost_unknown: true };
+  return saneCall(c) ? { cost: c, estimated_cost: true, ...(info?.priceRef ? { cost_ref: 'openrouter', ref_model: info.priceRef } : {}) } : { cost: 0, estimated_cost: true, cost_unknown: true };
 }
 function costOf(info, u) {
   const c = info?.cost || {}, prompt = Number(u.prompt_tokens) || 0, out = Number(u.completion_tokens) || 0;
@@ -550,6 +677,8 @@ export async function testSource(id) {
   try {
     await APPS[id].check();
     const list = (await LISTERS[id]()).filter((m) => !blockedLocal(m.id));
+    // The user asked: an app on this PC keeps this list, and the pickers show it from now on.
+    if (ON_PC.has(id) && list.length) { saveList(id, list); fromDisk.delete(id); dropCatalogue(id); }
     noteSourceResult(id, null, null);
     // A passing test means it works again: models set aside after a failure are tried at once.
     dropModels(id);

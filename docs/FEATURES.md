@@ -46,7 +46,9 @@ a real browser and your real toolchains, and shows how it got every answer.
   every process it started and confirms "0 processes left".
 - **A tripwire and a budget per chat.** A command that deletes many files outside the project is stopped. Each chat
   has one budget, set from 💵 in its message box, and everything it calls counts toward it. A call you stop, or one
-  that fails part-way, still counts at OpenRouter's own figure, so the totals match what you are billed.
+  that fails part-way, still counts at OpenRouter's own figure, so the totals match what you are billed. Calls on a
+  subscription (OpenCode Go, Command Code, Claude Code, Grok Build) count too, at list price, and so do providers that
+  name no price of their own: the same model's OpenRouter price stands in, marked "≈ OpenRouter price".
 - **Video Mode.** A film starts with a brief, a pick of story directions and a storyboard, with the music chosen
   first, before anything is spent. The finished film is the deliverable, put together from moving shots.
 - **Films from pictures, finished with ffmpeg.** A clip can start from a picture the agent made (or one in the project)

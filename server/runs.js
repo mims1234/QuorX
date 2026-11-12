@@ -195,14 +195,14 @@ export function dropCheckpoint(id) {
 // Every reply's cost is written here when it ends, however it ends (finished, stopped, failed), so a
 // project's spend still counts replies whose chat was never saved with its cost or was deleted.
 const SCORE = path.join(HOME, 'logs', 'runs.jsonl');
-export const ledger = new Map(); // runId → { project, chat, cost, at (ms, when it ended) }
+export const ledger = new Map(); // runId → { project, chat, cost, plan (sub value, counted in budgets), at (ms, when it ended) }
 try {
   for (const l of fs.readFileSync(SCORE, 'utf8').split('\n')) {
-    try { const r = JSON.parse(l); if (r.runId && r.project) ledger.set(r.runId, { project: r.project, chat: r.chatId || null, cost: Number(r.cost) || 0, at: Date.parse(r.ts) || 0 }); } catch { /* skip a bad line */ }
+    try { const r = JSON.parse(l); if (r.runId && r.project) ledger.set(r.runId, { project: r.project, chat: r.chatId || null, cost: Number(r.cost) || 0, plan: Number(r.planCost) || 0, at: Date.parse(r.ts) || 0 }); } catch { /* skip a bad line */ }
   }
 } catch { /* no replies yet */ }
 export function recordRun(row) {
-  if (row.runId && row.project) ledger.set(row.runId, { project: row.project, chat: row.chatId || null, cost: Number(row.cost) || 0, at: Date.parse(row.ts) || Date.now() });
+  if (row.runId && row.project) ledger.set(row.runId, { project: row.project, chat: row.chatId || null, cost: Number(row.cost) || 0, plan: Number(row.planCost) || 0, at: Date.parse(row.ts) || Date.now() });
   try { fs.mkdirSync(path.dirname(SCORE), { recursive: true }); rotateLog(SCORE); fs.appendFileSync(SCORE, JSON.stringify(row) + '\n'); } catch { /* best effort */ }
 }
 /** The rows of logs/runs.jsonl from the last `days`: every reply, and document reading (kind 'docs'). */
