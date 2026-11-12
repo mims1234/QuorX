@@ -1,5 +1,6 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
-// Chat budgets: one dollar limit per chat, the only money limit there is. What a chat has spent is
+// Chat budgets: one dollar limit per chat, the only money limit there is. Every call counts at a price: money paid, and
+// a plan's sub value (at list price). What a chat has spent is
 //   its saved cost (what the chat file holds)
 // + replies in the cost ledger whose cost never reached the chat file (stopped, page closed, rewound)
 // + its reply running right now, as its cost grows.
@@ -23,12 +24,16 @@ export function projectSpend(projectId) {
   return { spent: cost + unsaved + running, saved: cost, unsaved, running };
 }
 
+// A chat's spend for its budget counts every call at a price: money paid, and the sub value of calls on a plan
+// (OpenCode Go, Command Code, a Claude or Grok subscription, at list price; see sources.js "reference prices").
+// `plan` says how much of `spent` is sub value, so the page can say so.
 export function chatSpend(chatId) {
-  const { cost, runIds } = chatSavedSpend(chatId);
-  let unsaved = 0, running = 0;
-  for (const [id, r] of ledger) if (r.chat === chatId && !runIds.has(id) && !live.has(id)) unsaved += r.cost;
-  for (const r of live.values()) if (r.chat === chatId) running += r.cost;
-  return { spent: cost + unsaved + running, saved: cost, unsaved, running };
+  const { cost, plan: savedPlan, runIds } = chatSavedSpend(chatId);
+  let unsaved = 0, running = 0, runningPlan = 0, plan = savedPlan || 0;
+  for (const [id, r] of ledger) if (r.chat === chatId && !runIds.has(id) && !live.has(id)) { unsaved += r.cost + (r.plan || 0); plan += r.plan || 0; }
+  for (const r of live.values()) if (r.chat === chatId) { running += r.cost + (r.plan || 0); runningPlan += r.plan || 0; }
+  plan += runningPlan;
+  return { spent: cost + (savedPlan || 0) + unsaved + running, saved: cost + (savedPlan || 0), unsaved, running, runningPlan, plan };
 }
 
 // ---------- the budgets file ----------
@@ -66,12 +71,13 @@ export const budgetOf = (chatId) => {
 /** Where a chat stands: its budget (null = none), what is spent, and what is left. */
 export function budgetState(chatId) {
   const budget = budgetOf(chatId);
-  const { spent, running: runningCost, unsaved } = chatSpend(chatId);
+  const { spent, running: runningCost, runningPlan, unsaved, plan } = chatSpend(chatId);
   // running: a reply in this chat is working now; runningCost: what it has spent so far (part of spent), so a page
   // showing its own live figure can swap it in. unsavedCost: spent by replies the chat file doesn't hold (rewound,
   // stopped before saving).
   const running = [...live.values()].some((r) => r.chat === chatId);
-  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost, unsavedCost: unsaved, isDefault: !(chatId in read().chats) };
+  // planValue: the part of spent that is sub value (calls on a plan, at list price), not money paid.
+  return { budget, spent, left: budget == null ? null : budget - spent, running, runningCost, unsavedCost: unsaved, planValue: plan, runningPlan, isDefault: !(chatId in read().chats) };
 }
 
 /** Sets or removes (null) a chat's budget. Refuses an amount below what the chat has spent. */
