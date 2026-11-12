@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   focusWindow: () => call('focusWindow'),
   notify: (n) => call('notify', n),
   zoom: (dir) => call('zoom', dir),
+  // The window frame: the native − □ × colours, full screen, and the Edit menu's commands.
+  frame: (op, arg) => call('frame', op, arg),
   openExternal: (url) => call('openExternal', url),
   showFile: (file) => call('showFile', file),
   perf: () => call('perf'),

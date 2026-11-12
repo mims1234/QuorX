@@ -4,7 +4,7 @@
 // read from here, so a key you change is changed everywhere. Keys are written the way the page reads them from a key
 // press (keyCombo in app.js): modifiers Ctrl, Shift, Alt, Meta in that order, then the key ("Ctrl+Shift+T").
 
-export const KEY_GROUPS = { tabs: 'Chat tabs', move: 'Moving around', find: 'Search', typing: 'Typing', mic: 'Mic', settings: 'Settings', zoom: 'Zoom' };
+export const KEY_GROUPS = { tabs: 'Chat tabs', move: 'Moving around', view: 'Window', find: 'Search', typing: 'Typing', edit: 'Editing text', mic: 'Mic', settings: 'Settings', zoom: 'Zoom' };
 
 const tabJumps = Array.from({ length: 9 }, (_, i) => ({
   id: `tab.${i + 1}`, group: 'tabs', keys: `Ctrl+${i + 1}`,
@@ -42,6 +42,16 @@ export const SHORTCUTS = [
   { id: 'zoom.in', group: 'zoom', keys: 'Ctrl+=', label: 'Zoom in', fixed: true, help: 'QuorX, the terminal\'s text or a page, whichever has the focus. Ctrl+wheel too.' },
   { id: 'zoom.out', group: 'zoom', keys: 'Ctrl+-', label: 'Zoom out', fixed: true },
   { id: 'zoom.reset', group: 'zoom', keys: 'Ctrl+0', label: 'Back to 100%', fixed: true },
+  // The window: the menu bar's View and Edit menus read their keys from these rows, so the two never disagree.
+  { id: 'view.sidebar', group: 'view', keys: 'Ctrl+B', label: 'Show or hide the sidebar' },
+  { id: 'view.fullscreen', group: 'view', keys: 'F11', label: 'Full screen', fixed: true },
+  { id: 'menu.focus', group: 'view', keys: 'Alt', label: 'Go to the menu bar', fixed: true, help: 'Press and let go of Alt, then ← → between menus and ↑ ↓ inside one.' },
+  { id: 'edit.undo', group: 'edit', keys: 'Ctrl+Z', label: 'Undo typing', fixed: true },
+  { id: 'edit.redo', group: 'edit', keys: 'Ctrl+Y', label: 'Redo typing', fixed: true },
+  { id: 'edit.cut', group: 'edit', keys: 'Ctrl+X', label: 'Cut', fixed: true },
+  { id: 'edit.copy', group: 'edit', keys: 'Ctrl+C', label: 'Copy', fixed: true },
+  { id: 'edit.paste', group: 'edit', keys: 'Ctrl+V', label: 'Paste', fixed: true },
+  { id: 'edit.all', group: 'edit', keys: 'Ctrl+A', label: 'Select all', fixed: true },
 ];
 export const byId = new Map(SHORTCUTS.map((s) => [s.id, s]));
 

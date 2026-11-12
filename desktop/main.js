@@ -132,9 +132,14 @@ const iconImage = (size = 32) => nativeImage.createFromBuffer(pngIcon(size));
 function showWindow() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 function createWindow() {
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: DEV ? 'QuorX · DEV' : 'QuorX', icon: iconImage(64), autoHideMenuBar: true,
+    width: 1440, height: 900, minWidth: 760, minHeight: 520, show: false, backgroundColor: '#070908', title: DEV ? 'QuorX · DEV' : 'QuorX', icon: iconImage(64),
+    // The window frame is the page's own (its menu bar is row 1); Windows still draws − □ × over its right end, so
+    // snap layouts and the native buttons keep working. The page colours them to match the theme (handle 'frame').
+    titleBarStyle: 'hidden', titleBarOverlay: { color: FRAME_BAR.color, symbolColor: FRAME_BAR.symbolColor, height: FRAME_BAR.height }, autoHideMenuBar: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
+  // The hidden menu keeps its keys (reload, DevTools, full screen) but never shows: Alt goes to the page's menu bar.
+  win.setMenuBarVisibility(false);
   win.once('ready-to-show', () => { if (!HIDDEN) win.show(); });
   countWebglWarnings(win.webContents);
   // The zoom you left QuorX at; Ctrl+wheel on the app goes through the same steps (the page handles the keys).
@@ -810,6 +815,22 @@ handle('zoom', (dir) => {
   const f = dir === 'get' ? win.webContents.getZoomFactor() : nextZoom(win.webContents.getZoomFactor(), dir);
   if (dir !== 'get') { win.webContents.setZoomFactor(f); writeConfig({ ...readConfig(), zoom: f }); }
   return f;
+});
+// The window frame (the page's row 1): the colours of the native − □ × over it, full screen, and the Edit menu's
+// commands run on what has the focus (Paste needs the app's own clipboard access, which a page doesn't have).
+const FRAME_BAR = { color: '#040605', symbolColor: '#83948c', height: 34 };
+const FRAME_EDIT = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+const hexColour = (v) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v : null);
+handle('frame', (op, arg) => {
+  const w = caller || win; if (!w || w.isDestroyed()) return null;
+  if (op === 'overlay') {
+    const color = hexColour(arg?.color), symbolColor = hexColour(arg?.symbolColor);
+    if (color && symbolColor) { try { w.setTitleBarOverlay({ color, symbolColor, height: FRAME_BAR.height }); } catch { /* a window without the overlay (a pop-out) */ } }
+    return true;
+  }
+  if (op === 'fullscreen') { w.setFullScreen(!w.isFullScreen()); return w.isFullScreen(); }
+  if (op === 'edit' && FRAME_EDIT.has(arg)) { w.webContents[arg](); return true; }
+  throw new Error(`unknown frame step ${op}`);
 });
 handle('focusWindow', () => { showWindow(); return true; }); // a clicked notification brings the window back from the tray
 // The taskbar icon's badge: the count of chats that need you, drawn by the page (a small amber disc), none at 0.

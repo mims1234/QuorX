@@ -18,6 +18,7 @@ import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText,
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
 import { SHORTCUTS, KEY_GROUPS, byId as keyDef, bindings, actionFor, checkCombo, clashWith, conflicts, comboParts, comboText, normCombo } from './keymap.js';
+import * as QF from './frame-model.js';
 
 // The side pane can be split into areas stacked top to bottom, each a copy of the same markup (its tabs, address bar and
 // body). Its ids are looked up in the area being drawn: AREA, which is the area you last used unless one is being drawn.
@@ -3218,6 +3219,9 @@ function placeChrome() {
   const upd = $('#updNote'), btns = ['#restartBtn', '#themeBtn', '#settingsBtn'].map((q) => $(q)).filter(Boolean);
   // The ☰ panel toggle leads the title row on wider screens; phones keep it beside the search.
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
+  // The window frame (rows 1 and 2) takes over the top on wider screens: see qfPlace.
+  const frame = qfPlace(desk && !POP);
+  if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (desk) { title.append(brand, ...(perm ? [perm] : []), ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
   top.prepend(brand);
@@ -9699,6 +9703,7 @@ const KEY_RUN = {
   'tab.reopen': { run: () => { wsReopen(); } },
   'nav.back': { inSettings: true, run: () => { wsStep(-1); } },
   'nav.forward': { inSettings: true, run: () => { wsStep(1); } },
+  'view.sidebar': { run: () => qfToggleSidebar() },
   ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.${i + 1}`, { run: () => wtJump(i + 1) }])),
 };
 // The few that must be caught before the page's own boxes see the key (find) run in the capture phase.
@@ -9820,8 +9825,6 @@ function wtDraw() {
       const beside = !on && G.panes.includes(id);
       return `<div class="wt-tab ${on ? 'on' : ''} ${beside ? 'beside' : ''} ${st ? `st-${st}` : ''}" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" draggable="true" data-c="${esc(id)}" title="${esc(t)}${say ? `\n${say}` : ''}${beside ? '\nOn screen beside the chat you use' : ''}\nMiddle-click or × to close (it keeps running) · drag onto a group's edge to open it beside"><i class="wt-dot" aria-hidden="true"></i>${G.panes.length > 1 && G.panes.includes(id) ? ownSq(id) : ''}<span class="wt-name">${esc(t)}</span>${say ? `<span class="sr-only">${esc(say)}</span>` : ''}<button type="button" class="wt-x" tabindex="-1" aria-label="Close ${esc(t)}">×</button></div>`;
     }).join('') || '<span class="wt-none">No chats open. Pick one in the sidebar, or start one on Home.</span>';
-    const pr = $('#wtProj');
-    if (pr) { pr.hidden = !p; if (p) { pr.textContent = p.name; pr.setAttribute('style', projStyle(p)); pr.title = `${p.name}: these are its open chats (each project keeps its own)`; } }
   }
   box.querySelector('.wt-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   const sw = $('#wtSwitch');
@@ -10036,7 +10039,7 @@ addEventListener('focus', () => { const id = G.panes?.[0]; if (id && G.unseen?.h
 // Everything above, drawn again: after the sidebar redraws (chat states), and when the Running list or servers change.
 function wsChrome() {
   if (!$('#wsTop')) return;
-  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw();
+  wtDraw(); wsStatusDraw(); wsBadge(); wsLayoutsDraw(); qfDraw();
   const nb = $('#wsBack'), nf = $('#wsFwd');
   if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
   if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
@@ -10044,9 +10047,477 @@ function wsChrome() {
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
-  wrInit(); wtWire(); wsStatusWire(); wsLayoutsWire();
+  wrInit(); wtWire(); wsStatusWire(); wsLayoutsWire(); qfInit();
   if (!WT.pid) wtLoad(G.landingProject || 'scratch');
   wrSync(); wsChrome();
+}
+
+// ---------- the window frame: the menu bar (row 1) and the open project tabs (row 2) ----------
+// Like an IDE's window: row 1 is the window's own title bar with the QuorX mark and the menus (QuorX, File, Edit, View,
+// Chat, Agent, Run, Window, Help), so every action is findable with its key; the empty part drags the window, and in
+// the desktop app Windows draws − □ × over its right end. Row 2 holds ‹ › back / forward, one tab per open project
+// (colour, a running beacon, how many need you, ×), ＋ for another project, and Go to or run… (Ctrl+K).
+// The menus are data (public/frame-model.js); each item runs an action from FRAME_ACTS below and shows the key the
+// shortcuts table gives it, so the menu and Settings → Shortcuts never disagree. A menu opened with the mouse never
+// takes the focus, so Edit → Paste still pastes where you were typing. Wider screens only: phones keep their top bar.
+const QFS = { tabs: [], loaded: false, open: -1, hi: -1, items: [], sub: null, kb: false, back: null, altDown: false, awake: null };
+const QF_TABS_KEY = 'qx-open-projects';
+const qfOn = () => document.body.classList.contains('qf-on');
+const qfPid = () => WT.pid || G.landingProject || 'scratch';
+const qfProject = (pid = qfPid()) => (G.projects || []).find((p) => p.id === pid) || null;
+// Moves the old top bar's pieces into the frame (on) or back (off). → whether the frame is on.
+function qfPlace(on) {
+  const title = $('#qfTitle'), proj = $('#qfProj'); if (!title || !proj) return false;
+  document.body.classList.toggle('qf-on', on);
+  document.body.classList.toggle('qf-desk', on && DESK);
+  const nav = $('.wt-nav'), pal = $('#paletteBtn'), top = $('header.top'), ws = $('#wsTop');
+  if (on) {
+    if (nav) $('#qfNav').append(nav);
+    if (pal) { $('#qfCmdSlot').append(pal); const s = $('span', pal); if (s) s.textContent = 'Go to or run…'; }
+    for (const q of ['#staleNote', '#spend']) { const el = $(q); if (el) $('#qfRight').append(el); }
+    qfOverlay();
+    return true;
+  }
+  if (nav && ws) ws.prepend(nav);
+  if (pal && top) { ($('.spacer', top) || top.lastElementChild)?.after(pal); const s = $('span', pal); if (s) s.textContent = 'Search'; }
+  return false;
+}
+// The desktop app: − □ × in the theme's colours (the native buttons sit over row 1).
+function qfOverlay() {
+  if (!DESK || !window.ohDesktop?.frame || !qfOn()) return;
+  requestAnimationFrame(() => {
+    const el = $('#qfTitle'); if (!el) return;
+    const hex = (v) => { const m = String(v).match(/\d+(\.\d+)?/g); return m && m.length >= 3 ? `#${m.slice(0, 3).map((x) => Math.round(+x).toString(16).padStart(2, '0')).join('')}` : null; };
+    const cs = getComputedStyle(el), color = hex(cs.backgroundColor), symbolColor = hex(cs.color); // row 1's own colours
+    if (color && symbolColor) window.ohDesktop.frame('overlay', { color, symbolColor }).catch(() => {});
+  });
+}
+
+// ---- what the menu items do ----
+// run(): the action. ok(): whether it can run now (else the item shows disabled). on(): ✓ when it is switched on.
+const qfChat = () => focused();
+const qfNeedChat = () => !!focused();
+const qfType = (c, text) => { const ta = $('.input', c.el.root); if (!ta) return; ta.value = text; ta.selectionStart = ta.selectionEnd = ta.value.length; ta.dispatchEvent(new Event('input')); ta.focus(); };
+const qfCmd = (name) => () => { const c = qfChat(); if (c) runCommand(c, `/${name}`); };
+const qfCanSplit = () => !!focused() && !!PA.focus && !isPhone() && WS.groups(WK.lay).length < WS.MAX_GROUPS;
+function qfEdit(op) {
+  // The focus is back where you were (the menu never took it); the desktop app runs the command there itself.
+  if (DESK && window.ohDesktop?.frame) return window.ohDesktop.frame('edit', op).catch(() => {});
+  if (op === 'paste') return navigator.clipboard?.readText?.().then((t) => { if (t) document.execCommand('insertText', false, t); }).catch(() => flashTip($('#qfMenubar'), 'Paste with Ctrl+V here: the browser keeps the clipboard to itself'));
+  document.execCommand(op);
+}
+function qfToggleSidebar() {
+  if (isPhone()) return false;
+  const open = !G.sideHidden && !WR.run;
+  WR.run = false; G.sideHidden = open; savePrefs(); syncLayout();
+}
+function qfShowSidebar() { WR.run = false; G.sideHidden = false; savePrefs(); syncLayout(); }
+async function qfKeepAwake() {
+  const now = await window.ohDesktop.keepAwake().catch(() => null); if (!now) return;
+  QFS.awake = (await window.ohDesktop.keepAwake(!now.on).catch(() => null))?.on ?? now.on;
+}
+function qfPerms() {
+  const b = $('#permBtn'), pop = $('#permPop'), at = $('#qfMenubar [data-m="5"]') || $('#qfMenubar');
+  if (!b || !pop) return;
+  if (pop.hidden) b.click();
+  const r = at.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 340))}px`; pop.style.top = `${r.bottom + 6}px`;
+}
+async function qfOpenFolder() {
+  const err = document.createElement('span'); err.hidden = true;
+  const id = await openFolderAsProject($('#qfAdd'), err, { pickOnly: true });
+  if (!err.hidden && err.textContent) uiAlert(err.textContent);
+  if (id) qfShowProject(id);
+}
+const FRAME_ACTS = {
+  // QuorX
+  about: { run: () => openSettings('about') },
+  updates: { run: () => { window.ohDesktop.update('check'); flashTip($('#qfMenubar'), 'Checking for updates…'); } },
+  settings: { run: () => openSettings() },
+  providers: { run: () => openSettings('providers') },
+  shortcuts: { run: () => openSettings('shortcuts') },
+  restart: { run: () => restartHarness(), ok: () => !$('#restartBtn')?.disabled },
+  report: { run: () => reportProblem() },
+  quit: { run: () => window.ohDesktop.quit() },
+  // File
+  newChat: { run: () => newChat(qfPid()) },
+  newProject: { run: () => editProject(null) },
+  openFolder: { run: () => qfOpenFolder() },
+  attach: { run: () => $('.imgInput', qfChat().el.root)?.click(), ok: qfNeedChat },
+  reopenTab: { run: () => wsReopen(), ok: () => WT.closed.length > 0 },
+  projectSettings: { run: () => openProjectSettings(qfProject()), ok: () => !!qfProject() },
+  saveLayout: { run: () => wsSaveLayoutAs(), ok: () => !!focused() && !isPhone() },
+  closeTab: { run: () => KEY_RUN['tab.close'].run(), ok: () => !!curId() && WT.tabs.includes(curId()) },
+  closeProject: { run: () => qfCloseProject(qfPid()), ok: () => QFS.tabs.length > 1 },
+  // Edit
+  undo: { run: () => qfEdit('undo') },
+  redo: { run: () => qfEdit('redo') },
+  cut: { run: () => qfEdit('cut') },
+  copy: { run: () => qfEdit('copy') },
+  paste: { run: () => qfEdit('paste') },
+  selectAll: { run: () => qfEdit('selectAll') },
+  find: { run: () => KEY_RUN.find.run({ target: document.activeElement || document.body, stopPropagation() {} }) },
+  searchChats: { run: () => openChatSearch() },
+  // View
+  palette: { run: () => openPalette() },
+  toggleSidebar: { run: () => qfToggleSidebar(), on: () => !G.sideHidden && !WR.run },
+  maximise: { run: () => wsMaxToggle(PA.focus.gid), ok: () => !!focused() && !!PA.focus && !isPhone(), on: () => !!PA.focus && WK.max === PA.focus.gid },
+  zoomIn: { run: () => zoomFor('app', 'in') },
+  zoomOut: { run: () => zoomFor('app', 'out') },
+  zoomReset: { run: () => zoomFor('app', 'reset') },
+  fullscreen: { run: () => (DESK && window.ohDesktop?.frame ? window.ohDesktop.frame('fullscreen') : document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.())?.catch?.(() => {}) },
+  // Chat
+  send: { run: () => $('.composer', qfChat().el.root)?.requestSubmit(), ok: qfNeedChat },
+  stop: { run: () => $('.stopBtn', qfChat().el.root)?.click(), ok: () => !!focused()?.running },
+  continue: { run: qfCmd('continue'), ok: () => !!focused() && !focused().running },
+  btw: { run: () => qfType(qfChat(), '/btw '), ok: qfNeedChat },
+  showSteps: { run: () => setPaneTab('trace'), ok: qfNeedChat },
+  undoReply: { run: qfCmd('undo'), ok: () => !!focused() && !focused().running },
+  compact: { run: () => $('.cmp-ctx-btn', qfChat().el.root)?.click(), ok: () => !!focused() && !focused().running },
+  budget: { run: () => { const c = qfChat(); editBudget(c, undefined, $('.cmp-budget', c.el.root)); }, ok: qfNeedChat },
+  usage: { run: qfCmd('usage'), ok: qfNeedChat },
+  model: { run: qfCmd('model'), ok: qfNeedChat },
+  dictate: { run: () => $('.micBtn', qfChat().el.root)?.click(), ok: qfNeedChat },
+  fresh: { run: qfCmd('fresh'), ok: () => !!focused() && !focused().running },
+  // Agent
+  letThrough: { run: () => openLetThrough() },
+  perms: { run: () => qfPerms() },
+  permissions: { run: () => openPermissions({ kind: 'settings' }) },
+  mcp: { run: () => openSettings('mcp') },
+  skills: { run: () => openSettings('skills') },
+  safety: { run: () => openSettings('safety') },
+  deciders: { run: () => openSettings('deciders') },
+  memory: { run: () => openSettings('memory') },
+  // Run
+  servers: { run: () => wrServers() },
+  running: { run: () => $('#runAllBtn')?.click() },
+  terminal: { run: async () => { const c = await wrChat(); if (c) openTerminal(c); } },
+  files: { run: () => wrFiles() },
+  review: { run: qfCmd('review'), ok: () => !!focused() && !focused().running },
+  schedules: { run: () => $('#schedBtn')?.click() },
+  spending: { run: () => openCosts() },
+  // Window
+  splitRight: { run: () => paneSplitTab(PA.focus.gid, null, 'right'), ok: qfCanSplit },
+  splitDown: { run: () => paneSplitTab(PA.focus.gid, null, 'bottom'), ok: qfCanSplit },
+  popOut: { run: () => popOut({ type: 'chat', id: curId() }), ok: () => canPop() && !!curId() },
+  follow: { run: () => wsSetFollow(PA.focus.gid), ok: () => !!focused() && !!PA.focus && PA.list.length > 1, on: () => !!focused() && !!PA.focus && wsFollowGid() === PA.focus.gid },
+  nextTab: { run: () => KEY_RUN['tab.next'].run(), ok: () => WT.tabs.length > 1 },
+  prevTab: { run: () => KEY_RUN['tab.prev'].run(), ok: () => WT.tabs.length > 1 },
+  back: { run: () => wsStep(-1), ok: () => WK.history.canGo(-1, wsCanShow) },
+  forward: { run: () => wsStep(1), ok: () => WK.history.canGo(1, wsCanShow) },
+  keepAwake: { run: () => qfKeepAwake(), on: () => !!QFS.awake },
+  summonKey: { run: () => { openSettings('about'); setTimeout(() => $('#stRowSummon')?.scrollIntoView({ block: 'center' }), 400); } },
+  // Help
+  whatsNew: { run: () => openNews('updates') },
+  setupCheck: { run: () => openSettings('setup') },
+  github: { run: () => { const a = $('#brandGit'); followLink(a?.getAttribute('href') || 'https://github.com/mims1234/QuorX', $('#qfMenubar')); } },
+};
+// The lists some items open, built when the menu opens: { label, run, on?, ok?, key? } and '-'.
+const FRAME_SUBS = {
+  theme: () => [[null, 'Follow Windows'], ['dark', 'Dark'], ['light', 'Light']].map(([v, label]) => ({ label, on: () => (G.theme || null) === v, run: () => { G.theme = v; applyTheme(); savePrefs(); } })),
+  places: () => [
+    { label: 'Home', run: () => goHome() },
+    { label: 'Chats', run: () => qfShowSidebar(), on: () => !G.sideHidden && !WR.run },
+    { label: 'Search inside chats', run: () => openChatSearch(), key: 'chatsearch' },
+    { label: 'Running', run: () => $('#runAllBtn')?.click(), on: () => WR.run },
+    { label: 'Schedules', run: () => $('#schedBtn')?.click() },
+    { label: 'Spending', run: () => openCosts() },
+    { label: 'News', run: () => openNews('updates') },
+  ],
+  layouts: () => {
+    const on = !!focused() && !isPhone(), mine = myLayouts();
+    return [
+      ...WS.LAYOUT_ORDER.map((k) => ({ label: WS.LAYOUTS[k].name, on: () => WK.preset === k, ok: () => on, run: () => wsApplyLayout(k) })),
+      ...(mine.length ? ['-', ...mine.map((x) => ({ label: x.name, on: () => WK.preset === `my:${x.id}`, ok: () => on, run: () => wsApplyLayout(`my:${x.id}`) }))] : []),
+      '-', { label: 'Save layout as…', ok: () => on, run: () => wsSaveLayoutAs() },
+    ];
+  },
+  approval: () => [['strict', '🔒 Strict: ask before tools'], ['yolo', '⚡ YOLO: don\'t ask']].map(([v, label]) => ({ label, ok: qfNeedChat, on: () => focused()?.approval === v, run: qfCmd(v) })),
+  // Ctrl+1 … Ctrl+8 are the first eight tabs; Ctrl+9 is always the last (the shortcuts table's own rule).
+  chatTabs: () => WT.tabs.map((id, i, all) => ({ label: chatTitle(id), on: () => id === curId(), run: () => { if (id !== curId()) showChat(id); }, key: i === all.length - 1 && i >= 8 ? 'tab.9' : i < 8 ? `tab.${i + 1}` : '' })),
+};
+
+// ---- drawing and running the menus ----
+function qfResolve(list) {
+  return list.map((it) => {
+    if (it === '-') return '-';
+    const a = it.act ? FRAME_ACTS[it.act] : it, sub = it.sub ? FRAME_SUBS[it.sub]() : null;
+    let ok = true; try { ok = sub ? sub.some((x) => x !== '-' && (!x.ok || x.ok())) : a?.ok ? !!a.ok() : true; } catch { ok = false; }
+    let on = null; try { on = a?.on ? !!a.on() : null; } catch { on = null; }
+    return { label: it.label, run: a?.run, sub, disabled: !ok || (!sub && !a?.run), on, keyText: it.key ? keyLabel(it.key) : '' };
+  });
+}
+function qfMenubarDraw() {
+  const bar = $('#qfMenubar'); if (!bar) return;
+  bar.innerHTML = QF.MENUS.map((m, i) => `<button type="button" class="qf-mb" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-m="${i}" tabindex="${i === 0 ? 0 : -1}">${esc(m.name)}</button>`).join('');
+}
+const qfMenuEl = (sub = false) => document.querySelector(sub ? '.qf-menu.qf-sub' : '.qf-menu:not(.qf-sub)');
+function qfItemsHTML(items, hi) {
+  return items.map((it, i) => (it === '-' ? '<div class="qf-sep" role="separator"></div>'
+    : `<div class="qf-mi ${i === hi ? 'hi' : ''}" role="${it.on != null ? 'menuitemcheckbox' : 'menuitem'}" ${it.on != null ? `aria-checked="${it.on}"` : ''} ${it.sub ? 'aria-haspopup="menu"' : ''} aria-disabled="${it.disabled}" data-i="${i}" id="qf-mi-${it.subOf ?? 'm'}-${i}"><span class="qf-chk" aria-hidden="true">${it.on ? '✓' : ''}</span><span class="qf-ml">${esc(it.label)}</span><span class="qf-mk">${esc(it.keyText || '')}</span><span class="qf-ma" aria-hidden="true">${it.sub ? '›' : ''}</span></div>`)).join('');
+}
+function qfOpen(i, { kb = false, hi = -1 } = {}) {
+  const menu = QF.MENUS[i], btn = $(`#qfMenubar [data-m="${i}"]`); if (!menu || !btn) return;
+  qfCloseSub();
+  if (QFS.open < 0 && !$('#qfMenubar').contains(document.activeElement)) QFS.back = document.activeElement;
+  QFS.open = i; QFS.kb = kb;
+  QFS.items = qfResolve(QF.visibleItems(menu.items, { desk: DESK }));
+  QFS.hi = hi === 'first' ? QF.stepItem(QFS.items, -1, 1) : hi;
+  for (const b of document.querySelectorAll('#qfMenubar .qf-mb')) { const on = b === btn; b.classList.toggle('open', on); b.setAttribute('aria-expanded', String(on)); }
+  let m = qfMenuEl();
+  if (!m) { m = document.createElement('div'); m.className = 'qf-menu fx-menu'; m.setAttribute('role', 'menu'); document.body.append(m); qfWireMenu(m, false); }
+  m.setAttribute('aria-label', menu.name);
+  m.innerHTML = qfItemsHTML(QFS.items, QFS.hi);
+  const r = btn.getBoundingClientRect(), w = m.getBoundingClientRect();
+  m.style.left = `${Math.max(4, Math.min(r.left, innerWidth - w.width - 4))}px`; m.style.top = `${r.bottom + 2}px`;
+  m.style.maxHeight = `${innerHeight - r.bottom - 12}px`;
+  if (kb) btn.focus();
+}
+function qfOpenSub(i, { hi = -1 } = {}) {
+  const it = QFS.items[i]; if (!it?.sub || it.disabled) return;
+  const parent = qfMenuEl(), row = parent?.querySelector(`[data-i="${i}"]`); if (!row) return;
+  if (QFS.sub?.at === i) { if (hi !== -1) qfSubHi(hi === 'first' ? QF.stepItem(QFS.sub.items, -1, 1) : hi); return; }
+  qfCloseSub();
+  const items = qfResolve(it.sub).map((x) => (x === '-' ? x : { ...x, subOf: 's' }));
+  QFS.sub = { at: i, items, hi: hi === 'first' ? QF.stepItem(items, -1, 1) : hi };
+  const m = document.createElement('div'); m.className = 'qf-menu qf-sub fx-menu'; m.setAttribute('role', 'menu'); m.setAttribute('aria-label', it.label);
+  m.innerHTML = qfItemsHTML(items, QFS.sub.hi);
+  document.body.append(m); qfWireMenu(m, true);
+  const r = row.getBoundingClientRect(), w = m.getBoundingClientRect();
+  const left = r.right + w.width + 4 <= innerWidth ? r.right - 2 : r.left - w.width + 2;
+  m.style.left = `${Math.max(4, left)}px`; m.style.top = `${Math.max(4, Math.min(r.top - 4, innerHeight - w.height - 4))}px`;
+  row.setAttribute('aria-expanded', 'true');
+}
+function qfCloseSub() { qfMenuEl(true)?.remove(); QFS.sub = null; qfMenuEl()?.querySelector('[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false'); }
+function qfClose({ refocus = true } = {}) {
+  if (QFS.open < 0) return;
+  qfCloseSub(); qfMenuEl()?.remove();
+  QFS.open = -1; QFS.hi = -1; QFS.items = [];
+  for (const b of document.querySelectorAll('#qfMenubar .qf-mb')) { b.classList.remove('open'); b.setAttribute('aria-expanded', 'false'); }
+  if (refocus) qfLeaveBar();
+}
+// Back to where you were before the menu bar (the box you typed in, a tab).
+function qfLeaveBar() {
+  const b = QFS.back; QFS.kb = false;
+  if ($('#qfMenubar')?.contains(document.activeElement)) { if (b?.isConnected && b !== document.body) b.focus(); else document.activeElement.blur(); }
+}
+function qfHi(i) { QFS.hi = i; for (const el of qfMenuEl()?.querySelectorAll('.qf-mi') || []) el.classList.toggle('hi', +el.dataset.i === i); }
+function qfSubHi(i) { if (!QFS.sub) return; QFS.sub.hi = i; for (const el of qfMenuEl(true)?.querySelectorAll('.qf-mi') || []) el.classList.toggle('hi', +el.dataset.i === i); }
+function qfRun(it) {
+  if (!it || it.disabled || !it.run) return;
+  qfClose({ refocus: false });
+  // The focus goes back first, so Paste, Find and the rest act where you were.
+  const b = QFS.back; QFS.kb = false;
+  if ($('#qfMenubar').contains(document.activeElement)) { if (b?.isConnected && b !== document.body) b.focus(); else document.activeElement.blur(); }
+  try { const r = it.run(); r?.catch?.((e) => console.warn('menu', e)); } catch (e) { console.warn('menu', e); }
+  setTimeout(wsChrome, 0);
+}
+function qfWireMenu(m, sub) {
+  // Never takes the focus from where you were.
+  m.addEventListener('mousedown', (e) => e.preventDefault());
+  m.addEventListener('mousemove', (e) => {
+    const row = e.target.closest('.qf-mi'); if (!row) return;
+    const i = +row.dataset.i;
+    if (sub) { if (QFS.sub?.hi !== i) qfSubHi(i); return; }
+    if (QFS.hi !== i) { qfHi(i); if (QFS.items[i]?.sub) qfOpenSub(i); else qfCloseSub(); }
+  });
+  m.addEventListener('click', (e) => {
+    const row = e.target.closest('.qf-mi'); if (!row) return;
+    const i = +row.dataset.i, it = (sub ? QFS.sub?.items : QFS.items)?.[i];
+    if (it?.sub) return qfOpenSub(i, { hi: 'first' });
+    qfRun(it);
+  });
+}
+// The keys while a menu is open, or the menu bar has the focus (Alt, then arrows).
+function qfKeys(e) {
+  const inBar = $('#qfMenubar')?.contains(document.activeElement), open = QFS.open >= 0;
+  if (!open && !inBar) return false;
+  const n = QF.MENUS.length, cur = open ? QFS.open : +(document.activeElement.dataset.m || 0);
+  const go = (dir) => { const j = (cur + dir + n) % n; if (open) qfOpen(j, { kb: true, hi: 'first' }); else $(`#qfMenubar [data-m="${j}"]`)?.focus(); };
+  const k = e.key;
+  if (k === 'Escape') { if (QFS.sub) qfCloseSub(); else if (open) { qfClose({ refocus: false }); if (inBar) $(`#qfMenubar [data-m="${cur}"]`)?.focus(); else qfLeaveBar(); } else qfLeaveBar(); return true; }
+  if (k === 'Tab') { qfClose(); return false; }
+  if (!open) {
+    if (k === 'ArrowLeft' || k === 'ArrowRight') { go(k === 'ArrowLeft' ? -1 : 1); return true; }
+    if (k === 'ArrowDown' || k === 'Enter' || k === ' ') { qfOpen(cur, { kb: true, hi: 'first' }); return true; }
+    if (/^[a-z]$/i.test(k) && !e.ctrlKey && !e.altKey) { const j = QF.MENUS.findIndex((m) => m.name.toLowerCase().startsWith(k.toLowerCase())); if (j >= 0) qfOpen(j, { kb: true, hi: 'first' }); return true; }
+    return false;
+  }
+  const s = QFS.sub;
+  if (k === 'ArrowDown' || k === 'ArrowUp') { const d = k === 'ArrowDown' ? 1 : -1; if (s) qfSubHi(QF.stepItem(s.items, s.hi, d)); else qfHi(QF.stepItem(QFS.items, QFS.hi, d)); return true; }
+  if (k === 'Home' || k === 'End') { const list = s ? s.items : QFS.items, i = k === 'Home' ? QF.stepItem(list, -1, 1) : QF.stepItem(list, 0, -1); if (s) qfSubHi(i); else qfHi(i); return true; }
+  if (k === 'ArrowRight') { if (!s && QFS.items[QFS.hi]?.sub && !QFS.items[QFS.hi].disabled) qfOpenSub(QFS.hi, { hi: 'first' }); else go(1); return true; }
+  if (k === 'ArrowLeft') { if (s) qfCloseSub(); else go(-1); return true; }
+  if (k === 'Enter' || k === ' ') { if (s) qfRun(s.items[s.hi]); else if (QFS.items[QFS.hi]?.sub) qfOpenSub(QFS.hi, { hi: 'first' }); else qfRun(QFS.items[QFS.hi]); return true; }
+  if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { if (s) qfSubHi(QF.itemByLetter(s.items, k, s.hi)); else qfHi(QF.itemByLetter(QFS.items, k, QFS.hi)); return true; }
+  return true; // nothing else reaches the page while a menu is open
+}
+function qfWireBar() {
+  const bar = $('#qfMenubar');
+  bar.addEventListener('mousedown', (e) => { if (e.target.closest('.qf-mb') && !bar.contains(document.activeElement)) e.preventDefault(); });
+  bar.addEventListener('click', (e) => {
+    const b = e.target.closest('.qf-mb'); if (!b) return;
+    const i = +b.dataset.m, hovered = QFS.hovered === i;
+    QFS.hovered = -1;
+    if (QFS.open === i && !hovered) qfClose(); else if (QFS.open !== i) qfOpen(i, { kb: bar.contains(document.activeElement) });
+  });
+  // With a menu open, pointing at another name opens that one (as in every menu bar); the click that follows keeps it.
+  bar.addEventListener('mouseover', (e) => { const b = e.target.closest('.qf-mb'); if (b && QFS.open >= 0 && +b.dataset.m !== QFS.open) { QFS.hovered = +b.dataset.m; qfOpen(+b.dataset.m, { kb: QFS.kb }); } });
+  bar.addEventListener('mouseleave', () => { QFS.hovered = -1; });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Alt') { QFS.altDown = !e.ctrlKey && !e.shiftKey && !e.metaKey; return; }
+    QFS.altDown = false;
+    if (!qfOn()) return;
+    if (qfKeys(e)) { e.preventDefault(); e.stopPropagation(); return; }
+    // Alt + a menu's first letter opens it, unless that key is a shortcut of its own or a dialog has the keys.
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && /^[a-z]$/i.test(e.key) && !document.querySelector('dialog[open]') && !inTerminal(e.target) && !actionFor(keyCombo(e), keyMap())) {
+      const j = QF.MENUS.findIndex((m) => m.name.toLowerCase().startsWith(e.key.toLowerCase()));
+      if (j >= 0) { e.preventDefault(); e.stopPropagation(); QFS.back = document.activeElement; qfOpen(j, { kb: true, hi: 'first' }); }
+    }
+  }, true);
+  // Alt pressed and let go on its own: to the menu bar, or back from it.
+  window.addEventListener('keyup', (e) => {
+    if (e.key !== 'Alt' || !QFS.altDown) return;
+    QFS.altDown = false;
+    if (!qfOn() || document.querySelector('dialog[open]') || inTerminal(e.target)) return;
+    e.preventDefault();
+    if (QFS.open >= 0) qfClose();
+    else if (bar.contains(document.activeElement)) qfLeaveBar();
+    else { QFS.back = document.activeElement; QFS.kb = true; $('#qfMenubar [data-m="0"]')?.focus(); }
+  }, true);
+  window.addEventListener('pointerdown', (e) => { QFS.altDown = false; if (QFS.open >= 0 && !e.target.closest?.('.qf-menu, #qfMenubar')) qfClose({ refocus: false }); }, true);
+  window.addEventListener('blur', () => { QFS.altDown = false; qfClose({ refocus: false }); });
+  window.addEventListener('resize', () => qfClose({ refocus: false }));
+}
+
+// ---- row 2: the open project tabs ----
+function qfTabsLoad() {
+  if (QFS.loaded || !G.projects?.length) return;
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(QF_TABS_KEY) || 'null'); } catch { /* storage off */ }
+  const lastUsed = (id) => G.chatStats?.[id]?.lastAt ?? Math.max(0, ...G.chats.filter((c) => projOf(c) === id).map((c) => c.lastAt || 0));
+  QFS.tabs = Array.isArray(saved) ? saved : QF.firstTabs({ known: G.projects, withTabs: new Set(G.projects.filter((p) => readLayout(p.id) && WS.chatTabIds(readLayout(p.id).layout).length).map((p) => p.id)), lastUsed, current: qfPid() });
+  QFS.loaded = true;
+}
+function qfTabsSave() { try { localStorage.setItem(QF_TABS_KEY, JSON.stringify(QFS.tabs)); } catch { /* kept until the page reloads */ } }
+function qfDraw() {
+  if (!qfOn()) return;
+  qfTabsLoad(); if (!QFS.loaded) return;
+  const next = QF.openTabs(QFS.tabs, { known: G.projects, current: qfPid() });
+  if (JSON.stringify(next) !== JSON.stringify(QFS.tabs)) { QFS.tabs = next; qfTabsSave(); }
+  const need = needsYou(), live = replying(), cur = qfPid(), box = $('#qfTabs');
+  const rows = QFS.tabs.map((pid) => { const p = qfProject(pid); return { pid, p, n: need.filter((x) => projOf(x.c) === pid).length, run: live.some((c) => projOf(c) === pid) }; });
+  const sig = JSON.stringify([cur, rows.map((r) => [r.pid, r.p?.name, r.p?.color, r.p?.spent, r.n, r.run])]);
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    const one = rows.length < 2;
+    box.innerHTML = rows.map(({ pid, p, n, run }) => {
+      const on = pid === cur, name = p?.name || pid;
+      const tip = [name, `${money(p?.spent || 0, 4)} spent in its chats`, n ? `${n} need${n === 1 ? 's' : ''} you` : '', run ? 'something is running' : ''].filter(Boolean).join(' · ');
+      return `<div class="qf-ptab ${on ? 'on' : ''}" style="${projStyle(p)}" data-p="${esc(pid)}" draggable="true">
+        <button type="button" class="qf-ptab-main" role="tab" aria-selected="${on}" tabindex="${on ? 0 : -1}" title="${esc(tip)}"><i class="qf-pdot" aria-hidden="true"></i><span class="qf-pname">${esc(name)}</span>${run ? '<i class="qf-prun" aria-label="running"></i>' : ''}${n ? `<b class="qf-pneeds" aria-label="${n} need you">${n}</b>` : ''}</button>
+        ${one ? '' : `<button type="button" class="qf-px" tabindex="-1" aria-label="Close ${esc(name)}" title="Take it off this row (its chats and tabs are kept)">×</button>`}</div>`;
+    }).join('');
+  }
+  box.querySelector('.qf-ptab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  $('#qfMore').hidden = box.scrollWidth <= box.clientWidth + 1;
+  const kb = $('#paletteBtn kbd'); if (kb) kb.textContent = keyLabel('palette').replace(/\+/g, ' ');
+}
+// A project tab clicked: its chat that was in front (else its first tab), or Home ready to start a chat there.
+async function qfShowProject(pid) {
+  if (!QFS.tabs.includes(pid)) { QFS.tabs = [...QFS.tabs, pid]; qfTabsSave(); }
+  const r = readLayout(pid), tabs = r ? WS.chatTabIds(r.layout) : [];
+  const active = r ? String(WS.findGroup(r.layout, WS.CHAT_GROUP)?.active || '').replace(/^chat:/, '') : '';
+  const id = [active, ...tabs].find((x) => x && x !== 'main');
+  if (pid === qfPid() && (focused() ? projOf(focused()) === pid : true) && (!id || G.panes.includes(id))) return wsChrome();
+  if (id && await getChat(id)) return showChat(id);
+  wtLoad(pid); G.landingProject = pid; showLanding(); wsChrome();
+}
+function qfCloseProject(pid) {
+  const r = QF.closeTab(QFS.tabs, pid, qfPid());
+  if (r.list === QFS.tabs || !r.list.length) return;
+  QFS.tabs = r.list; qfTabsSave();
+  if (r.next) qfShowProject(r.next); else wsChrome();
+}
+function qfTabMenu(e, pid) {
+  const p = qfProject(pid); if (!p) return;
+  popMenu(e, [
+    [`New chat in ${clip(p.name, 28)}`, () => newChat(pid)],
+    ['Project settings…', () => openProjectSettings(p)],
+    null,
+    ['Close', () => qfCloseProject(pid), { disabled: QFS.tabs.length < 2 }],
+    ['Close other project tabs', () => { QFS.tabs = [pid]; qfTabsSave(); if (pid !== qfPid()) qfShowProject(pid); else wsChrome(); }, { disabled: QFS.tabs.length < 2 }],
+  ]);
+}
+// ＋ (open another project: new, a folder, or one you have) and ⋯ (every open tab, when they don't all fit). A search
+// and a filter once the list is long.
+function qfProjList(anchor, kind) {
+  document.querySelector('.qf-plist')?.remove();
+  const add = kind === 'add';
+  const list = add ? (G.projects || []).filter((p) => !p.archived && !QFS.tabs.includes(p.id)) : QFS.tabs.map((id) => qfProject(id)).filter(Boolean);
+  const m = document.createElement('div'); m.className = 'qf-plist wt-list exp-menu fx-menu'; m.setAttribute('role', 'menu');
+  m.innerHTML = `${add ? '<button type="button" role="menuitem" class="wt-lrow" data-a="new">＋ New project…</button><button type="button" role="menuitem" class="wt-lrow" data-a="folder">📂 Open a folder as a project…</button><hr class="fx-sep"><div class="wt-lh">Open another project</div>' : ''}
+    ${list.length > 8 ? '<div class="qf-lf"></div>' : ''}<div class="wt-lrows">${list.map((p) => `<button type="button" role="menuitem" class="wt-lrow ${p.id === qfPid() ? 'on' : ''}" data-p="${esc(p.id)}" style="${projStyle(p)}" data-lf-seg="${p.pinned ? 'pinned' : 'other'}" data-lf-text="${esc(p.name.toLowerCase())}"><i class="qf-pdot"></i><span class="wt-name">${esc(p.name)}</span><small>${money(p.spent || 0, 3)}</small></button>`).join('') || `<span class="wt-none">${add ? 'Every project is open already' : 'No projects open'}</span>`}</div>`;
+  document.body.append(m);
+  if (list.length > 8) listFilter($('.qf-lf', m), { key: add ? 'openProject' : 'openProjectTabs', rows: () => m.querySelectorAll('.wt-lrow[data-p]'), segLabel: (v) => ({ pinned: 'Pinned', other: 'Others' }[v] || v), segOrder: ['pinned', 'other'], placeholder: 'Find a project', label: 'Show' });
+  const r = anchor.getBoundingClientRect(), w = m.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w.width - 8))}px`; m.style.top = `${Math.min(r.bottom + 4, innerHeight - w.height - 8)}px`;
+  const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
+  const away = (ev) => { if (!m.contains(ev.target) && ev.target !== anchor) close(); };
+  const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); close(); anchor.focus(); } };
+  addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
+  m.onclick = (ev) => {
+    const b = ev.target.closest('.wt-lrow'); if (!b) return;
+    close();
+    if (b.dataset.a === 'new') return editProject(null);
+    if (b.dataset.a === 'folder') return qfOpenFolder();
+    if (b.dataset.p) qfShowProject(b.dataset.p);
+  };
+  (m.querySelector('.lf-q') || m.querySelector('.wt-lrow'))?.focus();
+}
+function qfWireTabs() {
+  const box = $('#qfTabs');
+  box.addEventListener('click', (e) => {
+    const t = e.target.closest('.qf-ptab'); if (!t) return;
+    if (e.target.closest('.qf-px')) return qfCloseProject(t.dataset.p);
+    qfShowProject(t.dataset.p);
+  });
+  box.addEventListener('auxclick', (e) => { const t = e.target.closest('.qf-ptab'); if (t && e.button === 1) { e.preventDefault(); qfCloseProject(t.dataset.p); } });
+  box.addEventListener('mousedown', (e) => { if (e.button === 1 && e.target.closest('.qf-ptab')) e.preventDefault(); });
+  box.addEventListener('contextmenu', (e) => { const t = e.target.closest('.qf-ptab'); if (t) qfTabMenu(e, t.dataset.p); });
+  box.addEventListener('keydown', (e) => {
+    const t = e.target.closest('.qf-ptab'); if (!t) return;
+    if (e.key === 'Delete') { e.preventDefault(); qfCloseProject(t.dataset.p); }
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) qfTabMenu(Object.assign(e, { anchor: t }), t.dataset.p);
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const n = e.key === 'ArrowLeft' ? t.previousElementSibling : t.nextElementSibling; if (n) { e.preventDefault(); $('.qf-ptab-main', n)?.focus(); } }
+  });
+  // Drag to reorder.
+  const TYPE = 'application/x-quorx-projtab';
+  box.addEventListener('dragstart', (e) => { const t = e.target.closest('.qf-ptab'); if (!t) return; e.dataTransfer.setData(TYPE, t.dataset.p); e.dataTransfer.effectAllowed = 'move'; t.classList.add('drag'); });
+  box.addEventListener('dragend', () => { for (const x of box.querySelectorAll('.drag, .drop-l, .drop-r')) x.classList.remove('drag', 'drop-l', 'drop-r'); });
+  const spot = (e) => { const t = e.target.closest('.qf-ptab'); if (!t) return null; const r = t.getBoundingClientRect(); return { t, after: e.clientX > r.left + r.width / 2 }; };
+  box.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes(TYPE)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    for (const x of box.querySelectorAll('.drop-l, .drop-r')) x.classList.remove('drop-l', 'drop-r');
+    const s = spot(e); if (s) s.t.classList.add(s.after ? 'drop-r' : 'drop-l');
+  });
+  box.addEventListener('drop', (e) => {
+    const id = e.dataTransfer.getData(TYPE), s = spot(e); if (!id || !s) return;
+    e.preventDefault();
+    QFS.tabs = QF.moveTab(QFS.tabs, id, s.t.dataset.p, s.after); qfTabsSave(); delete box.dataset.sig; qfDraw();
+  });
+  box.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && box.scrollWidth > box.clientWidth) { e.preventDefault(); box.scrollLeft += e.deltaY; } }, { passive: false });
+  $('#qfAdd').onclick = (e) => qfProjList(e.currentTarget, 'add');
+  $('#qfMore').onclick = (e) => qfProjList(e.currentTarget, 'more');
+  new ResizeObserver(() => { $('#qfMore').hidden = box.scrollWidth <= box.clientWidth + 1; }).observe(box);
+}
+function qfInit() {
+  if (!$('#qfTitle') || POP) return;
+  qfMenubarDraw(); qfWireBar(); qfWireTabs();
+  $('#qfLogo').onclick = () => goHome();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', qfOverlay);
+  if (DESK && window.ohDesktop?.keepAwake) window.ohDesktop.keepAwake().then((r) => { QFS.awake = !!r?.on; }).catch(() => {});
+  qfOverlay();
 }
 
 // ---------- Files: previews like an editor's — pictures, video, audio, PDF, office documents, tables, fonts, pages ----------
@@ -12998,6 +13469,7 @@ function applyTheme() {
   if (mode) document.documentElement.setAttribute('data-theme', mode); else document.documentElement.removeAttribute('data-theme');
   for (const b of [$('#themeBtn'), $('#railTheme')].filter(Boolean)) { b.innerHTML = icon; b.setAttribute('aria-label', title); }
   $('#themeBtn').title = title; if ($('#railTheme')) $('#railTheme').dataset.tip = title.replace(/ \(.*\)$/, '');
+  qfOverlay();
 }
 const isNarrow = () => matchMedia('(max-width: 900px)').matches;
 // Phones get their own layout: one full-screen view at a time (chat list, chat, preview), chosen in the bottom bar.

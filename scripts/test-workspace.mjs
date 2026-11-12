@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import * as W from '../public/workspace.js';
 import { createHistory, HISTORY_CAP } from '../public/nav-history.js';
 import * as K from '../public/keymap.js';
+import * as QF from '../public/frame-model.js';
+import fs from 'node:fs';
 
 const shape = (n) => (n.t === 'g' ? `${n.id}[${n.tabs.join(',')}]` : `${n.dir}(${n.kids.map(shape).join(' ')})`);
 const ids = (lay) => W.groups(lay).map((g) => g.id);
@@ -551,4 +553,69 @@ test('workspace W5: pop-out windows: what goes there, docking back where it was,
     assert.deepEqual(fitBox({ x: 1900, y: 0, width: 3000, height: 900 }, screens), { x: 1920, y: 0, width: 1280, height: 900 }, 'on the screen it is mostly on, never bigger than it');
     assert.deepEqual(fitBox(null, screens), { x: 580, y: 240, width: 760, height: 560 }, 'no box: in the middle of the first screen');
   }
+});
+
+test('window frame: every menu item runs a real action and shows the key the shortcuts table gives it', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const block = (name) => { const at = app.indexOf(`const ${name} = {`); assert.ok(at > 0, `${name} is in app.js`); return app.slice(at, app.indexOf('\n};', at)); };
+  const keysOf = (src) => new Set([...src.matchAll(/^ {2}([A-Za-z]+): /gm)].map((m) => m[1]));
+  const acts = keysOf(block('FRAME_ACTS')), subs = keysOf(block('FRAME_SUBS'));
+  const refs = QF.menuRefs();
+  for (const a of refs.acts) assert.ok(acts.has(a), `menu action ${a} is in FRAME_ACTS (no dead items)`);
+  for (const s of refs.subs) assert.ok(subs.has(s), `submenu ${s} is in FRAME_SUBS`);
+  for (const k of refs.keys) assert.ok(K.byId.has(k), `menu key ${k} is a row of the shortcuts table`);
+  assert.deepEqual(QF.MENUS.map((m) => m.name), ['QuorX', 'File', 'Edit', 'View', 'Chat', 'Agent', 'Run', 'Window', 'Help']);
+  // A key changed in Settings → Shortcuts is the key the menu shows: both read bindings().
+  const mine = K.bindings({ keys: { 'tab.reopen': 'Ctrl+Alt+R' } });
+  assert.equal(mine.get(QF.MENUS[1].items.find((x) => x.act === 'reopenTab').key), 'Ctrl+Alt+R');
+});
+
+test('window frame: desktop-only items and stray dividers go in a browser; arrows and letters step over what can\'t run', () => {
+  const items = [{ label: 'About', act: 'a' }, { label: 'Updates', act: 'u', only: 'desk' }, '-', '-', { label: 'Quit', act: 'q', only: 'desk' }];
+  assert.deepEqual(QF.visibleItems(items, { desk: false }).map((x) => x.label || x), ['About'], 'no divider left at the end');
+  assert.deepEqual(QF.visibleItems(items, { desk: true }).map((x) => x.label || x), ['About', 'Updates', '-', 'Quit'], 'two dividers in a row become one');
+  assert.deepEqual(QF.visibleItems(['-', { label: 'A' }]).map((x) => x.label || x), ['A'], 'none at the start');
+  const list = [{ label: 'New chat' }, '-', { label: 'Attach', disabled: true }, { label: 'Close tab' }, { label: 'Close project' }];
+  assert.equal(QF.stepItem(list, -1, 1), 0, 'down from nothing: the first');
+  assert.equal(QF.stepItem(list, 0, 1), 3, 'over the divider and the disabled one');
+  assert.equal(QF.stepItem(list, 0, -1), 4, 'up from the top wraps to the bottom');
+  assert.equal(QF.stepItem([], 0, 1), -1);
+  assert.equal(QF.stepItem(['-', { label: 'x', disabled: true }], -1, 1), -1, 'nothing can run');
+  assert.equal(QF.itemByLetter(list, 'c', -1), 3);
+  assert.equal(QF.itemByLetter(list, 'C', 3), 4, 'the next one with that letter');
+  assert.equal(QF.itemByLetter(list, 'a', -1), -1, 'a disabled one is skipped');
+});
+
+test('window frame: project tabs keep your order, always show the project on screen, and close to a neighbour', () => {
+  const known = [{ id: 'scratch' }, { id: 'arcade' }, { id: 'shop' }, { id: 'old', archived: true }];
+  assert.deepEqual(QF.openTabs(['shop', 'gone', 'shop', 'old', 'arcade'], { known }), ['shop', 'arcade'], 'deleted, archived and repeated ones drop off');
+  assert.deepEqual(QF.openTabs(['shop'], { known, current: 'arcade' }), ['shop', 'arcade'], 'the project on screen joins at the end');
+  assert.deepEqual(QF.openTabs(null, { known, current: 'scratch' }), ['scratch']);
+  assert.deepEqual(QF.openTabs(['shop'], { known, current: 'old' }), ['shop'], 'an archived project is not opened');
+  const used = { scratch: 1, arcade: 30, shop: 20 };
+  assert.deepEqual(QF.firstTabs({ known, withTabs: new Set(['arcade', 'shop', 'old']), lastUsed: (id) => used[id], current: 'scratch' }), ['arcade', 'shop', 'scratch'], 'first row: projects with open chat tabs, latest first');
+  assert.deepEqual(QF.closeTab(['a', 'b', 'c'], 'b', 'b'), { list: ['a', 'c'], next: 'c' }, 'the one on screen hands over to its right');
+  assert.deepEqual(QF.closeTab(['a', 'b', 'c'], 'c', 'c'), { list: ['a', 'b'], next: 'b' }, 'or its left');
+  assert.deepEqual(QF.closeTab(['a', 'b'], 'a', 'b'), { list: ['b'], next: undefined }, 'another one: nothing to switch');
+  assert.deepEqual(QF.closeTab(['a'], 'a', 'a'), { list: [], next: null });
+  const same = ['a', 'b']; assert.equal(QF.closeTab(same, 'z', 'a').list, same, 'not on the row: unchanged');
+  assert.deepEqual(QF.moveTab(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
+  assert.deepEqual(QF.moveTab(['a', 'b', 'c'], 'a', 'b', true), ['b', 'a', 'c']);
+  assert.deepEqual(QF.moveTab(['a', 'b'], 'a', 'zz'), ['a', 'b']);
+});
+
+test('window frame: the shortcuts table has the window and editing keys the menus show, and they never clash', () => {
+  const def = K.bindings({});
+  assert.equal(K.actionFor('Ctrl+B', def), 'view.sidebar');
+  for (const id of ['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.all', 'view.fullscreen', 'menu.focus']) assert.equal(K.byId.get(id)?.fixed, true, `${id} is shown but can't be changed`);
+  assert.equal(K.actionFor('Ctrl+V', def), null, 'Paste is the system\'s, not run from the table');
+  assert.equal(K.clashWith('tab.close', 'Ctrl+C', def).id, 'edit.copy', 'a key Copy has is refused for another shortcut');
+  assert.equal(K.conflicts(def).size, 0);
+  // The page: rows 1 and 2 exist, and the desktop window draws its own controls over row 1.
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  for (const id of ['qfTitle', 'qfMenubar', 'qfProj', 'qfTabs', 'qfAdd', 'qfCmdSlot']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.doesNotMatch(html, /id="wtProj"/, 'the old project label beside the chat tabs is gone (the project tab names it)');
+  const main = fs.readFileSync(new URL('../desktop/main.js', import.meta.url), 'utf8');
+  assert.match(main, /titleBarStyle: 'hidden', titleBarOverlay:/);
+  assert.match(main, /handle\('frame'/);
 });

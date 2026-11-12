@@ -60,10 +60,6 @@ body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex
 .ws-top .wt-navb svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .ws-top .wt-navb:hover:not(:disabled), .ws-top .wt-more:hover, .ws-top .wt-panels:hover { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 .ws-top .wt-navb:disabled { opacity: .35; cursor: default; }
-.ws-top .wt-proj { align-self: center; flex: none; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; margin: 0 2px 0 4px; border-radius: 4px; font: 600 11px var(--font-ui); letter-spacing: .02em;
-  color: hsl(var(--ph, 170) 55% 62%); background: hsl(var(--ph, 170) 45% 50% / .12); border: 1px solid hsl(var(--ph, 170) 45% 50% / .3); }
-.ws-top .wt-proj[style*="--pcx"] { color: var(--pcx); background: color-mix(in srgb, var(--pcx) 12%, transparent); border-color: color-mix(in srgb, var(--pcx) 35%, transparent); }
-.ws-top .wt-proj[hidden] { display: none; }
 .ws-top .wt-strip { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-top: 6px; }
 .ws-top .wt-strip::-webkit-scrollbar { display: none; }
 .ws-top .wt-none { align-self: center; color: var(--dim); font-size: 12px; padding: 0 8px; white-space: nowrap; }
@@ -137,7 +133,7 @@ body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex
 @media (max-width: 900px) {
   body.ws-on .ws-rail, .ws-status, .ws-panel { display: none !important; }
   .ws-top { height: 44px; gap: 6px; }
-  .ws-top .wt-strip, .ws-top .wt-proj, .ws-top .wt-more { display: none !important; }
+  .ws-top .wt-strip, .ws-top .wt-more { display: none !important; }
   .ws-top .wt-switch { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; align-self: center; height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: 600 13px var(--font-ui); cursor: pointer; }
   .ws-top .wt-switch .wt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
   .ws-top .wt-switch .wt-n { flex: none; padding: 0 6px; border-radius: 4px; background: var(--panel-3); color: var(--muted); font: 600 11px var(--mono, monospace); }

@@ -52,6 +52,7 @@ All calls return a promise.
 | `notify` | A Windows notification (a newer one for the same chat replaces the older); clicking it sends `notify-click` | `{ title, body, silent, chatId }` | `false` when Windows has no notifications |
 | `badge` | The taskbar icon's badge: how many chats need you, drawn by the page | count, a PNG data URL (nothing at 0) | `true` |
 | `zoom` | QuorX's own zoom, remembered between starts | `'in' \| 'out' \| 'reset' \| 'get'` | the zoom factor |
+| `frame` | The window frame (the page's menu bar is the title bar): the colours of the native − □ × over it, full screen, and the Edit menu's commands where the focus is | `'overlay', { color, symbolColor }` (#rrggbb) · `'fullscreen'` · `'edit', 'undo' \| 'redo' \| 'cut' \| 'copy' \| 'paste' \| 'selectAll'` | `true`; for full screen, whether it is on now |
 | `openExternal` | Opens a web address in your own browser | `url` (http or https only) | `true` |
 | `showFile` | Shows a downloaded file in File Explorer | a path inside Downloads | `true` |
 | `perf` | The performance readout: every process with memory and processor, each tab, lost 3D views | | `{ totalMb, appMb, gpuMb, tabsMb, cpu, gpuCpu, procs, tabs, webglLost }` |
@@ -95,7 +96,7 @@ A replacement shell needs, roughly in order of effort:
    `snapshot`, `tabs`, and the tab events). This is the part most tied to Electron's `WebContentsView`. Sleeping tabs
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
-3. **Window and system** (`zoom`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `summon`, `quit`, `openExternal`,
+3. **Window and system** (`zoom`, `frame`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `summon`, `quit`, `openExternal`,
    `showFile`, `openHome`).
 4. **App updates and storage** (`update`, `storage`, `info`, `restartHarness`).
 5. **Readout** (`perf`): optional; the page shows its own numbers without it.

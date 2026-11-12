@@ -32,8 +32,27 @@
 <link rel="stylesheet" href="worktrees.css">
 <link rel="stylesheet" href="pulls.css">
 <link rel="stylesheet" href="workspace.css">
+<link rel="stylesheet" href="frame.css">
 </head>
 <body>
+<!-- The window frame, row 1: the QuorX mark, the menu bar and room for the window's own controls (in the desktop app the
+     window has no title bar of its own; Windows draws − □ × over the right end, so snap layouts keep working). The
+     empty part drags the window. Filled by "the window frame" in app.js; wider screens only, phones keep the top bar. -->
+<div class="qf-title" id="qfTitle">
+  <button type="button" class="qf-logo" id="qfLogo" title="Home: the start screen" aria-label="QuorX: Home"><img src="brand/quorx-32.png" alt=""></button>
+  <nav class="qf-menubar" id="qfMenubar" role="menubar" aria-label="Menu bar"></nav>
+  <div class="qf-drag" aria-hidden="true"></div>
+</div>
+<!-- Row 2: back / forward, one tab per open project, ＋ for another, then Go to or run… (Ctrl+K) and app-wide notices. -->
+<div class="qf-proj" id="qfProj">
+  <div class="qf-nav" id="qfNav"></div>
+  <div class="qf-ptabs" id="qfTabs" role="tablist" aria-label="Open projects"></div>
+  <button type="button" class="qf-ib qf-pmore" id="qfMore" aria-haspopup="menu" aria-label="Every open project" title="Every open project" hidden>⋯</button>
+  <button type="button" class="qf-ib qf-padd" id="qfAdd" aria-haspopup="menu" aria-label="Open a project" title="New project, open a folder, or open another project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+  <div class="qf-cmd-slot" id="qfCmdSlot"></div>
+  <div class="qf-fill"></div>
+  <div class="qf-right" id="qfRight"></div>
+</div>
 <!-- Top bar: app-wide controls only. Everything about one chat lives in that chat's header and composer. -->
 <header class="top">
   <div class="brand" id="brandHome" role="link" tabindex="0" title="Home: the start screen">Quor<span>X</span></div>
@@ -128,7 +147,6 @@
     <button type="button" class="wt-navb" id="wsBack" aria-label="Back" title="Back (Alt+←, or the mouse's back button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
     <button type="button" class="wt-navb" id="wsFwd" aria-label="Forward" title="Forward (Alt+→, or the mouse's forward button)" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
   </div>
-  <span class="wt-proj" id="wtProj" hidden></span>
   <div class="wt-strip" id="wtStrip" role="tablist" aria-label="Open chats"></div>
   <!-- Layouts: one click arranges the whole workspace; yours under Mine. -->
   <div class="ws-layouts" id="wsLayouts" role="group" aria-label="Layouts"></div>
