@@ -35,6 +35,7 @@
 <link rel="stylesheet" href="frame.css">
 <link rel="stylesheet" href="settings-tab.css">
 <link rel="stylesheet" href="tabs.css">
+<link rel="stylesheet" href="panel.css">
 </head>
 <body>
 <!-- The window frame, row 1: the QuorX mark, the menu bar and room for the window's own controls (in the desktop app the
@@ -198,10 +199,18 @@
     <div class="pane-body" id="paneBody"></div>
   </aside>
 </main>
+<!-- The bottom panel (Ctrl+J, ⬓ in the status bar): Terminal, Checks, Debug. Its Terminal is a copy of the pane's own
+     markup, so your terminals and every command's and server's output draw here exactly as in a Terminal tab. -->
+<section class="qx-panel" id="qxPanel" aria-label="Bottom panel" hidden>
+  <div class="qp-resize" id="qpResize" role="separator" aria-orientation="horizontal" aria-label="Resize the bottom panel" tabindex="0" title="Drag to resize · double-click for the usual height"></div>
+  <div class="qp-tabs" id="qpTabs" role="tablist" aria-label="Bottom panel"></div>
+  <div class="qp-body" id="qpBody"></div>
+</section>
 </div>
 </div>
-<!-- The status bar: what needs you, what runs, this project's servers, and the context left in the chat on screen. -->
-<footer class="ws-status" id="wsStatus" aria-label="Status"></footer>
+<!-- The status bar: project and branch, checks, servers, what runs and what needs you on the left; context, spending,
+     🔔 notifications and ⬆ Update on the right. Each item opens the one place it is about. -->
+<footer class="ws-status" id="wsStatus" aria-label="Status"><span class="wsb-side" id="wsbLeft"></span><span class="wsb-grow"></span><span class="wsb-side" id="wsbRight"></span><span class="wsb-side wsb-fixed" id="wsbFixed"></span><span class="wsb-side" id="wsbBell"></span><span class="wsb-side wsb-fixed" id="wsbUpd"></span></footer>
 
 <!-- ⚙ Settings: a tab in the workspace (app.js "the Settings tab" moves this into the tab that shows it). -->
 <div id="settings" class="st-tab" role="region" aria-label="Settings" hidden>
