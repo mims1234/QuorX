@@ -14,6 +14,7 @@ import { chatsToRelease } from './chat-cache.js';
 import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
 import { bulkGroups, bulkWords } from './approve-all.js';
 import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
+import * as SM from './settings-map.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -537,10 +538,12 @@ function paletteItems(q) {
   for (const x of (words.length ? chats : chats.slice(0, 6))) if (hit(`${x.title} ${projName(x.projectId)}`)) out.push({ group: 'Chats', icon: '💬', label: x.title, hint: `${projName(x.projectId)} · ${ago(x.lastAt || Date.now())}`, run: () => showChat(x.id) });
   if (q.length >= 2 && PAL.msgs?.q === q) out.push(...PAL.msgs.items); // inside chats: asked of the server as you type
   for (const [k, desc, fn] of COMMANDS) if ((c || PAL_GLOBAL.has(k)) && hit(`/${k} ${desc}`)) out.push({ group: 'Commands', icon: '⚡', label: `/${k}`, hint: desc, run: () => (c ? runCommand(c, `/${k}`) : fn(null, '')) });
-  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', `${keyHint('chatsearch')}your messages and the agent’s replies`, () => openChatSearch(q)], ['↺', 'Reopen closed tab', `${keyHint('tab.reopen')}the last chat, area, file or page you closed`, () => wsReopen()], ['‹', 'Back', `${keyHint('nav.back')}what you looked at before`, () => wsStep(-1)], ['›', 'Forward', keyLabel('nav.forward') || 'what you left', () => wsStep(1)], ['⌨', 'Keyboard shortcuts', 'See and change every key', () => openSettings('shortcuts')],['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
+  const acts = [['🏠', 'Home', 'The start screen', () => goHome()], ['🔎', 'Search inside chats', `${keyHint('chatsearch')}your messages and the agent’s replies`, () => openChatSearch(q)], ['↺', 'Reopen closed tab', `${keyHint('tab.reopen')}the last chat, area, file or page you closed`, () => wsReopen()], ['‹', 'Back', `${keyHint('nav.back')}what you looked at before`, () => wsStep(-1)], ['›', 'Forward', keyLabel('nav.forward') || 'what you left', () => wsStep(1)], ['⌨', 'Keyboard shortcuts', 'See and change every key', () => openSettings('shortcuts')], ['{ }', 'Open settings file', 'The settings as JSON, read only', () => openSettingsFile()],['◐', 'Switch theme', 'System, dark, light', () => $('#themeBtn').click()], ['⟳', 'Restart the harness', 'Loads server changes', () => $('#restartBtn').click()]];
   for (const [icon, label, hint, run] of acts) if (hit(`${label} ${hint}`)) out.push({ group: 'Actions', icon, label, hint, run });
   if (words.length) for (const p of G.projects) if (hit(`${p.name} new chat project`)) out.push({ group: 'Projects', icon: '📁', label: `New chat in ${p.name}`, hint: `${p.spent ? `$${p.spent.toFixed(3)} spent` : 'project'}`, run: () => newChat(p.id) });
   for (const [group, items] of SETTINGS_NAV) for (const [id, icon, label] of items) if (words.length && hit(`${label} settings ${group}`)) out.push({ group: 'Settings', icon, label, hint: `⚙ Settings · ${group}`, run: () => openSettings(id) });
+  // Single settings too ("Theme", "Keep the PC awake"): the Settings tab opens searched for that row.
+  if (words.length) { let n = 0; for (const r of stRowIndex()) { if (n >= 8) break; if (hit(`${r.label} ${r.pageLabel}`) && !out.some((o) => o.group === 'Settings' && o.label === r.label)) { n++; out.push({ group: 'Settings', icon: r.icon, label: r.label, hint: `⚙ ${r.pageLabel}`, run: () => openSettingRow(r) }); } } }
   if (words.length && c && PAL.files) for (const f of PAL.files) { if (out.length > 80) break; if (hit(f.path)) out.push({ group: 'Files', icon: '📄', label: f.path, hint: projName(c.projectId), run: () => openProjectFile(c, f.path) }); }
   return out.slice(0, 80);
 }
@@ -1564,10 +1567,15 @@ async function removeWorktreeAsk(w, { after = '' } = {}) {
   return true;
 }
 // ---------- ⚙ project settings: name, folder, and what each chat cost ----------
-async function openProjectSettings(p0, focusOn) {
-  const dlg = $('#projDlg'), box = $('#projBody');
-  dlg.dataset.project = p0.id;
+// They are the Settings tab's Project scope now: Overview (this), then Design system, Hooks and Permissions as pages.
+// focusOn: 'space' scrolls to the agent folder; 'design', 'hooks' or 'perms' opens that page.
+function openProjectSettings(p0, focusOn) {
+  if (!p0) return;
+  openSettings(null, { scope: 'project', project: p0.id, ppage: focusOn, focus: focusOn });
+}
+async function drawProjectOverview(p0, box, focusOn) {
   const projects = await fetch('/api/projects').then((r) => r.json()).catch(() => G.projects);
+  if (!box.isConnected) return;
   const p = projects.find((x) => x.id === p0.id) || p0;
   box.innerHTML = `
     <header class="pj-head">
@@ -1576,7 +1584,6 @@ async function openProjectSettings(p0, focusOn) {
         <label class="pj-pick pj-hpick ${p.color ? 'on' : ''}" title="Name colour: pick any colour"><input type="color" value="${esc(p.color || autoHex(p.name))}" aria-label="Pick the name colour"><span class="pj-pick-sw" style="--sw:${esc(p.color || autoHex(p.name))}"></span><code class="pj-pick-hex">${esc(p.color || 'Auto')}</code></label>
         <button type="button" class="pj-auto pj-hbtn ${p.color ? '' : 'on'}" title="Back to the automatic colour (from the name)" aria-label="Automatic name colour" ${p.color ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button>
         <button type="button" class="pj-pin pj-hbtn ${p.pinned ? 'on' : ''}" aria-pressed="${!!p.pinned}" title="${p.pinned ? 'Pinned to the top of the sidebar: click to unpin' : 'Pin to the top of the sidebar (up to 3)'}" aria-label="Pin to the top" ${p.archived ? 'disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></button>
-        <button type="button" class="mp-x pj-close" aria-label="Close">✕</button>
       </div>
     </header>
     <div class="pj-scroll">
@@ -1604,8 +1611,8 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
       </section>
       ${p.id !== 'scratch' ? `<section class="pj-sec danger"><div class="pj-row"><h4>Danger zone</h4><span class="kx-spacer"></span><button type="button" class="kx-btn sm pj-archive" title="Archive: out of the sidebar and the start screen; find it again under Archived at the bottom of the sidebar">${p.archived ? 'Unarchive' : 'Archive'}</button><button type="button" class="kx-btn sm pj-del">🗑 Delete project…</button></div><p class="pj-hint">Deleting moves its chats to the trash; the folder and its files are not touched.</p></section>` : ''}
     </div>`;
-  const close = () => dlg.close();
-  $('.pj-close', box).onclick = close;
+  // What used to close the window now redraws the page (the project may have gone or moved).
+  const again = () => { if (settingsOpen() && ST.scope === 'project') drawSettings(); };
   const pjOpen = $('.pj-open', box); if (pjOpen) pjOpen.onclick = () => openFolder(p.id);
   if ($('#pjSpace', box)) projectSpace(p, $('#pjSpace', box));
   const pjCopy = $('.pj-copy', box);
@@ -1630,8 +1637,8 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
   const picker = $('.pj-pick input', box);
   picker.oninput = () => { $('.pj-pick-sw', box).style.setProperty('--sw', picker.value); $('.pj-pick-hex', box).textContent = picker.value; };
   picker.onchange = () => setColor(picker.value);
-  $('.pj-move', box).onclick = async () => { dlg.close(); await editProject(p, { reselect: p.missing || p.needsFolder }); };
-  const del = $('.pj-del', box); if (del) del.onclick = async () => { dlg.close(); await deleteProject(p); };
+  $('.pj-move', box).onclick = async () => { await editProject(p, { reselect: p.missing || p.needsFolder }); again(); };
+  const del = $('.pj-del', box); if (del) del.onclick = async () => { await deleteProject(p); if (!G.projects.some((x) => x.id === p.id)) ST.project = null; again(); };
   const pin = $('.pj-pin', box);
   if (pin) pin.onclick = async () => {
     await setProjectFlag(p, { pinned: !p.pinned });
@@ -1640,7 +1647,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     pin.dataset.ohTitle = p.pinned ? 'Pinned to the top of the sidebar: click to unpin' : 'Pin to the top of the sidebar (up to 3)';
   };
   const arc = $('.pj-archive', box);
-  if (arc) arc.onclick = async () => { const to = !p.archived; await setProjectFlag(p, { archived: to }); dlg.close(); };
+  if (arc) arc.onclick = async () => { const to = !p.archived; await setProjectFlag(p, { archived: to }); again(); };
   // Amounts are hidden (blurred) when Settings says so, until 👁 shows them for this window.
   let shown = !uiOf(G.settings).maskAmounts;
   const paintMask = () => { box.classList.toggle('masked', !shown); revealButton($('.pj-reveal', box), shown); };
@@ -1670,7 +1677,7 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     offset = page.offset + page.chats.length;
     list.querySelector('.cx-more')?.remove();
     if (offset < page.total) { list.insertAdjacentHTML('beforeend', `<button type="button" class="cx-more">Show more (${page.total - offset} more)</button>`); $('.cx-more', list).onclick = () => loadChats(true); }
-    for (const a of list.querySelectorAll('[data-open]')) a.onclick = (e) => { e.preventDefault(); dlg.close(); showChat(a.dataset.open); if (isPhone()) setMView('chat'); };
+    for (const a of list.querySelectorAll('[data-open]')) a.onclick = async (e) => { e.preventDefault(); if (ST.host === 'page' && !(await closeSettings())) return; showChat(a.dataset.open); if (isPhone()) setMView('chat'); };
     if (page.total > 5) listFilter($('.pj-cost-filter', box), { key: `costs-${p.id}`, rows: () => list.querySelectorAll('tbody tr'), segLabel: (v) => (v === 'today' ? 'Spent today' : 'Earlier'), segOrder: ['today', 'earlier'], placeholder: 'Filter chats by title…', label: 'When' });
   };
   loadChats(false);
@@ -1693,55 +1700,31 @@ Every chat in this project reads, writes and runs programs in this folder.">${es
     set('#pjfPerms', rules || chatN ? `<span class="hkx-st ${rules ? 'ok' : ''}"><i></i>${rules} rule${rules === 1 ? '' : 's'}</span>${chatN ? ` <small>· ${chatN} chat${chatN === 1 ? '' : 's'} with their own</small>` : ''}` : 'None', !rules && !chatN);
   };
   states();
-  for (const b of box.querySelectorAll('.pjf-card')) b.onclick = () => openProjectSub(p, b.dataset.sub, { onClose: () => { states(); b.focus(); } });
-  if (!dlg.open) dlg.showModal();
+  // The three cards open their pages of the Project scope.
+  for (const b of box.querySelectorAll('.pjf-card')) b.onclick = () => { ST.ppage = b.dataset.sub; drawSettings(); $('#stMain').scrollTop = 0; };
   if (focusOn === 'space') $('#pjSpaceSec', box)?.scrollIntoView({ block: 'start' });
-  if (PJX[focusOn]) openProjectSub(p, focusOn, { onClose: () => states() });
 }
-// ---------- ⚙ project settings → its own windows: Design system, Hooks, Permissions ----------
-// Each opens as a second, wider window over the settings; ← (or ✕, or Esc) goes back to them as they were. A window
-// with unsaved changes asks once in place before it closes.
+// ---------- ⚙ project settings → Design system, Hooks, Permissions: pages of the Settings tab's Project scope ----------
+// Each draws where the project settings show; going to another page (or scope, or closing the tab) with unsaved
+// changes asks first (ST.pctl.dirty).
 const PJX = {
   design: ['Design system', 'how the pages and apps chats build here look'],
   hooks: ['Hooks', 'commands QuorX runs itself around the agent\'s work'],
   perms: ['Permissions', 'what chats in this project may do without asking you'],
 };
-function openProjectSub(p, kind, { onClose } = {}) {
-  const dlg = $('#projSubDlg'), box = $('#projSubBody');
+function drawProjectSub(p, kind, el) {
   const [title, sub] = PJX[kind];
-  G.projSub = { p, kind, onClose };
-  dlg.className = `pj-dialog pjx-dialog pjx-${kind}`;
-  dlg.setAttribute('aria-label', `${title}: ${p.name}`);
-  box.innerHTML = `<header class="pjx-head">
-      <button type="button" class="pjx-back" title="Back to the project settings (Esc)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg><span style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}">${esc(p.name)}</span></button>
+  el.innerHTML = `<div class="pjx pjx-${kind} st-pjx"><header class="pjx-head">
+      <button type="button" class="pjx-back" title="Back to the project overview"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg><span style="--h:${hue(p.name)}${p.color ? `;--pcx:${p.color}` : ''}">${esc(p.name)}</span></button>
       <div class="pjx-title"><b>${esc(title)}</b><small>${esc(sub)}</small></div>
       <span class="pjx-dirty" hidden>● Not saved</span><span class="pjx-sum"></span>
-      <button type="button" class="mp-x pjx-close" aria-label="Close">✕</button>
     </header>
-    <div class="pjx-body"></div>`;
-  const body = $('.pjx-body', box);
-  // dirty(): the window says when it has unsaved changes; close asks once before throwing them away.
-  // setSummary: one status line at the top right (what the window holds now), hidden while there are unsaved changes.
-  const ctl = G.projSub.ctl = { dirty: () => false, setDirty: (on) => { $('.pjx-dirty', box).hidden = !on; $('.pjx-sum', box).hidden = on; }, setSummary: (html) => { $('.pjx-sum', box).innerHTML = html; } };
-  const close = () => {
-    if (ctl.dirty() && !box.querySelector('.pjx-leave')) {
-      const bar = document.createElement('div'); bar.className = 'pjx-leave';
-      bar.innerHTML = '<span>You have changes that are not saved.</span><button type="button" class="kx-btn sm pjx-stay">Keep editing</button><button type="button" class="kx-btn sm danger pjx-drop">Close without saving</button>';
-      $('.pjx-head', box).after(bar);
-      $('.pjx-stay', bar).onclick = () => bar.remove();
-      $('.pjx-drop', bar).onclick = () => { ctl.dirty = () => false; dlg.close(); };
-      $('.pjx-drop', bar).focus();
-      return;
-    }
-    if (ctl.dirty()) return;
-    dlg.close();
-  };
-  $('.pjx-back', box).onclick = close;
-  $('.pjx-close', box).onclick = close;
-  dlg.oncancel = (e) => { e.preventDefault(); close(); };
-  // The close event comes a moment later: when another window was opened in the meantime, it's not this one's to clear.
-  dlg.onclose = () => { if (dlg.open) return; box.innerHTML = ''; onClose?.(); };
-  if (!dlg.open) dlg.showModal();
+    <div class="pjx-body"></div></div>`;
+  const box = $('.pjx', el), body = $('.pjx-body', el);
+  // dirty(): the page says when it has unsaved changes. setSummary: one status line at the top right (what the page
+  // holds now), hidden while there are unsaved changes.
+  const ctl = ST.pctl = { dirty: () => false, setDirty: (on) => { $('.pjx-dirty', box).hidden = !on; $('.pjx-sum', box).hidden = on; }, setSummary: (html) => { $('.pjx-sum', box).innerHTML = html; } };
+  $('.pjx-back', box).onclick = async () => { if (ctl.dirty() && !(await uiConfirm('Leave this page? The changes you haven’t saved are dropped.', { ok: 'Leave' }))) return; ST.pctl = null; ST.ppage = 'overview'; drawSettings(); };
   if (kind === 'design') mountDesignWindow(p, body, ctl);
   if (kind === 'hooks') mountHooksWindow(p, body, ctl);
   if (kind === 'perms') mountPermsWindow(p, body, ctl);
@@ -3228,7 +3211,10 @@ function placeChrome() {
 }
 // 🏠 Home (sidebar, rail, and the app name in the top bar): back to the start screen. Lit while you're on it.
 function goHome() { withTransition(showLanding); closeDrawer(); if (isPhone()) setMView('chat'); }
-function syncHome() { const on = !G.panes.length && !$('.work')?.classList.contains('news-on'); for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
+function syncHome() {
+  // Settings filling the middle (opened on the start screen) becomes a tab once a chat is on screen.
+  if (ST.host === 'page' && G.panes.length && !isPhone()) queueMicrotask(() => { if (ST.host === 'page' && G.panes.length) stMount(); });
+  const on = !G.panes.length && !$('.work')?.classList.contains('news-on'); for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
 function renderLanding(box) {
   const archived = new Set(G.projects.filter((p) => p.archived).map((p) => p.id));
   const allRecent = [...G.chats].filter((c) => c.messages > 0 && !archived.has(c.projectId || 'scratch')).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
@@ -8335,6 +8321,7 @@ function paneDropArea(a, { keepTabs = false } = {}) {
   a.st.dsk = null;
   PA.list.splice(PA.list.indexOf(a), 1);
   paneChromeHome(); // before the area goes: it may hold them
+  if (a.el.contains(stEl())) stPark(); // ⚙ Settings too: it is one element that only visits tabs
   a.el.remove();
   if (!keepTabs) { for (const t of WS.findGroup(WK.lay, a.gid)?.tabs || []) if (isFileTab(t)) WK.tabs.delete(t); WK.lay = WS.removeGroup(WK.lay, a.gid); }
   wsForget(a.gid);
@@ -9055,15 +9042,20 @@ function wsKeepFileTab(tid) {
   if (a) inArea(a, () => { renderPaneTabs(focused()); if (G.view.ftab === tid) renderPane(); });
   paneSave();
 }
-function wsCloseFileTab(tid) {
+function wsCloseFileTab(tid, { force = false } = {}) {
   const g = WS.groupOf(WK.lay, tid), a = g && areaOf(g.id), st = WK.tabs.get(tid)?.st;
   if (!g) return;
+  // The Settings tab asks first when it has unsaved changes, and lets go of its draft once it is closed.
+  const isSettings = st?.f?.kind === 'settings';
+  if (isSettings && !force) { closeSettings(); return; }
   if (st?.f) wtClosed({ kind: 'file', chat: st.chat || focused()?.id, f: st.f });
   const shown = a?.st.view?.ftab === tid, next = shown ? WS.afterClose(fileTabs(g.id), tid) : null;
   WK.lay = WS.removeTab(WK.lay, tid); WK.tabs.delete(tid);
+  if (isSettings) stPark();
   if (shown && next) wsShowFileTab(a, next);
   else if (shown) inArea(a, () => { G.view = paneView(focused(), 'art'); renderPane(); });
   else if (a) inArea(a, () => renderPaneTabs(focused()));
+  if (isSettings) stClosed();
   paneSave();
 }
 // A file tab moved: into another group (the middle), or into a new group on one of its edges.
@@ -9247,6 +9239,7 @@ function renderPaneNow() {
   stopWatch(); clearInterval(AREA.st.cardTimer);
   renderPaneTabs(c);
   paneSave();
+  if (stInPane(body, bar)) return; // ⚙ Settings (and the settings file) as a tab: see "the Settings tab"
   if (!c) return;
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   if (!PA.list.some((a) => a.st.view?.term)) closeTermStream();
@@ -9632,7 +9625,10 @@ async function reopenOne(e) {
 // ---------- back / forward through what you brought to the front ----------
 // An entry can be shown when its tab is open (a chat on the strip, a file still in its chat's list); it is skipped when
 // it is what's on screen already, so each press changes what you see.
-const settingsOpen = () => !!$('#settings')?.open;
+// Settings is open when its tab is in the layout, or it fills the middle (no chat on screen).
+const settingsOpen = () => ST.host === 'page' || (ST.host === 'tab' && !!settingsTab());
+// Keys go to Settings only while you work in it (a Settings tab beside a chat leaves the chat's keys alone).
+const stHasFocus = () => ST.host === 'page' || !!stEl()?.contains(document.activeElement);
 function wtTabsOf(pid) { return pid === WT.pid ? WT.tabs : (readLayout(pid) ? WS.chatTabIds(readLayout(pid).layout) : []); }
 function chatTabOpen(id) { const h = chatInfo(id); return !!h && wtTabsOf(projOf(h)).includes(id); }
 function wsLive(e) {
@@ -9643,8 +9639,8 @@ function wsLive(e) {
   return e.kind === 'tab';
 }
 function wsShowing(e) {
-  if (e.kind === 'settings') return settingsOpen() && ST.cat === e.id;
-  if (settingsOpen()) return false;
+  if (e.kind === 'settings') return settingsOpen() && !!stEl().offsetParent && ST.scope === 'app' && ST.cat === e.id;
+  if (ST.host === 'page') return false;
   if (e.kind === 'chat') return curId() === e.id;
   if (e.chat && !G.panes.includes(e.chat)) return false;
   if (e.kind === 'tab') { const a = PA.list.find((x) => x.gid === e.id.split(':')[1]); return !!a && paneVisible() && !a.st.view?.ftab && inArea(a, paneTab) === WS.KIND_PANE[WS.kindOf(e.id)]; }
@@ -9662,8 +9658,9 @@ async function wsStep(dir) {
   wsChrome();
 }
 async function wsShowEntry(e) {
-  if (e.kind === 'settings') { if (settingsOpen()) { ST.cat = e.id; $('#stSearch').value = ''; drawSettings(); } else openSettings(e.id); return; }
-  if (settingsOpen()) { if (ST.dirty && !await uiConfirm('Discard your unsaved settings changes?')) return; cancelSettings(); }
+  if (e.kind === 'settings') { if (settingsOpen() && ST.scope === 'app') { ST.cat = SM.resolvePage(e.id, DESK); $('#stSearch').value = ''; drawSettings(); stMount(); } else openSettings(e.id); return; }
+  // Settings filling the middle (no chat was open) gives way; a Settings tab just stays where it is.
+  if (ST.host === 'page' && !(await closeSettings())) return;
   const chat = e.kind === 'chat' ? e.id : e.chat;
   if (chat && (curId() !== chat || e.kind === 'chat')) await showChat(chat);
   const c = focused(); if (!c || e.kind === 'chat') return;
@@ -9688,7 +9685,7 @@ const KEY_RUN = {
   chatsearch: { anywhere: true, run: () => { const d = $('#chatFind'); if (d?.open) d.close(); else { $('#palette')?.close(); openChatSearch(); } } },
   // Caught before anything else on the page (a terminal, an editor with its own find); no dialog, Settings included.
   find: { capture: true, run: (e) => {
-    if (settingsOpen() || document.querySelector('dialog[open]')) return false;
+    if (stHasFocus() || document.querySelector('dialog[open]')) return false;
     if (FIND.bar?.contains(e.target)) { $('.fb-q', FIND.bar).select(); return true; }
     if (!findOpen()) return false;
     e.stopPropagation(); return true;
@@ -9715,7 +9712,7 @@ document.addEventListener('keydown', (e) => {
   if (!a.anywhere) {
     if (inTerminal(e.target)) return;
     const other = [...document.querySelectorAll('dialog[open]')].some((d) => d.id !== 'settings');
-    if (other || (settingsOpen() && !a.inSettings)) return;
+    if (other || (stHasFocus() && !a.inSettings)) return;
   }
   if (a.run() === false) return;
   e.preventDefault();
@@ -10635,14 +10632,10 @@ function wireCatEditor(el) {
 // ---------- settings page: categories on the left, that category's settings on the right ----------
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember', idleHide: 0,
   showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
-const SETTINGS_NAV = [
-  ['Harness', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display']]],
-  ['Models', [['providers', '🔌', 'Providers']]],
-  ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['safety', '🛡', 'Approvals & safety'], ['budget', '💵', 'Budget'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers'], ['memory', '📌', 'Memory']]],
-  ['Workspace', [['projects', '📁', 'Projects'], ['code', '💻', 'Code & servers'], ['docs', '📎', 'Documents']]],
-  ['Data', [['usage', '📊', 'Usage & costs'], ['data', '🗄', 'Data & storage'], ['storage', '🧹', 'Storage'], ['shortcuts', '⌨️', 'Shortcuts'], ['about', 'ℹ️', 'About']]],
-];
-const ST = { cat: 'appearance', draft: null, dirty: false, reveal: new Set(), revealAccount: false };
+// The pages and their groups are in public/settings-map.js (the Settings tab: App, Project and This chat).
+const SETTINGS_NAV = SM.navFor(!!window.ohDesktop?.available); // (DESK is set further down)
+// host: where the Settings tab is shown now ('tab', 'page' with no chat open, null closed); scope: app, project, chat.
+const ST = { cat: 'appearance', draft: null, dirty: false, reveal: new Set(), revealAccount: false, host: null, scope: 'app', project: null, ppage: 'overview', chips: new Set() };
 const uiOf = (S) => ({ ...UI_DEFAULTS, ...(S.ui || {}) });
 
 // small control builders (they write into the draft through data-bind="path")
@@ -10752,8 +10745,45 @@ function settingsPanels(S) {
   const keysBadge = G.cfg.hasKey ? '' : 'bad-dot';
   const pad = (html) => `<div class="sx-pad">${html}</div>`;
   const modelField = (act, id, id2, empty, title) => `<button type="button" class="sx-model" data-act="${act}" id="${id2}" ${title ? `title="${esc(title)}"` : ''}>${id ? `<span class="sx-av" aria-hidden="true">${esc((short(id)[0] || '?').toUpperCase())}</span>${recDot(id, 'chat')} ${esc(short(id))} <small>${esc(shortPrice(id))}</small>` : `<span class="sx-av" aria-hidden="true">＋</span>${empty}`}<span class="sx-change">Change</span></button>`;
+  // The agent's shell (the Terminal page; it was in Approvals & safety → Advanced).
+  const SF = { ...(d.safety || {}), ...(S.safety || {}) }, posix = G.cfg?.platform && G.cfg.platform !== 'win32';
+  const shellCard = stCard('Shell', '', stRow('The agent’s shell', posix
+    ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
+    : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
+  stSeg('safety.shell', posix ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell), { cls: 'sx-row-wide' })
+    + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
+    + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${posix ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
+    + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="sx-status">checking…</span>'));
   return {
-    appearance: ['Appearance', 'How QuorX looks on this computer and where things sit. The theme shows at once; Save keeps it.', [
+    // ---------- pages that came out of Approvals & safety, Code & servers and Data & storage (the Settings tab) ----------
+    perms: ['Permissions', 'Everything that runs without asking you: command rules, tools, apps and folders allowed in a chat, Chrome sites and MCP servers, in this chat, a project or everywhere in QuorX. Rules you type here can relax pushes, uncheckable commands and deletes outside the project; ones made with a card’s “Allow always” never do.', [
+      stCard('All permissions', 'A project’s own rules are also under the Project scope.', '<div id="stPerms"><div class="st-row-help">Loading…</div></div>'),
+    ]],
+    letthrough: ['Let through in ⚡ YOLO', 'The commands and actions the deciders allowed without asking you, in every chat, newest first: when, what, what they said, and a link to the step. Each chat shows its own from This chat → Mode. Read only.', [
+      '<div id="stLetThrough" class="lt-inline"><div class="st-row-help">Loading…</div></div>',
+    ]],
+    terminal: ['Terminal', 'The shell the agent’s commands run in, how long it waits for one, and how Stop ends it.', [shellCard]],
+    browser: ['Browser', 'The agent in your own Chrome: the extension, what it may do in your tabs, and which sites it may open.', [
+      stCard('🧩 Chrome extension', 'A chat with 🧩 Chrome on opens its own tabs in your everyday Chrome and works there with your own sign-ins (Gmail, GitHub…). It touches only the tabs it opened, and you can take any of them back from the QuorX icon; sending, deleting, buying and account changes ask you first.', '<p class="st-ext-why" role="status" hidden>Connect the extension so this chat can use your Chrome.</p><div id="stExt"></div><p class="st-ext-howto"><a href="' + EXT_HOWTO + '" target="_blank" rel="noopener noreferrer">📖 How to connect, step by step</a> <small>the QuorX article, in your browser</small></p>', 'sx-featured', 'stExtCard'),
+      `<div class="sx-grid two">`
+      + stCard('In your tabs', 'What the agent may do in the tabs of your own Chrome.',
+        stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
+        + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, you are asked. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
+        + stRow('⚡ YOLO: act in your tabs without asking', 'Ticked, in YOLO the agent sends, posts, submits, buys or deletes in your own tabs without the red card (each step is still noted in the chat). Typing into a password field still asks, and so does a step the deciders doubt. Strict always asks.', stSwitch('chromeYoloActs', S.chromeYoloActs === true))
+        + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
+        + stRow('Close the agent\'s tabs when it\'s done', 'Ticked: when a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Unticked (the default): they stay in the QuorX window, so you can see where it left off, and the chat\'s next reply carries on in its tab. Tabs you gave it always stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs === true)))
+      + stCard('Site rules', 'Which sites the agent may open in your Chrome, and where it may type.',
+        stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
+        + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
+        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`))
+      + `</div>`,
+      stCard('Address bar search', '', stRow('Search with', 'Words typed in the Browser tab’s address bar are searched with this; it is set in Privacy & display.', '<button type="button" class="st-btn secondary sm" data-act="openPrivacy">🕶 Privacy & display</button>')),
+    ]],
+    design: ['Design system', 'How the pages and apps chats build look. Each project has its own: it is under the Project scope.', [
+      stCard('This project', '', stRow(`Design system${G.projects?.find((p) => p.id === stProjectId())?.name ? ` for ${esc(G.projects.find((p) => p.id === stProjectId()).name)}` : ''}`, 'The gallery to pick from, its live preview, and the editor for your own (also from a URL or a screenshot).', '<button type="button" class="st-btn secondary sm" data-act="openProjDesign">🖌 Open the design system</button>')),
+    ]],
+    ...(DESK ? { updates: ['Updates', 'New versions of the desktop app: where they come from, and checking now.', ['<div id="stDeskUpd"></div>']] } : {}),
+    appearance: ['Appearance', 'How QuorX looks on this computer. The theme shows at once; Save keeps it.', [
       `<div class="sx-grid two"><div>`
       + stCard('Theme', '', `<div class="st-theme-picker sx-pad" data-bind="theme">${[[null, 'System', 'system', '🖥', 'Follows Windows'], ['dark', 'Dark', 'dark', '🌙', 'For low light'], ['light', 'Light', 'light', '☀️', 'For bright rooms']].map(([v, l, cls, ico, line]) => `<button type="button" class="st-theme-card ${(S.theme ?? null) === v ? 'active' : ''}" data-v="${v ?? ''}"><span class="st-theme-preview-box ${cls}">${cls === 'system' ? '<span class="thumb-left"></span><span class="thumb-right"></span>' : '<span class="thumb-bar"></span><span class="thumb-sidebar"></span><span class="thumb-dot"></span>'}</span><span class="st-theme-card-foot"><span class="st-theme-card-label">${ico} ${l}</span><small>${line}</small><span class="st-theme-card-radio"></span></span></button>`).join('')}</div>`)
       + stCard('Text and spacing', '', stRow('Density', 'Compact fits more messages and chats on screen.', stSeg('ui.density', [['comfortable', 'Comfortable'], ['compact', 'Compact']], U.density))
@@ -10762,16 +10792,21 @@ function settingsPanels(S) {
         + stRow('Message timestamps', 'Shown on every post, so the chat reads in time order.', stSeg('ui.timestamps', [['time', 'Time'], ['relative', 'Relative']], U.timestamps === 'off' ? 'time' : U.timestamps)))
       + `</div><div>`
       + stCard('Preview', 'A chat with these settings.', '<div data-live="preview"></div>')
-      + stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stCards('ui.notify', [['all', '🔔', 'Needs me or ends', ''], ['needs', '✋', 'Needs me', ''], ['off', '🔕', 'Off', '']], U.notify, 'compact'), { cls: 'sx-row-wide' }))
       + `</div></div>`,
+      `<details class="sf-adv" id="appearanceAdv"><summary><span class="sf-adv-title">Under the hood</span><span class="sf-adv-sub">For finding what makes QuorX slow. Most people never need this.</span></summary><div class="sf-adv-body">`
+        + stCard('Performance', '', stRow('Performance readout', 'A small box in the bottom-left corner: QuorX\'s memory, browser tabs, chats loaded, pictures, 3D views, timers and stutters. Copy puts the numbers on the clipboard for a bug report.', stSwitch('ui.perfReadout', U.perfReadout)))
+        + '</div></details>',
+    ]],
+    // Window & layout gathers what was spread over Appearance and About: where things sit, notifications, and (in the
+    // desktop app) closing, starting and the summon key. Later shell parts add their own rows here.
+    window: ['Window & layout', 'Where things sit in the window, when QuorX tells you something, and what closing the window does.', [
+      stCard('Notifications', '', stRow('Tell me when a reply…', 'Only while QuorX is in the background. Click a notification to open that chat. Your browser asks once, the first time you send a message.', stCards('ui.notify', [['all', '🔔', 'Needs me or ends', ''], ['needs', '✋', 'Needs me', ''], ['off', '🔕', 'Off', '']], U.notify, 'compact'), { cls: 'sx-row-wide' })),
       stCard('Layout', 'Where things sit in your window. Click a part of it for its option.', '<div data-live="window"></div>'
         + stRow('Sidebar when QuorX opens', '“Remember” keeps it as you last left it.', stSeg('ui.sidebarStart', [['remember', 'Remember'], ['expanded', 'Expanded'], ['rail', 'Rail']], U.sidebarStart), { id: 'stRowSidebar' })
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Fold idle chats', 'Chats with nothing new for this long fold into an “Older” row at the end of their project in the sidebar. One click shows them; nothing is deleted. Pinned, open and working chats always stay in view. Pin a chat from its ⋯ menu.', stSeg('ui.idleHide', [['0', 'Off'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['30', '30 days']], String(uiOf(S).idleHide || 0)))
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
-      `<details class="sf-adv" id="appearanceAdv"><summary><span class="sf-adv-title">Under the hood</span><span class="sf-adv-sub">For finding what makes QuorX slow. Most people never need this.</span></summary><div class="sf-adv-body">`
-        + stCard('Performance', '', stRow('Performance readout', 'A small box in the bottom-left corner: QuorX\'s memory, browser tabs, chats loaded, pictures, 3D views, timers and stutters. Copy puts the numbers on the clipboard for a bug report.', stSwitch('ui.perfReadout', U.perfReadout)))
-        + '</div></details>',
+      ...(DESK ? ['<div id="stDesktop"></div>'] : []),
     ]],
     privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
       stCard('On a stream, people would see', 'What shows on your screen while you stream or share it. ⚙ Settings → Providers always has the numbers.', `<div class="sx-tiles">`
@@ -10784,17 +10819,10 @@ function settingsPanels(S) {
         stRow('Search with', '', stCards('ui.searchEngine', [...Object.entries(SEARCH_ENGINES).map(([k, [l]]) => [k, `<b class="sx-letter">${esc(l[0])}</b>`, l, '']), ['custom', '✎', 'Custom', '']], U.searchEngine || 'google', 'compact'), { cls: 'sx-row-wide' })
         + stRow('Custom search address', 'Used when Custom is picked: the address of a search with %s where the words go.', `<input type="text" class="st-input sx-wide-input" data-bind="ui.searchCustom" value="${esc(U.searchCustom || '')}" placeholder="https://example.com/search?q=%s" spellcheck="false">`)),
     ]],
-    providers: ['Providers', 'Where QuorX sends model calls: OpenRouter, your subscriptions, the model makers’ own APIs and the apps on this PC. Pick one to set it up; its key stays on this computer.', [
+    providers: ['Providers & keys', 'Where QuorX sends model calls: OpenRouter, your subscriptions, the model makers’ own APIs and the apps on this PC. Pick one to set it up; its key stays on this computer.', [
       `<div class="pv-home">${stCard('Defaults for new chats', 'What a new chat starts with, from any provider below. Each chat can still pick any model and reasoning in its message box.', stRow('Default chat model', '', `<button type="button" class="sx-model" data-act="pickDefModel" id="defModel" data-id="${esc(S.model)}"><span class="sx-av" aria-hidden="true">${esc((short(S.model)[0] || '?').toUpperCase())}</span>${recDot(S.model, 'chat')} ${esc(short(S.model))} <small>${esc(shortPrice(S.model))}</small><span class="sx-change">Change</span></button>`)
         + stRow('Default reasoning', '', stSeg('reasoning', [['off', 'Off'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], S.reasoning || 'off')))}</div>`,
       '<div id="stProviders" class="pv"><div class="st-row-help">Loading the providers…</div></div>',
-      `<div class="pv-home">${stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
-        stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
-        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`))}</div>`,
-      // The card a chat shows when a provider runs out of usage (each provider's fallback model is on its own card above).
-      `<div class="pv-home">${stCard('At a usage limit', 'When a provider with a fallback model (on its card above) runs out of usage, the chat shows a card: switch, wait for the reset, or stop. Each chat can also wait limits out instead (This chat → At a usage limit).',
-        stRow('Countdown before switching', 'In ⚡ YOLO, or when the fallback costs nothing per call, the card switches after this long. In 🔒 Strict a paid fallback always asks first.', stStep('limitSwitchSecs', S.limitSwitchSecs ?? 15, 1, 120, 1, 's'))
-        + stRow('Offer “Wait for reset” within', 'Waiting holds the reply until the provider resets. Offered only when the reset is at most this far away.', stStep('limitWaitHours', S.limitWaitHours ?? 6, 0, 168, 1, 'h')))}</div>`,
       // OpenRouter's own settings: they go into OpenRouter's page when it is open (drawProviders moves them).
       `<div id="pvOrHold" hidden><div id="pvOrCards">${stCard('Spending limit and models', 'The active key’s spending limit (hidden until you click 👁) and the model list.', '<div id="stModelLimit"><div class="st-row-help">Loading…</div></div>'
         + stRow('Model lists and prices', `<span id="stCatInfo">${G.models ? `${G.models.length} models loaded` : 'Loading…'}</span>`, `<button type="button" class="st-btn secondary sm" data-act="refreshModels">↻ Refresh now</button>`), 'sx-limit')}${stCard('Fallback on OpenRouter', 'When a chat’s OpenRouter model fails or is down.', stRow('Fallback model', 'OpenRouter switches to it when a chat’s model fails or is down, billed at its own price. The trace marks steps it answered.', `<div class="st-fb">${modelField('pickFallback', S.fallbackModel, 'fbModel', 'None')}${S.fallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearFallback" title="No fallback model">✕</button>' : ''}</div>`, { id: 'stRowFallback' }), '', 'stCardFallback')}${stCard('Routing on OpenRouter', 'How each agent call on OpenRouter finds a provider (subscriptions and apps on this PC choose their own). The one that answered shows on each step in “Steps”.',
@@ -10802,6 +10830,16 @@ function settingsPanels(S) {
         + stRow('Only providers that support every feature', 'Skips providers that would silently drop tools, reasoning or other settings. If none qualifies, that reply uses the default routing.', stSwitch('requireParams', S.requireParams !== false), { id: 'stRowFeatures' })
         + stRow('Zero data retention only', 'Only providers that keep no copy of your prompts. Fewer models qualify.', stSwitch('zdrOnly', !!S.zdrOnly), { id: 'stRowZdr' })
         + stRow('Blocked providers', 'OpenRouter never sends the agent’s calls to these: for every model, or only the models you pick (a provider can be fine for one model and break another). Block one that keeps breaking tool calls (the provider shows as “via …” above each reply). If only blocked providers serve a model, that reply uses them anyway, and says so.', '<div id="stBlocked"><div class="st-row-help">Loading providers…</div></div>', { cls: 'sx-row-wide', id: 'stRowBlocked' }))}</div></div>`,
+    ]],
+    // When a call fails and when a provider's usage runs out: one page (each provider's own fallback model stays on its card).
+    limits: ['Fallbacks & limits', 'What a chat does when a model call fails, or a provider runs out of usage.', [
+      `${stCard('When a call fails', 'By default the reply stops and says why, and you pick another model. QuorX switches only if you choose a fallback.',
+        stRow('Fall back to', '', stCards('sourceFallback', [['off', '✋', 'Stop and tell me', 'You pick the next model'], ['same', '🔁', 'Same model on OpenRouter', 'When OpenRouter has it, else the model below'], ['model', '🎯', 'Always this model', 'The fallback model below']], S.sourceFallback || G.cfg.defaults.sourceFallback || 'off', 'compact'), { cls: 'sx-row-wide', id: 'stRowSrcFb' })
+        + stRow('Fallback model', 'Used when OpenRouter lacks the same model, and for every failed call with “Always this model”. Empty: your OpenRouter fallback model, else the default chat model. Billed at OpenRouter’s price.', `<div class="st-fb">${modelField('pickSourceFallback', S.sourceFallbackModel, 'srcFbModel', 'Default chat model')}${S.sourceFallbackModel ? '<button type="button" class="st-btn secondary sm" data-act="clearSourceFallback" title="Use the default chat model">✕</button>' : ''}</div>`))}`,
+      // The card a chat shows when a provider runs out of usage (each provider's fallback model is on its own card).
+      `${stCard('At a usage limit', 'When a provider with a fallback model (on its card in Providers & keys) runs out of usage, the chat shows a card: switch, wait for the reset, or stop. Each chat can also wait limits out instead (This chat → At a usage limit).',
+        stRow('Countdown before switching', 'In ⚡ YOLO, or when the fallback costs nothing per call, the card switches after this long. In 🔒 Strict a paid fallback always asks first.', stStep('limitSwitchSecs', S.limitSwitchSecs ?? 15, 1, 120, 1, 's'))
+        + stRow('Offer “Wait for reset” within', 'Waiting holds the reply until the provider resets. Offered only when the reset is at most this far away.', stStep('limitWaitHours', S.limitWaitHours ?? 6, 0, 168, 1, 'h')))}`,
     ]],
     newchats: ['New chats', 'What a fresh chat starts with. Each chat can change these in its message box.', [
       `<p class="sx-sec-help sx-mode-link">New chats start in ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}. <button type="button" class="sp-link" data-act="openMode">Change it in 🛡 Approvals &amp; safety</button></p>`,
@@ -10877,18 +10915,19 @@ function settingsPanels(S) {
         + stCap('chatBudget', 'New chats start with', S.chatBudget ?? G.cfg.chatBudget ?? 10, 0, 1000, 1, 'Each chat can change its own. 0 = no limit.', '<div data-live="today"></div>')
         + `</div>`,
       stCard('Finishing past the budget', '', stRow('Allowance to finish a reply', 'A new reply can\'t start once the chat\'s budget is used up. A reply already working may go this far past it to finish, then it is stopped. 0% stops it right at the budget.', stStep('budgetGrace', S.budgetGrace ?? 10, 0, 100, 5, '%'))),
+      stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage). Off also hides the total next to Spending in the sidebar.', stSwitch('ui.usageBtn', U.usageBtn))),
     ]],
     safety: (() => {
       const SF = { ...(d.safety || {}), ...(S.safety || {}) };
       const M = sfModes(SF);
-      return ['Approvals & safety', 'Whether new chats ask you or go ahead, what ⚡ YOLO does on its own, and what never runs. Advanced has every detail: the shell, each YOLO tick, the deciders’ vote and your command rules.', [
+      return ['Approvals & safety', 'Whether new chats ask you or go ahead, what ⚡ YOLO does on its own, and what never runs. Advanced has every detail: undo size, the tripwire, each YOLO tick and the deciders’ vote.', [
         stCard('Permission mode', 'What a new chat starts in. Each chat can switch in its message box.', pad(stCards('approval', [['strict', '🔒', 'Strict', 'Asks you before paid media (pictures, video, music, speech, with the price), and the agent\'s questions come to you.'], ['yolo', '⚡', 'YOLO', 'Never asks: the deciders answer the agent\'s questions for you. The chat budget still applies.']], S.approval))
           + stRow('In 🔒 Strict, ask before', 'Paid media: only pictures, video, music and speech. Every tool: also file edits, commands, reads, the browser and helpers, as before.', stSeg('strictAsk', [['paid', 'Paid media'], ['every', 'Every tool']], S.strictAsk || 'paid'))
           + stRow('Also ask before helpers', 'Helpers hand read-only jobs to a cheaper model. Only with “Paid media”.', stSwitch('strictAskHelpers', S.strictAskHelpers === true))
           + stRow('Also ask before decider checks', 'decide and look ask the deciders; each costs well under $0.001. Only with “Paid media”.', stSwitch('strictAskDeciders', S.strictAskDeciders === true))),
-        stCard('Permissions', 'Everything that runs without asking you: command rules, tools, apps and folders allowed in a chat, Chrome sites and MCP servers, in this chat, a project or everywhere in QuorX. Rules you type here can relax pushes, uncheckable commands and deletes outside the project; ones made with a card’s “Allow always” never do.', '<div id="stPerms"><div class="st-row-help">Loading…</div></div>'),
+        stCard('Permissions', '', stRow('Command rules, tools, folders and sites', 'Everything that runs without asking you has its own page.', '<button type="button" class="st-btn secondary sm" data-act="openPerms">🔐 Permissions</button>')),
         stSec('⚡ YOLO'),
-        stCard('Let through in ⚡ YOLO', 'The commands and actions the deciders allowed without asking you, in every chat, newest first: when, what, what they said, and a link to the step. Each chat shows its own from This chat → Mode.', stRow('What ⚡ YOLO let through', '', '<button type="button" class="st-btn secondary sm" data-act="letThrough">Open the list</button>')),
+        stCard('Let through in ⚡ YOLO', '', stRow('What ⚡ YOLO let through', 'The commands and actions the deciders allowed without asking you have their own page.', '<button type="button" class="st-btn secondary sm" data-act="openLetThrough">⚡ Let through in YOLO</button>')),
         `<div id="sfShort" class="sf-short">${yoloShortHTML(SF)}</div>`,
         stCard('What ⚡ YOLO does by itself', 'Ticked: YOLO goes ahead without asking. Unticked: it asks you first, as Strict does (Always allow stops the asking for that chat). Reading files, listing and searching never ask.',
           `<div class="sx-tiles">${YOLO_ROWS.map(([k, label, help]) => stTile(`yoloAuto.${k}`, YOLO_ICO[k] || '•', label, help, S.yoloAuto?.[k] !== false)).join('')}</div>`),
@@ -10903,21 +10942,15 @@ function settingsPanels(S) {
           + stRow('Extra care', 'The deciders check every command before it runs. Slower, and stricter.',
             `<div class="sf-ctrl"><span class="sf-custom sx-tag warn" data-sf-note="care" ${M.care === 'mix' ? '' : 'hidden'}>Custom (see Advanced)</span>${stSwitch('', M.care === 'on').replace('data-bind=""', 'data-sf="care" aria-label="Extra care"')}</div>`)
           + stRow('Undo for commands', 'QuorX snapshots the project before a command that can change files, so ↶ Undo and Review changes cover it. Not covered: files outside the project, ignored folders (node_modules, target…), pushes, installs and databases.', stSwitch('safety.snapshots', SF.snapshots))),
-        `<details class="sf-adv" id="sfAdv" ${sfAdvPref() ? 'open' : ''}><summary><span class="sf-adv-title">Advanced</span><span class="sf-adv-sub">Shell, undo size, tripwire, each YOLO tick, debugger, the deciders’ vote, audit log, command rules</span></summary><div class="sf-adv-body">` + [
+        `<details class="sf-adv" id="sfAdv" ${sfAdvPref() ? 'open' : ''}><summary><span class="sf-adv-title">Advanced</span><span class="sf-adv-sub">Undo size, tripwire, each YOLO tick, debugger, the deciders’ vote, audit log</span></summary><div class="sf-adv-body">` + [
+        stCard('Shell', '', stRow('The agent’s shell, wait, memory cap and Stop', 'They are on the Terminal page now.', '<button type="button" class="st-btn secondary sm" data-act="openTerminal">⌨ Terminal</button>')),
         `<div class="sx-grid two">`
-        + stCard('Shell', '', stRow('The agent’s shell', G.cfg?.platform && G.cfg.platform !== 'win32'
-          ? 'Both are checked with the same rules: each command is split into its parts first, and anything that runs text as a command (eval, $(…), zsh’s glob qualifiers) asks you.'
-          : 'Windows PowerShell 5.1 is read by PowerShell’s own parser, so its commands can be checked exactly. cmd and Git Bash are checked with simpler rules, and Git Bash’s path translation caused the worst delete incidents in other agents.',
-        stSeg('safety.shell', G.cfg?.platform && G.cfg.platform !== 'win32' ? [['bash', 'bash'], ['zsh', 'zsh']] : [['powershell', 'PowerShell 5.1'], ['pwsh', 'PowerShell 7'], ['cmd', 'cmd'], ['bash', 'Git Bash']], SF.shell), { cls: 'sx-row-wide' })
-          + stRow('Wait for a command', 'How long the agent waits for a command before it moves to the background. It keeps running there while the agent carries on; you see it, and can stop it, in the pane’s Running tab.', stStep('safety.timeout', SF.timeout, 5, 900, 5, 's'))
-          + stRow('Memory cap per command', `For the command and everything it starts, so a runaway build can’t starve your PC. 0 = no cap.${G.cfg?.platform && G.cfg.platform !== 'win32' ? ' Windows only for now.' : ''}`, stStep('safety.memoryMB', SF.memoryMB, 0, 65536, 256, 'MB'))
-          + stRow('Stop', 'How Stop ends a command.', '<span id="stStopMode" class="sx-status">checking…</span>'))
-        + `<div>` + stCard('Undo size limit', 'Undo for commands is turned on or off above. Each snapshot reads only the files that changed.',
+        + stCard('Undo size limit', 'Undo for commands is turned on or off above. Each snapshot reads only the files that changed.',
           stRow('Pause snapshots past', 'A project bigger than this (not counting ignored folders) runs commands without a snapshot, and each command row says so.', stStep('safety.snapshotMaxMB', SF.snapshotMaxMB, 50, 100000, 50, 'MB')))
         + stCard('Tripwire', 'While a command runs, QuorX watches your profile and the folders around the project. If many files vanish there, it stops the command and shows what it saw. It is a last line of defence, not a guarantee.',
           stRow('Watch for mass deletes', '', stSwitch('safety.tripwire', SF.tripwire))
           + stRow('Stop after', 'Files removed outside the project…', stStep('safety.tripwireFiles', SF.tripwireFiles, 2, 10000, 1, 'files'))
-          + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))) + `</div></div>`,
+          + stRow('Within', '…in this many seconds.', stStep('safety.tripwireSeconds', SF.tripwireSeconds, 1, 120, 1, 's'))) + `</div>`,
         `<div class="sx-grid two">`
         + stCard(`${stTag('ok', 'runs')} ⚡ YOLO: what runs on its own`, 'Unticked, it just runs; a snapshot first makes it undoable. Ticked, the deciders vote first, and a no comes to you.',
           stRow('Web reads', 'curl or Invoke-WebRequest GET, wrangler whoami, gh pr view, cloud CLI list and describe. Sending data, signing in or deploying always pauses (below).', stSwitch('safety.yoloCheckWeb', SF.yoloCheckWeb))
@@ -10977,8 +11010,7 @@ function settingsPanels(S) {
         + stRow('Ask before indexing over', 'Above this cost the attachment waits for your OK.', stStep('docIndexBudget', S.docIndexBudget ?? 0.5, 0, 50, 0.1, '$'))),
       stCard('PDFs', 'PDFs are read for free on this computer with pdftotext when it is installed (Git for Windows includes it); otherwise through OpenRouter\'s free parser. A scan with no text asks before OCR (mistral-ocr, about $2 per 1,000 pages).', ''),
     ]],
-    code: ['Code & servers', 'What the agent may run on this computer, and what it keeps in each project’s .quorx folder.', [
-      stCard('🧩 Chrome extension', 'A chat with 🧩 Chrome on opens its own tabs in your everyday Chrome and works there with your own sign-ins (Gmail, GitHub…). It touches only the tabs it opened, and you can take any of them back from the QuorX icon; sending, deleting, buying and account changes ask you first.', '<p class="st-ext-why" role="status" hidden>Connect the extension so this chat can use your Chrome.</p><div id="stExt"></div><p class="st-ext-howto"><a href="' + EXT_HOWTO + '" target="_blank" rel="noopener noreferrer">📖 How to connect, step by step</a> <small>the QuorX article, in your browser</small></p>', 'sx-featured', 'stExtCard'),
+    servers: ['Servers & pages', 'What the agent may run on this computer, where project servers are kept, and what it keeps in each project’s .quorx folder.', [
       stCard('Commands', 'The agent runs command lines in its shell. Each one is checked first: read-only commands run, others ask you (or the deciders in ⚡ YOLO), and system commands or deletes outside the project are blocked.', stRow('Rules, shell, Stop and Undo for commands', '', '<button type="button" class="st-btn secondary sm" data-act="openSafety">🛡 Approvals & safety</button>')),
       `<div class="sx-grid two">`
       + stCard('Agent folder', 'The agent keeps research scripts, downloads, undo history and deleted files in .quorx/ inside each project folder. Git ignores it, so it never ends up in your repo.', stRow('Its size, undo history and clearing', '', '<button type="button" class="st-btn secondary sm" data-act="openStorage">🧹 Storage</button>'))
@@ -10986,22 +11018,9 @@ function settingsPanels(S) {
         + stRow('Headless browser', 'Used by the agent to check its own pages.', `<code class="blurable">${esc(G.cfg.browser || 'not found')}</code>`)
         + stRow('Secrets', 'Agent processes run without your API keys, tokens or passwords in their environment, and the file tools cannot read .env or data/keys.json.', stTag('ok', 'protected')))
       + `</div>`,
-      `<div class="sx-grid two">`
-      + stCard('In your tabs', 'What the agent may do in the tabs of your own Chrome.',
-        stRow('Read-only for reading requests', 'When you ask to read, check or summarise, typing into your account outside a search box asks you first. A site your request didn\'t name always asks before it opens in your Chrome.', stSwitch('browseReadOnly', S.browseReadOnly !== false))
-        + stRow('Deciders check typing in your tabs', 'Before the agent types or presses Enter in your own tab, the deciders judge from your request alone (never the page) whether it serves what you asked. Below 35%, you are asked. One decider call per step.', stSwitch('chromeCheck', S.chromeCheck !== false))
-        + stRow('⚡ YOLO: act in your tabs without asking', 'Ticked, in YOLO the agent sends, posts, submits, buys or deletes in your own tabs without the red card (each step is still noted in the chat). Typing into a password field still asks, and so does a step the deciders doubt. Strict always asks.', stSwitch('chromeYoloActs', S.chromeYoloActs === true))
-        + stRow('Network reading in your tabs', 'The agent can list the data requests a page makes and read its JSON or text answers (GET only). Cookies, tokens and passwords are removed, and nothing is ever sent again.', stSwitch('chromeNetwork', S.chromeNetwork !== false))
-        + stRow('Close the agent\'s tabs when it\'s done', 'Ticked: when a reply ends, the tabs it opened in your Chrome close, so an empty QuorX window means it has finished. Unticked (the default): they stay in the QuorX window, so you can see where it left off, and the chat\'s next reply carries on in its tab. Tabs you gave it always stay open.', stSwitch('chromeCloseTabs', S.chromeCloseTabs === true)))
-      + stCard('Site rules', 'Which sites the agent may open in your Chrome, and where it may type.',
-        stRow('Never open', 'Sites the agent may never open in your Chrome, separated by commas. A site includes its subdomains.', `<input type="text" class="st-input" data-bind="chromeSitesNever" value="${esc(S.chromeSitesNever || '')}" placeholder="mybank.com, mychart.org" spellcheck="false">`)
-        + stRow('Always allowed', 'Sites it may open without asking, even when your request didn\'t name them.', `<input type="text" class="st-input" data-bind="chromeSitesAlways" value="${esc(S.chromeSitesAlways || '')}" placeholder="github.com, news.ycombinator.com" spellcheck="false">`)
-        + stRow('Read-only sites', 'Typing outside a search box always asks you on these, whatever the request says.', `<input type="text" class="st-input" data-bind="chromeSitesRead" value="${esc(S.chromeSitesRead || '')}" placeholder="mail.google.com, linkedin.com" spellcheck="false">`))
-      + `</div>`,
     ]],
     usage: ['Usage & costs', 'What chats and projects cost, from this computer’s records.', [
       '<div id="stUsage"><div class="st-row-help">Adding up costs…</div></div>',
-      stCard('In chats', '', stRow('Show the cost badge in chat headers', 'The amber cost next to the model; click it for the per-chat usage breakdown (also /usage). Off also hides the total next to Spending in the sidebar.',stSwitch('ui.usageBtn', U.usageBtn))),
       stCard('Everything', '', stRow('Costs per project and chat', 'Every chat’s cost, sorted and searchable.', '<button type="button" class="st-btn secondary sm" data-act="openCosts">💲 Open costs</button>')),
     ]],
     storage: ['Storage', 'How much room QuorX takes on this computer, and clearing what it doesn\'t need. Caches are deleted; your own things go to the Windows Recycle Bin.', [
@@ -11019,16 +11038,17 @@ function settingsPanels(S) {
         + stRow('Undo kept for at most', 'Even among the newest replies, Undo goes after this long. For history that lasts, use git.', stStep('undoDays', S.undoDays ?? 7, 1, 90, 1, 'days')))
       + `</div>`,
     ]],
-    data: ['Data & storage', 'Where things are kept, how to back them up, and how to move to another computer.', [
+    backup: ['Backup', 'Where things are kept, how to back them up, and how to move to another computer.', [
       backupCard(),
       stCard('Chats', 'Saved on this computer in data/chats; deleted chats move to data/trash.', stRow('Export all chats', 'One JSON file with every chat.', '<button type="button" class="st-btn secondary sm" data-act="exportChats">⬇ Export</button>')),
+      ...(DESK ? ['<div id="stDeskData"></div>'] : []),
       stCard('Danger zone', '', stRow('Clear this browser\'s preferences', 'Settings, layout and theme go back to defaults. Chats, projects and keys are not touched.', '<button type="button" class="st-btn danger sm" data-act="clearPrefs">Clear</button>'), 'danger'),
     ]],
     setup: ['Setup check', 'What this computer has for QuorX, and what each thing is for. Amber rows are optional.', ['<div id="stSetup"><div class="st-row-help">Checking this computer…</div></div>']],
     shortcuts: ['Shortcuts', 'Every key QuorX knows, in one list. Click a key to change it.', [stCard('Keyboard', 'Click a key, then press the new one. Esc leaves it as it was, Backspace takes the key away. A key another shortcut already has is refused. Changes count once you Save.', '<div class="kc-filter"></div><div class="kc-list" id="kcList"></div><div class="kc-foot"><button type="button" class="st-btn ghost sm" data-act="keysResetAll">Reset all shortcuts</button></div>'),
       stCard('🎤 Mic', 'Speak instead of typing: what you say is typed into the message box of the chat you are in. Its key is in the list above.',
         stRow('How the key works', 'Toggle: press once to start listening, press again to stop. Hold: listens while you hold the key down, like a walkie-talkie.', stSeg('micMode', [['toggle', 'Toggle'], ['hold', 'Hold']], S.micMode || MIC_MODE)))]],
-    about: ['About', 'This copy of QuorX, where it keeps your data, and the desktop app.', [
+    about: ['About', 'This copy of QuorX and where it keeps your data.', [
       `<section class="st-card"><div class="sx-identity"><img src="brand/quorx-192.png" alt=""><div><h4>QuorX <code id="stVersion" class="sx-ver">v${esc(G.cfg?.version || '?')}</code></h4><p>An open-source AI agent with a quorum of models behind every call.</p></div></div>`
         + stRow('Version', DESK ? 'The desktop app and the harness it is attached to.' : '', `<span class="sx-status ok">v${esc(G.cfg?.version || '?')}</span>`)
         + stRow('Address', '', `<code>${esc(location.origin)}</code>`)
@@ -11038,30 +11058,272 @@ function settingsPanels(S) {
         + stRow('Report a problem', 'A zip of the end of QuorX’s logs and its versions, with API keys, tokens, emails, your user name and local paths taken out. You see every file in it before saving, and pick the folder. Nothing is sent anywhere.', '<button type="button" class="st-btn secondary sm" data-act="reportBundle">Build a report…</button>')
         + stRow('Tour', 'Five short steps over the page: projects, Strict and YOLO, the deciders and reviewer, costs, the terminal.', '<button type="button" class="st-btn secondary sm" data-act="tour">Show the tour</button>')
         + '</section>',
-      ...(DESK ? ['<div id="stDesktop"></div>'] : []),
     ]],
     _badges: { keys: keysBadge },
   };
 }
 
-function openSettings(cat) {
+// ---------- the Settings tab: App, Project and This chat, in a tab of the workspace ----------
+// Settings is a tab like a file: it sits in a group beside the chat, moves, splits and pops out like one, and back /
+// forward reach it. It is one element (#settings) that moves into whichever tab shows it, so its draft and scroll
+// survive switching tabs. With no chat on screen (the start screen, or a phone) it fills the middle instead; it is
+// never a dialog, so Ctrl+K and every other key keep working. The project settings window and its three windows
+// (Design system, Hooks, Permissions) are its Project scope now; This chat shows the message box's settings, read only.
+const ST_F = { id: 'qx-settings', kind: 'settings', name: 'Settings', label: 'Settings' };
+const ST_FILE_F = { id: 'qx-settings-file', kind: 'settingsfile', name: 'settings.json', label: 'Settings file' };
+Object.assign(PV_ICON, { settings: '⚙', settingsfile: '{ }' });
+// The one Settings element, kept even while no tab shows it (and put back in the page if a tab took it away with it).
+const ST_EL = document.getElementById('settings');
+function stEl() { if (ST_EL && !ST_EL.isConnected) { ST_EL.hidden = true; document.body.append(ST_EL); if (ST.host === 'tab') ST.drawn = false; } return ST_EL; }
+const settingsTab = () => WS.allTabs(WK.lay).find((t) => isFileTab(t) && WK.tabs.get(t)?.st.f?.kind === 'settings') || null;
+function stInitDraft() {
   ST.draft = structuredClone(G.settings);
   ST.draft.theme = G.theme ?? null; ST.themeAtOpen = G.theme ?? null;
   ST.draft.newChatTools ??= { ...DEFAULT_CHAT_TOOLS };
   ST.draft.storage = structuredClone(G.storageRules || {});
   ST.dirty = false; ST.reveal = new Set(); ST.revealAccount = false; ST.revealLimit = false; ST.changed = new Set();
+}
+// The project the Project scope shows: the one picked there, else the chat's, else the one the start screen shows.
+function stProjectId() {
+  const has = (id) => id && (G.projects || []).some((p) => p.id === id);
+  if (has(ST.project)) return ST.project;
+  const c = primaryChat?.(); const pc = c && projOf(c);
+  return has(pc) ? pc : has(G.landingProject) ? G.landingProject : (G.projects || [])[0]?.id || 'scratch';
+}
+// opts: { scope, project, ppage (a Project page), focus (scroll to: 'space') }. A page name opens the App scope.
+function openSettings(cat, opts = {}) {
+  if (!ST.draft) stInitDraft();
   // API keys and Apps on this PC are one page now: Providers, opened on OpenRouter's keys or on the apps.
-  if (cat === 'keys') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
-  if (cat === 'sources') { cat = 'providers'; Object.assign(pvState(), { tab: 'local', q: '', sel: null }); }
+  if (cat === 'keys') Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' });
+  if (cat === 'sources') Object.assign(pvState(), { tab: 'local', q: '', sel: null });
   // Models & catalogue's OpenRouter settings live on OpenRouter's page; the defaults for new chats on Providers itself.
-  if (cat === 'models') { cat = 'providers'; Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' }); }
-  if (cat) ST.cat = cat;
-  wsSeen('settings', ST.cat || 'general');
-  $('#stSearch').value = '';
+  if (cat === 'models') Object.assign(pvState(), { tab: 'all', q: '', sel: 'openrouter' });
+  if (cat) ST.cat = SM.resolvePage(cat, DESK);
+  ST.scope = SM.isScope(opts.scope) ? opts.scope : 'app';
+  if (opts.project) ST.project = opts.project;
+  if (ST.scope === 'project') ST.ppage = SM.resolveProjectPage(opts.ppage);
+  ST.focus = opts.focus || null;
+  wsSeen('settings', ST.cat || 'appearance');
+  $('#stSearch').value = ''; ST.chips.clear();
+  stMount();
+}
+// Into its tab (one per window: an open one comes to the front), or the middle of the window with no chat.
+function stMount() {
+  const c = primaryChat?.();
+  if (c && !isPhone()) {
+    if (ST.host === 'page') stPark();
+    const tid = settingsTab(), a = tid && areaOf(WS.groupOf(WK.lay, tid)?.id);
+    if (a) { ST.drawn = false; wsShowFileTab(a, tid); return; }
+    ST.drawn = false;
+    wsOpenFile(c, { ...ST_F }, { keep: true });
+    if (settingsTab()) return;
+  }
+  const el = stEl(), host = $('.work') || document.body;
+  if (el.parentElement !== host) host.append(el);
+  el.classList.add('st-page'); el.hidden = false; ST.host = 'page';
   drawSettings();
-  if (!$('#settings').open) $('#settings').showModal();
+}
+// Out of sight, kept whole (its draft stays until the tab closes).
+function stPark() {
+  const el = stEl(); if (!el) return;
+  el.hidden = true; el.classList.remove('st-page');
+  if (el.parentElement !== document.body) document.body.append(el);
+  if (ST.host === 'page') ST.host = null;
+}
+// A pane is drawn: the Settings tab (or the settings file) takes its body, and anything else gets it back.
+// True when it drew the pane.
+function stInPane(body, bar) {
+  const el = stEl(), f = G.view.ftab && WK.tabs.get(G.view.ftab)?.st.f;
+  const noUrl = () => { setUrlBar(null); const w = $('#paneUrlWrap'); if (w) w.hidden = true; }; // no address for these
+  if (f?.kind === 'settings') {
+    noUrl(); bar.hidden = true;
+    if (!ST.draft) stInitDraft();
+    const was = ST.host === 'tab' && el.parentElement === body;
+    if (!was) { body.innerHTML = ''; body.append(el); }
+    el.classList.remove('st-page'); el.hidden = false; ST.host = 'tab';
+    if (!was || !ST.drawn) { ST.drawn = true; drawSettings(); }
+    return true;
+  }
+  if (el && body.contains(el)) stPark();
+  if (f?.kind === 'settingsfile') { noUrl(); bar.hidden = true; drawSettingsFile(body); return true; }
+  return false;
+}
+// The Settings tab closed (its ✕, middle-click, the strip's ✕ or Close settings): unsaved changes are dropped and
+// a theme being tried goes back.
+function stClosed() {
+  if (ST.draft) { G.theme = ST.themeAtOpen; applyTheme(); }
+  ST.host = null; ST.draft = null; ST.dirty = false; ST.drawn = false; ST.pctl = null;
+  stPark();
+  if (curId()) wsSeen('chat', curId());
+  wsChrome();
+}
+// Asks first when there are unsaved changes. True when it closed.
+async function closeSettings({ force = false } = {}) {
+  if (!settingsOpen()) return true;
+  if (!force && ST.dirty && !(await uiConfirm('Close Settings? Changes you haven’t saved are dropped.', { ok: 'Close' }))) return false;
+  if (!force && ST.pctl?.dirty?.() && !(await uiConfirm('Close Settings? The project changes you haven’t saved are dropped.', { ok: 'Close' }))) return false;
+  ST.dirty = false; if (ST.pctl) ST.pctl.dirty = () => false;
+  const tid = settingsTab();
+  if (tid) wsCloseFileTab(tid, { force: true }); else stClosed();
+  return true;
+}
+// A pop-out window saves its settings straight into this browser's preferences; the main window reads them back
+// (the storage event below), so both windows agree.
+function stSaveFromPop() {
+  try { const j = load() || {}; j.settings = G.settings; j.theme = G.theme ?? null; localStorage.setItem(STORE, JSON.stringify(j)); } catch { /* storage off */ }
+}
+if (!POP) addEventListener('storage', (e) => {
+  if (e.key !== STORE || !e.newValue) return;
+  let j = null; try { j = JSON.parse(e.newValue); } catch { return; }
+  if (!j?.settings || (JSON.stringify(j.settings) === JSON.stringify(G.settings) && (j.theme ?? null) === (G.theme ?? null))) return;
+  G.settings = j.settings; G.theme = j.theme ?? null;
+  applyTheme(); applyUi(); applyKeyTitles(); renderToolbars(); renderPanes(); renderSpend(); renderSidebar();
+  if (settingsOpen() && !ST.dirty) { stInitDraft(); drawSettings(); }
+});
+
+// ---------- the Settings tab's head: scopes, search filters, new window, the settings file ----------
+function stDrawHead() {
+  const c = primaryChat?.(), p = (G.projects || []).find((x) => x.id === stProjectId());
+  const sc = $('#stScopes');
+  if (sc) {
+    const label = { app: 'App', project: `Project${p ? ` · ${esc(clip(p.name, 24))}` : ''}`, chat: 'This chat' };
+    const tip = { app: 'Settings for every project', project: 'This project’s own settings: folder, design system, hooks, permissions, costs', chat: c ? 'What the chat on screen has set in its message box (read only)' : 'Open a chat to see its settings' };
+    sc.innerHTML = SM.SCOPES.map(([k]) => `<button type="button" class="st-seg-btn ${ST.scope === k ? 'active' : ''}" role="radio" aria-checked="${ST.scope === k}" data-scope="${k}" title="${esc(tip[k])}" ${k === 'chat' && !c ? 'disabled' : ''}>${label[k]}</button>`).join('');
+    for (const b of sc.querySelectorAll('[data-scope]')) b.onclick = async () => {
+      if (b.dataset.scope === ST.scope) return;
+      if (ST.pctl?.dirty?.() && !(await uiConfirm('Leave this page? The changes you haven’t saved are dropped.', { ok: 'Leave' }))) return;
+      ST.pctl = null; ST.scope = b.dataset.scope; $('#stSearch').value = ''; ST.chips.clear(); drawSettings(); $('#stMain').scrollTop = 0;
+    };
+  }
+  const modal = $('#settings .settings-modal'); if (modal) modal.dataset.scope = ST.scope;
+  const pop = $('#stPopOut'); if (pop) pop.hidden = !(ST.host === 'tab' && canPop() && settingsTab());
+  const fl = $('#stFilters');
+  if (fl) {
+    fl.hidden = ST.scope !== 'app';
+    const chip = (k, label, tip) => `<label class="sx-check st-fchip" title="${esc(tip)}"><input type="checkbox" data-filter="${k}" ${ST.chips.has(k) ? 'checked' : ''}><span class="st-fchip-l">${label}</span><small class="st-fchip-n" data-filter-n="${k}"></small></label>`;
+    fl.innerHTML = chip('modified', 'Modified', 'Only settings that differ from QuorX’s defaults, or that you changed and haven’t saved')
+      + chip('hood', 'Under the hood', 'Only the folded Under the hood and Advanced settings');
+    for (const x of fl.querySelectorAll('[data-filter]')) x.onchange = () => { if (x.checked) ST.chips.add(x.dataset.filter); else ST.chips.delete(x.dataset.filter); searchSettings($('#stSearch').value); };
+  }
+}
+// The dot and ↺ on a row whose value differs from QuorX's default (rows whose default QuorX knows).
+function stMarkModified() {
+  const S = ST.draft, main = $('#stMain'); if (!S || !main) return;
+  const seen = new Set();
+  for (const el of main.querySelectorAll('[data-bind]')) {
+    const row = el.closest('.st-row'), bind = el.dataset.bind;
+    if (!row || !bind || seen.has(row) || row.classList.contains('sx-tile')) continue;
+    seen.add(row);
+    const def = SM.rowDefault(bind, G.cfg?.defaults || {}, UI_DEFAULTS), mod = SM.isModified(getPath(S, bind), def);
+    row.classList.toggle('sx-mod', mod);
+    let rs = $('.sx-row-reset', row);
+    if (mod && !rs) {
+      const wrap = $('.st-row-label-wrap', row) || $('.st-row-info', row); if (!wrap) continue;
+      wrap.insertAdjacentHTML('beforeend', `<button type="button" class="sx-row-reset" title="Back to the default (${esc(String(def))})" aria-label="Reset to the default">↺</button>`);
+      rs = $('.sx-row-reset', row);
+      rs.onclick = (e) => { e.preventDefault(); e.stopPropagation(); const top = main.scrollTop; setPath(S, bind, def); ST.changed.add(bind); ST.dirty = true; drawSettings(); main.scrollTop = top; };
+    } else if (!mod && rs) rs.remove();
+  }
+  const n = main.querySelectorAll('.st-row.sx-mod, .st-row.changed').length, nb = $('[data-filter-n="modified"]');
+  if (nb) nb.textContent = n ? String(n) : '';
+}
+// QuorX › Open settings file: the settings as JSON, read only (keys are never in it), with Copy and the way to
+// Export / Import them.
+function drawSettingsFile(box) {
+  const text = SM.settingsFile(G.settings, G.theme);
+  box.innerHTML = `<div class="stf"><div class="stf-bar"><b>settings.json</b><small>Read only · API keys are never in it</small><span class="grow"></span><button type="button" class="st-btn secondary sm" data-stf="copy">⧉ Copy</button><button type="button" class="st-btn secondary sm" data-stf="backup">Export or import…</button><button type="button" class="st-btn secondary sm" data-stf="open">⚙ Open Settings</button></div><pre class="stf-code"></pre></div>`;
+  $('.stf-code', box).textContent = text;
+  const btn = (k) => $(`[data-stf="${k}"]`, box);
+  btn('copy').onclick = () => navigator.clipboard?.writeText(text).then(() => flashTip(btn('copy'), 'Copied')).catch(() => flashTip(btn('copy'), 'Could not copy'));
+  btn('backup').onclick = () => openSettings('backup');
+  btn('open').onclick = () => openSettings();
+}
+function openSettingsFile() {
+  const c = primaryChat?.();
+  if (c && !isPhone()) { wsOpenFile(c, { ...ST_FILE_F }, { keep: true }); return; }
+  // No chat to put a tab beside: Settings shows it in its own middle.
+  openSettings('backup');
+  drawSettingsFile($('#stMain'));
+}
+
+// Every row of the App pages, by its label, for Ctrl+K (built once from the pages themselves; a save builds it again).
+function stRowIndex() {
+  if (ST.rowIndex) return ST.rowIndex;
+  const S = structuredClone(G.settings || {}); S.theme = G.theme ?? null; S.newChatTools ??= { ...DEFAULT_CHAT_TOOLS }; S.storage = structuredClone(G.storageRules || {});
+  let P = null; try { P = settingsPanels(S); } catch { return []; }
+  const box = document.createElement('div'), out = [];
+  for (const pg of SM.pagesFor(DESK)) {
+    const x = P[pg.id]; if (!x) continue;
+    box.innerHTML = x[2].join('');
+    for (const l of box.querySelectorAll('.st-row-label')) { const t = l.textContent.trim(); if (t && !out.some((o) => o.label === t && o.page === pg.id)) out.push({ label: t, page: pg.id, icon: pg.icon, pageLabel: pg.label }); }
+  }
+  return (ST.rowIndex = out);
+}
+function openSettingRow(r) {
+  openSettings(r.page);
+  const q = $('#stSearch'); q.value = r.label; searchSettings(r.label);
+}
+
+// ---------- Settings › Project: the old project settings window, as pages ----------
+function stProjectNav(p) {
+  return `<div class="st-nav-group"><div class="st-nav-group-label">Project</div><select class="st-input st-proj-pick" aria-label="Which project">${(G.projects || []).filter((x) => !x.archived || x.id === p?.id).map((x) => `<option value="${esc(x.id)}" ${x.id === p?.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>`
+    + `<div class="st-nav-group"><div class="st-nav-group-label">${esc(p?.name || 'Project')}</div>${SM.PROJECT_PAGES.map(([id, ico, label]) => `<button type="button" class="st-nav-item ${ST.ppage === id ? 'active' : ''}" data-ppage="${id}" ${ST.ppage === id ? 'aria-current="page"' : ''}><span class="st-nav-item-left"><span class="st-nav-icon">${ico}</span><span class="st-nav-label">${label}</span></span><span class="sx-nav-sum" data-psum="${id}"></span></button>`).join('')}</div>`;
+}
+async function drawProjectScope() {
+  const pid = stProjectId(), p = (G.projects || []).find((x) => x.id === pid);
+  const nav = $('#stNav'), main = $('#stMain');
+  nav.innerHTML = stProjectNav(p);
+  const leave = async () => !ST.pctl?.dirty?.() || uiConfirm('Leave this page? The changes you haven’t saved are dropped.', { ok: 'Leave' });
+  $('.st-proj-pick', nav).onchange = async (e) => { if (!(await leave())) { e.target.value = pid; return; } ST.pctl = null; ST.project = e.target.value; drawSettings(); };
+  for (const b of nav.querySelectorAll('[data-ppage]')) b.onclick = async () => { if (b.dataset.ppage === ST.ppage || !(await leave())) return; ST.pctl = null; ST.ppage = b.dataset.ppage; drawSettings(); main.scrollTop = 0; };
+  main.classList.remove('searching');
+  if (!p) { main.innerHTML = '<section class="st-panel active"><p class="st-row-help sx-pad">No project yet.</p></section>'; return; }
+  main.innerHTML = `<section class="st-panel active st-proj-panel" data-panel="project-${ST.ppage}"><div class="st-proj-body pj st-pj"></div></section>`;
+  const box = $('.st-proj-body', main);
+  if (ST.ppage === 'overview') { ST.pctl = null; await drawProjectOverview(p, box, ST.focus); ST.focus = null; }
+  else drawProjectSub(p, ST.ppage, box);
+}
+
+// ---------- Settings › This chat: what the message box has set, read only ----------
+function drawChatScope() {
+  const c = primaryChat?.(), nav = $('#stNav'), main = $('#stMain');
+  main.classList.remove('searching');
+  nav.innerHTML = `<div class="st-nav-group"><div class="st-nav-group-label">This chat</div><button type="button" class="st-nav-item active" aria-current="page"><span class="st-nav-item-left"><span class="st-nav-icon">💬</span><span class="st-nav-label">${esc(clip(c ? chatTitle(c.id) : 'No chat', 30))}</span></span></button></div><p class="st-row-help st-nav-note">Each chat changes these in its message box. New chats start from the App scope.</p>`;
+  if (!c?.agent) { main.innerHTML = '<section class="st-panel active"><p class="st-row-help sx-pad">Open a chat to see its settings here.</p></section>'; return; }
+  const s = c.agent.setup || {}, t = { ...DEFAULT_CHAT_TOOLS, ...(c.tools || {}) };
+  const toolNames = [...QUALITY_TOOLS.map((k) => [k, QUALITY_INFO[k].name]), ...CHAT_TOOLS.map((k) => [k, (CATS.find((x) => x[0] === k)?.[1] || k).replace(/^\S+\s/, '')])].filter(([k]) => t[k]).map(([, n]) => n);
+  let quorium = '';
+  try { syncQuorium(c); const q = quoriumOf(c), on = Q_MODULES.filter((k) => chatOn(c, k)); quorium = `${esc(q ? q.name : 'No Quorium')}${quoriumChanged(c) ? ' <span class="sx-tag">changed</span>' : ''}${on.length ? `<small class="st-chat-sub">${on.map((k) => `${esc(qName(k))}: ${esc(short(moduleModel(c, k)) || 'not set')}`).join(' · ')}</small>` : ''}`; } catch { quorium = '—'; }
+  const app = G.settings || {};
+  const tag = (diff) => (diff ? ' <span class="sx-tag st-chat-tag">Chat</span>' : '');
+  const go = (k) => `<button type="button" class="st-btn secondary sm" data-chat-go="${k}">Change in chat</button>`;
+  const row = (label, value, help, k) => stRow(label, help, `<span class="st-chat-val">${value}</span>${go(k)}`, { cls: 'st-chat-row' });
+  main.innerHTML = `<section class="st-panel active" data-panel="chat"><div class="st-panel-head"><div class="sx-hero-ico" aria-hidden="true">💬</div><div class="st-panel-title-wrap"><h3 class="st-panel-title">${esc(chatTitle(c.id))}</h3><p class="st-panel-desc">Read only. These come from the chat’s message box; change them there. A <span class="sx-tag st-chat-tag">Chat</span> tag marks a value that differs from the App scope.</p></div></div>`
+    + stCard('This chat', '',
+      row(`Model${tag(s.model && s.model !== app.model)}`, `${recDot(s.model, 'chat')} ${esc(short(s.model) || '—')} <small>${esc(shortPrice(s.model) || '')}</small>`, '', 'model')
+      + row('Quorium', quorium, 'The models for each role: reviewer, deciders, helpers, pictures, video, music, voice.', 'quorium')
+      + row(`Thinking${tag((s.reasoning || 'off') !== (app.reasoning || 'off'))}`, esc(s.reasoning || 'off'), '', 'set')
+      + row('Creativity', esc(CREATIVITY_INFO[s.creativity]?.[0] || 'Auto'), '', 'set')
+      + row(`Mode${tag(c.approval && c.approval !== (app.approval || 'strict'))}`, c.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', '', 'set')
+      + row('Budget', c.budget ? `${stMoney(money(c.spent || 0, 3))} of ${stMoney(money(c.budget, 2))}` : 'No limit', 'What this chat may spend, and what it has.', 'set')
+      + row('Tools', toolNames.length ? esc(toolNames.join(' · ')) : 'None', 'On in this chat’s 🧰.', 'set'))
+    + '</section>';
+  for (const b of main.querySelectorAll('[data-chat-go]')) b.onclick = () => stChangeInChat(c, b.dataset.chatGo);
+}
+// "Change in chat": the chat comes to the front and its control opens.
+async function stChangeInChat(c, what) {
+  if (ST.host === 'page' && !(await closeSettings())) return;
+  await showChat(c.id);
+  const root = G.open.get(c.id)?.el?.root; if (!root) return;
+  const sel = { model: '.cmp-model-chip', quorium: '.qx-pick', set: '.cmp-set-btn' }[what];
+  setTimeout(() => $(sel, root)?.click(), 60);
 }
 function drawSettings() {
+  stEl();
+  if (!ST.draft) stInitDraft();
+  stDrawHead();
+  if (ST.scope === 'project') return drawProjectScope();
+  if (ST.scope === 'chat') return drawChatScope();
   const S = ST.draft, P = settingsPanels(S);
   $('#stNav').innerHTML = SETTINGS_NAV.map(([group, items]) => `<div class="st-nav-group"><div class="st-nav-group-label">${group}</div>${items.map(([id, ico, label]) => `<button type="button" class="st-nav-item ${ST.cat === id ? 'active' : ''}" data-cat="${id}" ${ST.cat === id ? 'aria-current="page"' : ''}><span class="st-nav-item-left"><span class="st-nav-icon">${ico}</span><span class="st-nav-label">${label}</span></span><span class="sx-nav-sum"></span></button>`).join('')}</div>`).join('');
   for (const b of document.querySelectorAll('#stNav .st-nav-item')) b.onclick = () => { ST.cat = b.dataset.cat; wsSeen('settings', ST.cat); $('#stSearch').value = ''; drawSettings(); $('#stMain').scrollTop = 0; };
@@ -11074,6 +11336,8 @@ function drawSettings() {
   $('#settings .settings-modal').dataset.group = (SETTINGS_NAV.find(([, items]) => items.some(([id]) => id === ST.cat))?.[0] || '').toLowerCase();
   wireSettings();
   updateDirty();
+  stMarkModified();
+  if ($('#stSearch').value || ST.chips.size) searchSettings($('#stSearch').value);
 }
 // ---------- what each category has set, in a few words: the nav (short) and the line under the title ----------
 const SIDE_START = { remember: 'Remember', expanded: 'Expanded', rail: 'Rail' }, PANE_MODE = { auto: 'Auto', always: 'Always', never: 'Only when asked' };
@@ -11084,7 +11348,11 @@ function stSummary(id, S) {
   const usd = (v) => `$${Number(v || 0).toFixed(2)}`;
   switch (id) {
     case 'setup': { const r = ST.setup; if (!r) return ['', '']; return [r.missing ? `${r.missing} missing` : `${r.ok} ready`, stStatus('ok', `${r.ok} ready`) + (r.warn ? stStatus('warn', `${r.warn} optional`) : '') + (r.missing ? stStatus('bad', `${r.missing} missing`) : ''), r.missing ? 'bad' : '']; }
-    case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`) + stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`)]; }
+    case 'appearance': { const t = S.theme === 'dark' ? 'Dark' : S.theme === 'light' ? 'Light' : 'System'; return [t, stStatus('info', `${t} theme`) + stStatus('info', U.density === 'compact' ? 'Compact' : 'Comfortable') + stStatus('info', `${U.fontSize} px text`) + stStatus('info', `Motion: ${{ system: 'follows system', full: 'on', reduce: 'reduced' }[motionPref(U)]}`)]; }
+    case 'window': return [SIDE_START[U.sidebarStart] || '', stStatus('info', `Sidebar: ${SIDE_START[U.sidebarStart] || U.sidebarStart}`) + stStatus('info', `Artifact pane: ${PANE_MODE[U.paneMode] || U.paneMode}`) + stStatus(U.notify === 'off' ? 'off' : 'ok', U.notify === 'off' ? 'No notifications' : U.notify === 'needs' ? 'Notifies when it needs you' : 'Notifies when it needs you or ends') + (Number(U.idleHide) ? stStatus('info', `Idle chats fold after ${U.idleHide} day${Number(U.idleHide) === 1 ? '' : 's'}`) : '')];
+    case 'limits': { const fb = S.sourceFallback || G.cfg.defaults?.sourceFallback || 'off'; return [fb === 'off' ? 'stop' : 'fall back', stStatus(fb === 'off' ? 'off' : 'ok', fb === 'off' ? 'A failed call stops and tells you' : fb === 'same' ? 'Falls back to the same model on OpenRouter' : `Falls back to ${esc(short(S.sourceFallbackModel || S.model))}`) + stStatus('info', `Limit card switches after ${S.limitSwitchSecs ?? 15} s`)]; }
+    case 'terminal': return [SF.shell || '', stStatus('info', `Shell: ${esc(SF.shell || 'powershell')}`) + stStatus('info', `Waits ${SF.timeout ?? '?'} s for a command`) + stStatus('info', SF.memoryMB ? `${SF.memoryMB} MB cap per command` : 'No memory cap')];
+    case 'browser': return ['', on(S.browseReadOnly !== false, 'Read-only for reading requests', 'Can type for reading requests') + on(S.chromeCheck !== false, 'Deciders check typing', 'Typing not checked') + stStatus(S.chromeYoloActs ? 'warn' : 'ok', S.chromeYoloActs ? 'YOLO acts in your tabs without asking' : 'YOLO asks before acting in your tabs')];
     case 'privacy': return [U.maskAmounts ? 'masked' : 'visible', stStatus(U.maskAmounts ? 'ok' : 'warn', U.maskAmounts ? 'Amounts masked' : 'Amounts visible') + stStatus(U.showBalance ? 'warn' : 'off', U.showBalance ? 'Balance button shown' : 'Balance button hidden') + on(U.blurPaths, 'Paths blurred', 'Paths visible')];
     case 'providers': { const l = ST.sources; if (!l) return ['', ''];
       const live = l.filter((x) => x.on && srcReady(x)), bad = l.filter((x) => srcState(x).cls === 'warn'), nokey = l.filter((x) => x.needsKey && !x.key);
@@ -11106,10 +11374,10 @@ function stSummary(id, S) {
     case 'mcp': { const l = G.mcp || [], on = l.filter((s) => s.on).length, bad = l.filter((s) => s.status === 'error').length; return l.length ? [`${on} on`, stStatus('ok', `${on} on`) + (bad ? stStatus('off', `${bad} not starting`) : '')] : ['', '']; }
     case 'memory': { const m = ST.mem; if (!m) return ['', '']; return [m.on ? `${m.n} notes` : 'off', on(m.on, 'On in chats', 'Off: chats get nothing') + stStatus('info', `${m.n} note${m.n === 1 ? '' : 's'} · ${m.tokens} of ${m.limit} tokens a chat`)]; }
     case 'projects': { const n = (G.projects || []).length; return [String(n), stStatus('info', `${n} project${n === 1 ? '' : 's'}`)]; }
-    case 'code': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999')];
+    case 'servers': return ['', stStatus('ok', 'Secrets protected') + stStatus('info', 'Ports 5300–5999')];
     case 'docs': return ['', stStatus('info', `Whole up to ${kTok(S.inlineDocTokens ?? 15000)} tokens`) + stStatus('info', `Up to ${S.maxUploadMB ?? 100} MB a file`) + `${stMoney(usd(S.docIndexBudget ?? 0.5))} <span class="sx-state-k">indexing without asking</span>`];
     case 'usage': { const c = ST.costs?.total; if (!c) return ['', '']; return [`${usd(c.week)} wk`, `${stMoney(usd(c.today))} <span class="sx-state-k">today</span> ${stMoney(usd(c.week))} <span class="sx-state-k">this week</span>` + stStatus('off', `${c.chats} chat${c.chats === 1 ? '' : 's'}`), 'money']; }
-    case 'data': return ['', stStatus('info', 'Chats in data/chats') + stStatus('off', 'Deleted chats in data/trash')];
+    case 'backup': return ['', stStatus('info', 'Chats in data/chats') + stStatus('off', 'Deleted chats in data/trash')];
     case 'storage': { const R = S.storage || {}; return [R.autoClean !== false ? 'auto' : 'manual', stStatus(R.autoClean !== false ? 'ok' : 'off', R.autoClean !== false ? 'Cleans up by itself, daily' : 'Automatic cleanup off') + stStatus('info', `Trash emptied after ${R.trashDays ?? 30} days`) + stStatus('info', `Agent folder: glows past ${S.agentSpaceMB ?? 500} MB`) + stStatus('info', `Undo: ${S.undoKeep ?? 10} replies, ${S.undoDays ?? 7} days`)]; }
     case 'shortcuts': return ['', ''];
     case 'about': return [`v${G.cfg?.version || '?'}`, stStatus('ok', `QuorX v${esc(G.cfg?.version || '?')}`) + (G.cfg.hasKey ? stStatus('ok', 'OpenRouter key active') : stStatus('bad', 'No OpenRouter key'))];
@@ -11444,7 +11712,7 @@ function drawSourceCards(box, r, list, say) {
   };
 }
 function stRefresh() {
-  const S = ST.draft; if (!S || !$('#settings').open && !$('#stMain .st-panel')) return;
+  const S = ST.draft; if (!S || !settingsOpen() && !$('#stMain .st-panel')) return;
   for (const b of document.querySelectorAll('#stNav .st-nav-item')) {
     const [sum, , cls] = stSummary(b.dataset.cat, S), el = $('.sx-nav-sum', b);
     if (el) { el.textContent = sum || ''; el.className = `sx-nav-sum ${cls || ''}`; el.title = sum || ''; }
@@ -11456,7 +11724,7 @@ function wireSettings() {
   const S = ST.draft, main = $('#stMain');
   ST.changed ??= new Set();
   for (const b of ST.changed) for (const el of main.querySelectorAll(`[data-bind="${b}"]`)) el.closest('.st-row')?.classList.add('changed');
-  const mark = () => { ST.dirty = true; updateDirty(); };
+  const mark = () => { ST.dirty = true; updateDirty(); stMarkModified(); };
   for (const inp of main.querySelectorAll('input[data-bind]')) inp.onchange = () => {
     const v = inp.type === 'checkbox' ? inp.checked : inp.type === 'text' ? inp.value.trim() : Number(inp.value);
     setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
@@ -11498,6 +11766,10 @@ function wireSettings() {
     if (act === 'pickSourceFallback') { const id = await pickModel('chat', S.sourceFallbackModel || '', { context: 'When a call through an app on this PC fails', openRouterOnly: true }); if (id) { S.sourceFallbackModel = id; mark(); drawSettings(); } }
     if (act === 'clearSourceFallback') { S.sourceFallbackModel = ''; mark(); drawSettings(); }
     if (act === 'openSafety') { ST.cat = 'safety'; drawSettings(); }
+    // Links between the pages that used to be one (Settings tab).
+    const go = { openPerms: 'perms', openLetThrough: 'letthrough', openTerminal: 'terminal', openPrivacy: 'privacy' }[act];
+    if (go) { ST.cat = go; wsSeen('settings', go); $('#stSearch').value = ''; drawSettings(); $('#stMain').scrollTop = 0; }
+    if (act === 'openProjDesign') { ST.scope = 'project'; ST.ppage = 'design'; drawSettings(); }
     // New chats → "Change it": Approvals & safety, at the Permission mode card.
     if (act === 'openMode') {
       ST.cat = 'safety'; drawSettings();
@@ -11513,7 +11785,7 @@ function wireSettings() {
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
     if (act === 'reportBundle') reportProblem();
-    if (act === 'tour') { $('#settings').close(); startTour({ fill: fillStart }); }
+    if (act === 'tour') { if (await closeSettings()) startTour({ fill: fillStart }); }
     if (act === 'exportChats') exportChats(e.target);
     if (act === 'clearPrefs' && await uiConfirm('Clear this browser\'s preferences? Chats, projects and keys stay.')) { try { localStorage.removeItem(STORE); localStorage.removeItem('agent001-v1'); } catch { /* ignore */ } location.reload(); }
   };
@@ -11552,6 +11824,7 @@ function wireSettings() {
   getJ('/api/costs?per=1').then((c) => { if (c && !c.error) { ST.costs = c; drawUsagePanel(); stRefresh(); } }).catch(() => {});
   drawProjectsPanel();
   drawPermsPanel();
+  if ($('#stLetThrough') && ST.cat === 'letthrough') openLetThrough({ into: $('#stLetThrough') }); // read only, so drawn only when its page shows
   drawKeysPanel();
   drawModelLimit();
   drawSourcesPanel();
@@ -11571,39 +11844,46 @@ function wireSettings() {
   if (ST.cat === 'storage') drawStorage(storageHelpers()); else refreshStorageBadge(storageHelpers());
   showVersion();
 }
-// Search looks through every category; matching rows show, everything else hides.
+// Search looks through every category; matching rows show, everything else hides. The filters (Modified, Under the
+// hood) narrow it further, and work with no words too.
 function searchSettings(q) {
-  q = q.trim().toLowerCase();
-  $('#stMain').classList.toggle('searching', !!q);
+  if (ST.scope !== 'app' && String(q || '').trim()) { ST.pctl = null; ST.scope = 'app'; const keep = q; drawSettings(); $('#stSearch').value = keep; }
+  const words = SM.searchWords(q), F = ST.chips, on = words.length > 0 || F.size > 0;
+  const pass = (r) => SM.rowMatches(r.textContent, words) && (!F.has('modified') || r.matches('.sx-mod, .changed')) && (!F.has('hood') || !!r.closest('.sf-adv'));
+  $('#stMain').classList.toggle('searching', on);
   for (const panel of document.querySelectorAll('#stMain .st-panel')) {
     let any = false;
     for (const card of panel.querySelectorAll('.st-card, .st-key-card, .st-account-card, .st-hero-onboard, .sx-caps')) {
       let hit = false;
       const rows = card.querySelectorAll('.st-row, .st-skill-item, .st-proj-row, .cat');
-      for (const r of rows) { const m = !q || r.textContent.toLowerCase().includes(q); r.hidden = !m; hit ||= m; }
-      if (!rows.length || card.querySelector('.st-card-title')?.textContent.toLowerCase().includes(q)) { hit = !q || card.textContent.toLowerCase().includes(q); for (const r of rows) if (hit) r.hidden = false; }
+      for (const r of rows) { const m = !on || pass(r); r.hidden = !m; hit ||= m; }
+      // A card whose title matches shows whole (words only: the filters pick rows).
+      if (!F.size && (!rows.length || (words.length && SM.rowMatches(card.querySelector('.st-card-title')?.textContent, words)))) { hit = !on || SM.rowMatches(card.textContent, words); for (const r of rows) if (hit) r.hidden = false; }
       card.hidden = !hit; any ||= hit;
     }
-    panel.classList.toggle('active', q ? any || panel.querySelector('.st-panel-title').textContent.toLowerCase().includes(q) : panel.dataset.panel === ST.cat);
+    panel.classList.toggle('active', on ? any || (!F.size && words.length > 0 && SM.rowMatches(panel.querySelector('.st-panel-title')?.textContent, words)) : panel.dataset.panel === ST.cat);
   }
   // Safety's Advanced and the loop's Under the hood: a search that hits inside opens it; clearing the search puts
   // Advanced back as you left it, and closes Under the hood.
   for (const adv of [$('#sfAdv'), $('#loopAdv'), $('#appearanceAdv')]) {
     if (!adv) continue;
     const hit = [...adv.querySelectorAll('.st-card')].some((c) => !c.hidden);
-    adv.hidden = !!q && !hit;
-    adv.open = q ? hit : adv.id === 'sfAdv' && sfAdvPref();
+    adv.hidden = on && !hit;
+    adv.open = on ? hit : adv.id === 'sfAdv' && sfAdvPref();
   }
+  const none = $('#stNone'); if (none) none.remove();
+  if (on && ![...document.querySelectorAll('#stMain .st-panel.active')].length) $('#stMain').insertAdjacentHTML('beforeend', `<p class="st-row-help sx-pad" id="stNone">No setting matches${words.length ? ` “${esc(String(q).trim())}”` : ''}${F.size ? ' with these filters' : ''}.</p>`);
 }
 // Reset category: that category's settings go back to the defaults (still unsaved until Save).
 function resetCategory() {
   const S = ST.draft, d = G.cfg.defaults, U = (S.ui ??= {});
-  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'notify', 'sidebarStart', 'paneMode', 'perfReadout'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], usage: ['usageBtn'] }[ST.cat];
+  const uiKeys = { appearance: ['density', 'fontSize', 'reduceMotion', 'timestamps', 'perfReadout'], window: ['notify', 'sidebarStart', 'paneMode', 'idleHide'], privacy: ['showBalance', 'maskAmounts', 'blurPaths', 'searchEngine', 'searchCustom'], budget: ['usageBtn'] }[ST.cat];
   if (uiKeys) for (const k of uiKeys) U[k] = UI_DEFAULTS[k];
   if (ST.cat === 'appearance') { S.theme = null; G.theme = null; applyTheme(); }
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
-  if (ST.cat === 'providers') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
+  if (ST.cat === 'limits') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
+  if (ST.cat === 'terminal') { const ds = d.safety || {}; S.safety = { ...(S.safety || {}), shell: ds.shell, timeout: ds.timeout, memoryMB: ds.memoryMB }; }
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, nextSteps: d.nextSteps, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
   if (ST.cat === 'deciders') { S.voters = [...d.voters]; S.gate = { ...d.gate }; S.lookVoters = [...d.lookVoters]; S.lookEscalate = d.lookEscalate; S.checks = structuredClone(d.checks); }
@@ -11613,12 +11893,14 @@ function resetCategory() {
   if (ST.cat === 'shortcuts') { S.keys = {}; S.micKey = MIC_KEY; S.micMode = MIC_MODE; }
   if (ST.cat === 'video') for (const k of Object.keys(d)) if (/^video[A-Z]/.test(k)) S[k] = d[k];
   if (ST.cat === 'safety') {
-    S.safety = { ...(d.safety || {}) }; S.debugger = 'earned';
+    // The shell's three are on the Terminal page now: they keep their values here.
+    const keep = Object.fromEntries(['shell', 'timeout', 'memoryMB'].filter((k) => S.safety?.[k] != null).map((k) => [k, S.safety[k]]));
+    S.safety = { ...(d.safety || {}), ...keep }; S.debugger = 'earned';
     Object.assign(S, { approval: d.approval, strictAsk: d.strictAsk, strictAskHelpers: d.strictAskHelpers, strictAskDeciders: d.strictAskDeciders, yoloCheck: d.yoloCheck, decidersOff: { ...d.decidersOff }, yoloWaitSecs: d.yoloWaitSecs });
     S.yoloAuto = {};
   }
   if (ST.cat === 'docs') { const dd = G.cfg.docDefaults || {}; Object.assign(S, { maxUploadMB: dd.maxUploadMB, inlineDocTokens: dd.inlineDocTokens, pdfNative: dd.pdfNative, embedModel: dd.embedModel, docIndexBudget: dd.docIndexBudget }); }
-  if (ST.cat === 'code') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeYoloActs: d.chromeYoloActs, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
+  if (ST.cat === 'browser') Object.assign(S, { browseReadOnly: d.browseReadOnly, chromeCheck: d.chromeCheck, chromeYoloActs: d.chromeYoloActs, chromeNetwork: d.chromeNetwork, chromeCloseTabs: d.chromeCloseTabs, chromeSitesNever: d.chromeSitesNever, chromeSitesAlways: d.chromeSitesAlways, chromeSitesRead: d.chromeSitesRead });
   // The agent folder's three have no server default: the agent falls back to these (server/agent.js).
   if (ST.cat === 'storage') { S.storage = { ...(G.cfg.storageDefaults || {}) }; Object.assign(S, { agentSpaceMB: 500, undoKeep: 10, undoDays: 7 }); }
   ST.dirty = true; drawSettings();
@@ -11628,8 +11910,8 @@ function updateDirty() {
   // Just saved: "✓ Saved" stays a moment instead of being written over by "No changes".
   if (ST.dirty || $('#stDirty').textContent !== '✓ Saved') $('#stDirty').textContent = !ST.dirty ? 'No changes' : n > 1 ? `${n} unsaved changes` : 'Unsaved changes';
   $('.st-foot').classList.toggle('dirty', ST.dirty);
-  // Nothing unsaved: the button only closes the window.
-  const cancel = $('#stCancel'); if (cancel) { cancel.textContent = ST.dirty ? 'Cancel' : 'Close'; cancel.title = ST.dirty ? 'Close without saving these changes' : 'Close settings'; }
+  // A tab stays open: Cancel only shows while there is something to drop (✕ in the head closes the tab).
+  const cancel = $('#stCancel'); if (cancel) { cancel.textContent = 'Cancel'; cancel.title = 'Drop these changes'; cancel.hidden = !ST.dirty; }
   // Reset names the category it resets
   const what = $('#stResetWhat'), label = SETTINGS_NAV.flatMap(([, items]) => items).find(([id]) => id === ST.cat)?.[2];
   if (what) what.textContent = label || 'category';
@@ -11703,7 +11985,9 @@ function saveSettings() {
     postJ('/api/news/remote', { on: newsRemote }).then(() => { NEWS.data = null; if (NEWS.open) openNews(NEWS.tab); else newsLoad(); }).catch(() => {});
   }
   G.settings = S;
-  savePrefs(); applyTheme(); applyUi(); applyKeyTitles();
+  savePrefs(); if (POP) stSaveFromPop(); // a Settings tab in a pop-out window saves for the main window too
+  ST.rowIndex = null;
+  applyTheme(); applyUi(); applyKeyTitles();
   renderToolbars(); renderPanes(); renderSpend(); renderSidebar(); // the sidebar folds idle chats by a setting
   // Settings stays open on the same page: what you saved is the new starting point (Cancel, Undo and the Escape
   // check work from here), and the footer says it was saved.
@@ -11730,7 +12014,13 @@ const storageHelpers = () => ({ getJ, postJ, esc, ask, uiAlert, openFolder, list
   desk: DESK && window.ohDesktop.storage ? (op, arg) => window.ohDesktop.storage(op, arg) : null,
   openCat: (id) => { ST.cat = id; drawSettings(); } });
 // Cancel (or Esc) drops the draft and undoes the theme preview.
-function cancelSettings() { G.theme = ST.themeAtOpen; applyTheme(); if ($('#settings').open) $('#settings').close(); }
+// Cancel drops the unsaved changes (the tab stays open) and undoes the theme preview; ✕ closes the tab.
+function cancelSettings() {
+  G.theme = ST.themeAtOpen; applyTheme();
+  if (!settingsOpen()) return;
+  const top = $('#stMain')?.scrollTop || 0;
+  stInitDraft(); drawSettings(); const m = $('#stMain'); if (m) m.scrollTop = top;
+}
 // A setting the agent changed with your click (quorx_settings): ⚙ Settings save it as their own Save would, and an
 // open Settings or Project settings window shows it at once (your unsaved edits there stay).
 function settingChanged(e) {
@@ -11738,21 +12028,17 @@ function settingChanged(e) {
     if (e.key === 'theme') { G.theme = e.value === 'system' ? null : e.value; ST.themeAtOpen = G.theme; }
     else setPath(G.settings, e.key, e.value);
     savePrefs(); applyTheme(); applyUi(); applyKeyTitles(); renderToolbars(); renderPanes(); renderSpend();
-    if ($('#settings').open && ST.draft) { if (e.key === 'theme') ST.draft.theme = G.theme; else setPath(ST.draft, e.key, e.value); drawSettings(); }
+    if (settingsOpen() && ST.draft) { if (e.key === 'theme') ST.draft.theme = G.theme; else setPath(ST.draft, e.key, e.value); drawSettings(); }
   }
-  if (e.where === 'mcp') loadMcp().then(() => { if ($('#settings').open && ST.draft) drawSettings(); });
+  if (e.where === 'mcp') loadMcp().then(() => { if (settingsOpen() && ST.draft) drawSettings(); });
   if (e.where === 'project') refreshProjectWindows(e.projectId);
 }
 async function refreshProjectWindows(pid) {
   await refreshSidebar();
   for (const ch of G.open.values()) if (ch.projectId === pid && ch.el?.root?.isConnected) renderChatHead(ch);
-  const main = $('#projDlg'), sub = $('#projSubDlg');
-  if (!main.open || main.dataset.project !== pid) return;
-  const p = G.projects.find((x) => x.id === pid);
-  if (!p) return;
-  await openProjectSettings(p);
-  const s = G.projSub;
-  if (sub.open && s?.p.id === pid && !s.ctl?.dirty()) openProjectSub(p, s.kind, { onClose: s.onClose });
+  // The Settings tab on that project redraws (a page with unsaved changes keeps them).
+  if (!settingsOpen() || ST.scope !== 'project' || stProjectId() !== pid || ST.pctl?.dirty?.()) return;
+  drawSettings();
 }
 
 // Projects panel: acts at once (like the sidebar's ⚙ and 🗑).
@@ -11830,9 +12116,11 @@ async function drawProjectsPanel() {
   for (const [id, st] of Object.entries(G.chatStats || {})) counts[id] = st.active;
   box.innerHTML = `<section class="pp">
     <header class="pp-head"><div><b>Your projects</b><small>${projects.length} · removing one moves its chats to the trash; the folder and files stay.</small></div><button type="button" class="pp-new" data-proj-new>＋ New project</button></header>
+    <div class="pp-filter"></div>
     <div class="pp-list">${projects.map((pr) => {
       const n = counts[pr.id] || 0, spent = pr.spent || 0, share = pr.budget ? Math.min(1, spent / pr.budget) : 0, state = share >= 1 ? 'full' : share >= 0.8 ? 'near' : 'ok';
-      return `<div class="pp-row" style="${projStyle(pr)}">
+      const seg = pr.missing ? 'missing' : pr.archived ? 'archived' : pr.pinned ? 'pinned' : 'active';
+      return `<div class="pp-row" style="${projStyle(pr)}" data-lf-text="${esc(`${pr.name} ${pr.dir || ''} ${pr.github ? `${pr.github.owner}/${pr.github.repo}` : ''}`.toLowerCase())}" data-lf-seg="${seg}">
         <span class="pp-ico">📁</span>
         <div class="pp-main">
           <div class="pp-top"><b class="pp-name">${esc(pr.name)}</b><span class="pp-meta">${n} chat${n === 1 ? '' : 's'} · <em>$${spent.toFixed(3)}</em>${pr.budget != null ? ` of $${pr.budget.toFixed(2)}` : ' · no limit'}</span></div>
@@ -11863,8 +12151,8 @@ async function drawProjectsPanel() {
   for (const b of box.querySelectorAll('[data-proj-set]')) b.onclick = () => openProjectSettings(find(b.dataset.projSet));
   for (const b of box.querySelectorAll('[data-proj-del]')) b.onclick = async () => { await deleteProject(find(b.dataset.projDel)); drawProjectsPanel(); };
   const nb = $('[data-proj-new]', box); if (nb) nb.onclick = async () => { await editProject(null); drawProjectsPanel(); };
-  // When the project settings window closes, show its changes here.
-  const pd = $('#projDlg'); if (pd && !pd.dataset.refreshesPanel) { pd.dataset.refreshesPanel = '1'; pd.addEventListener('close', () => { if ($('#settings').open) drawProjectsPanel(); }); }
+  // A long list gets the shared search and filter (pinned, active, archived, missing folder).
+  if (projects.length > 5) listFilter($('.pp-filter', box), { key: 'projects', rows: () => box.querySelectorAll('.pp-row'), segLabel: (v) => ({ pinned: 'Pinned', active: 'Active', archived: 'Archived', missing: 'Folder missing' }[v] || v), segOrder: ['pinned', 'active', 'archived', 'missing'], placeholder: 'Find a project, folder or repo…', label: 'Show' });
 }
 
 // ---------- Settings → Approvals & safety: a summary of every permission; the list itself is the Permissions window ----------
@@ -11917,13 +12205,16 @@ async function drawAuditPanel() {
 // Each row: when, what, what the deciders said, and a link to the step in its chat. Read only.
 const LT_KIND = { shell: 'Command', schedule: 'Schedule', image: 'Picture', video: 'Video', music: 'Music', speech: 'Voice', browser: 'Browser', chrome: 'Your Chrome', desktop: 'Computer use', mcp: 'MCP tool', plan: 'Plan', helper: 'Helper' };
 const ltKind = (tool) => LT_KIND[tool] || (tool ? `${tool[0].toUpperCase()}${tool.slice(1).replace(/_/g, ' ')}` : 'Action');
-async function openLetThrough({ chatId = null } = {}) {
-  const dlg = $('#letThrough'), body = $('#ltBody');
+// into: a box to draw the list in (Settings › Let through in YOLO) instead of its own window.
+async function openLetThrough({ chatId = null, into = null } = {}) {
+  const dlg = into ? null : $('#letThrough'), body = into || $('#ltBody');
   const chat = chatId && G.chats.find((x) => x.id === chatId);
-  $('#ltTitle').textContent = chat ? `Let through in ⚡ YOLO · ${clip(chat.title || 'this chat', 40)}` : 'Let through in ⚡ YOLO';
   body.innerHTML = '<div class="run-empty">Loading…</div>';
-  $('#ltClose').onclick = () => dlg.close();
-  if (!dlg.open) dlg.showModal();
+  if (dlg) {
+    $('#ltTitle').textContent = chat ? `Let through in ⚡ YOLO · ${clip(chat.title || 'this chat', 40)}` : 'Let through in ⚡ YOLO';
+    $('#ltClose').onclick = () => dlg.close();
+    if (!dlg.open) dlg.showModal();
+  }
   const rows = await getJ(`/api/let-through?limit=500${chatId ? `&chat=${encodeURIComponent(chatId)}` : ''}`).catch(() => null);
   if (!Array.isArray(rows)) { body.innerHTML = `<div class="run-empty bad">Could not read the list: ${esc(rows?.error || 'no answer')}</div>`; return; }
   if (!rows.length) {
@@ -11947,8 +12238,9 @@ async function openLetThrough({ chatId = null } = {}) {
   };
   body.innerHTML = `<p class="lt-intro">${rows.length === 500 ? 'The newest 500' : rows.length} command${rows.length === 1 ? '' : 's'} and action${rows.length === 1 ? '' : 's'} that ran without asking you${chat ? ' in this chat' : ', in every chat'}. Rules you made yourself, and what ⚡ YOLO always does by itself (reading, searching), aren’t listed.</p><div class="lt-filter"></div><div class="lt-list">${rows.map(row).join('')}</div>`;
   listFilter($('.lt-filter', body), { key: 'letThrough', rows: () => body.querySelectorAll('.lt-row'), placeholder: chat ? 'Find a command or reason' : 'Find a command, reason or chat', label: 'Show' });
-  // Going to a chat from ⚙ Settings closes Settings too (asking first when it has unsaved changes).
-  const leave = async () => { if ($('#settings').open) { if (ST.dirty && !(await uiConfirm('Leave Settings? Changes you haven’t saved are dropped.', { ok: 'Leave' }))) return false; cancelSettings(); } dlg.close(); return true; };
+  // Going to a chat from ⚙ Settings: a tab stays beside it; Settings filling the middle (no chat was open) closes,
+  // asking first when it has unsaved changes.
+  const leave = async () => { if (ST.host === 'page' && !(await closeSettings())) return false; dlg?.close(); return true; };
   for (const b of body.querySelectorAll('.lt-chat')) b.onclick = async () => { if (await leave()) showChat(b.dataset.chat); };
   for (const b of body.querySelectorAll('.lt-step')) b.onclick = async () => { if (await leave()) showLetStep(b.dataset.chat, b.dataset.run, b.dataset.card); };
 }
@@ -12047,8 +12339,9 @@ function listFilter(host, { key, rows, segLabel = (v) => v, segOrder = [], place
 }
 // Ctrl+F in Settings: the open page's list filter; / : the search over every setting (as its hint says).
 document.addEventListener('keydown', (e) => {
-  const dlg = $('#settings');
-  if (!dlg?.open) return;
+  // Only while Settings is on screen and the focus is in it (or nowhere): it is a tab beside other tabs now.
+  const dlg = stEl(), at = document.activeElement;
+  if (!settingsOpen() || !dlg.offsetParent || (at && at !== document.body && !dlg.contains(at))) return;
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     const box = [...dlg.querySelectorAll('.st-panel.active .lf-q')].find((x) => x.getClientRects().length) || $('#stSearch');
@@ -12102,7 +12395,7 @@ async function firstSetupCheck() {
   const KEY = 'oh-setup-seen';
   try { if (localStorage.getItem(KEY)) return; localStorage.setItem(KEY, String(Date.now())); } catch { return; }
   const r = await fetch('/api/setup-check').then((x) => x.json()).catch(() => null);
-  if (r?.items?.some((i) => i.status === 'missing') && !$('#settings').open) openSettings('setup');
+  if (r?.items?.some((i) => i.status === 'missing') && !settingsOpen()) openSettings('setup');
 }
 
 // ---------- API keys panel ----------
@@ -12371,6 +12664,7 @@ async function drawMemoryPanel(msg = '') {
       ${m.items.length ? `<ul class="qx-mem">${m.items.map(rowHTML).join('')}</ul>` : '<p class="st-row-help mem-empty">Nothing yet. For example: “I use pnpm, not npm”, “Prefer dark themes”, or for one project, “The API lives in server/”.</p>'}
       <p class="mem-msg ${msg.startsWith('✓') ? 'ok' : msg ? 'bad' : ''}" role="status">${esc(msg)}</p>
       <p class="st-row-help">Never keys, tokens or passwords: anything that looks like one is refused.</p></div>`);
+  if (!el.isConnected) return; // Settings was drawn again meanwhile: that draw wires its own
   const save = async (body, ok) => {
     const r = await postJ('/api/memory', body, 'PUT');
     if (!r?.error) { UI.edit = null; UI.adding = false; }
@@ -12491,6 +12785,7 @@ async function drawMcpPanel() {
       <div class="mcp-split"><ul class="mcp-rows">${rows || `<li class="mcp-none">No server matches${U.q ? ` “${esc(U.q)}”` : ''}.</li>`}</ul>${panel}</div>`;
   }
   el.innerHTML = `<section class="st-card mcp-card">${head}${(U.adding || U.tab === 'first' && U.preview) ? addCard : ''}${msg}${body}</section>`;
+  if (!el.isConnected) return; // Settings was drawn again meanwhile: that draw wires its own
   // ---- wiring ----
   const say = (m) => { U.msg = m; drawMcpPanel(); };
   const save = async (next, ok) => { const r = await postJ('/api/mcp', { servers: next }, 'PUT').catch((e) => ({ error: e.message })); if (r?.error) say(`Not saved: ${r.error}`); else { U.msg = ok; drawMcpPanel(); } };
@@ -13067,10 +13362,11 @@ async function boot() {
   $('#paletteBtn').onclick = () => openPalette();
   $('#saveSettings').onclick = saveSettings;
   $('#stCancel').onclick = cancelSettings;
-  $('#stClose').onclick = cancelSettings;
-  $('#settings').addEventListener('cancel', (e) => { e.preventDefault(); cancelSettings(); });
-  // Closing Settings brings the chat back to the front: a step of its own, so ‹ returns to the settings page.
-  $('#settings').addEventListener('close', () => { if (curId()) wsSeen('chat', curId()); wsChrome(); });
+  // ✕ closes the Settings tab (asking first about unsaved changes); ⧉ moves it to a window of its own; { } shows
+  // the settings file. Closing brings the chat back to the front (stClosed), so ‹ returns to the settings page.
+  $('#stClose').onclick = () => closeSettings();
+  $('#stPopOut').onclick = () => { const tid = settingsTab(); if (!tid) return; if (ST.dirty) return flashTip($('#stPopOut'), 'Save or cancel your changes first', 2200); popOut({ type: 'file', tid }); };
+  $('#stFile').onclick = () => openSettingsFile();
   $('#stResetCat').onclick = () => resetCategory();
   $('#stSearch').oninput = () => searchSettings($('#stSearch').value);
   $('#newBtn').onclick = () => newChat();
@@ -15895,17 +16191,22 @@ async function drawDesktopSettings() {
   if (!box.isConnected) return;
   const canQuit = typeof window.ohDesktop.quit === 'function';
   const closeSeg = `<div class="st-segmented" role="radiogroup" id="stDeskClose">${[['ask', 'Ask'], ['tray', 'Keep running in the tray'], ['quit', 'Quit QuorX']].map(([k, l]) => `<button type="button" class="st-seg-btn ${k === (onClose || 'ask') ? 'active' : ''}" role="radio" aria-checked="${k === (onClose || 'ask')}" data-v="${k}">${l}</button>`).join('')}</div>`;
-  box.innerHTML = stCard('Desktop app', `Version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so scheduled tasks keep running while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
+  // The Settings tab shows these on three pages: closing and starting on Window & layout, Updates, and the data
+  // folder on Backup.
+  box.innerHTML = stCard('Closing and starting', `Desktop app, version ${esc(info.version || '?')}${info.packaged ? '' : ' (running from the repo)'}. ${info.ownsServer ? 'It runs the harness itself, so scheduled tasks keep running while the window is closed.' : 'It is attached to a harness that was already running; closing the window leaves that one running.'}`,
     (canQuit ? stRow('Closing the window (✕)', 'Ask: a short notice the first time. Keep running: QuorX stays in the tray, where right-click → Quit QuorX stops it. Quit: ✕ stops QuorX and the harness.', closeSeg)
       + stRow('Quit QuorX', info.ownsServer ? 'Stops QuorX and the harness now. Scheduled tasks wait until you open QuorX again.' : 'Closes this window. The harness it is attached to keeps running.', '<button type="button" class="st-btn danger sm" id="stDeskQuit">Quit QuorX</button>') : '')
     // The Microsoft Store copy can't start at login this way, and the Store brings its updates.
     + (info.store ? '' : stRow('Start at login', 'Opens QuorX in the tray when you sign in to Windows, so scheduled tasks run. Applies right away.', '<label class="sq-check"><input type="checkbox" id="stDeskLogin"' + (login ? ' checked' : '') + '><span>On</span></label>'))
     // Keeping the PC awake (desktop/keep-awake.js): only while something works, so it never stops the PC sleeping for good.
     + (awake ? stRow('Keep the PC awake while QuorX works', 'Only while a reply (a scheduled chat’s too) or a command runs: Windows doesn’t go to sleep, and may again as soon as all of it is done. The screen can still turn off. A server left running on its own doesn’t keep the PC awake.', `<label class="sq-check"><input type="checkbox" id="stDeskAwake"${awake.on ? ' checked' : ''}><span>On</span></label> <span class="st-awake-now" id="stDeskAwakeNow"${awake.held ? '' : ' hidden'}>keeping it awake now</span>`) : '')
-    + (summon ? stRow('Bring QuorX forward from anywhere', 'A key that works in every app: QuorX comes to the front with the cursor in the message box. Off at first, since another app may already use the key. Click the key box, then press the keys you want.', summonControl(summon), { id: 'stRowSummon' }) : '')
-    + stRow('Updates', '', `<span id="stDeskUpd" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
-    + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">'))
-    + stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
+    + (summon ? stRow('Bring QuorX forward from anywhere', 'A key that works in every app: QuorX comes to the front with the cursor in the message box. Off at first, since another app may already use the key. Click the key box, then press the keys you want.', summonControl(summon), { id: 'stRowSummon' }) : ''));
+  const upd = stCard('Updates', '', stRow('Updates', '', `<span id="stDeskUpdState" class="st-upd">…</span> <button type="button" class="st-btn ghost sm" id="stDeskCheck">${info.store ? 'Open in the Store ↗' : 'Check now'}</button>`)
+    + (info.store ? '' : stRow('Update feed', 'Where new versions are published (latest.yml and the installer), e.g. https://github.com/you/repo/releases/latest/download. Empty: no updates.', '<input type="url" class="st-input" id="stDeskFeed" placeholder="https://…" spellcheck="false" style="min-width:260px">')));
+  const data = stCard('Data folder', '', stRow('Data folder', 'Chats, projects, keys and logs.', `<code class="blurable" title="${esc(info.home || '')}">${esc(info.home || '')}</code> <button type="button" class="st-btn ghost sm" id="stDeskHome">📂 Open</button>`));
+  const ub = $('#stDeskUpd'), db = $('#stDeskData');
+  if (ub) ub.innerHTML = upd; else box.insertAdjacentHTML('beforeend', upd);
+  if (db) db.innerHTML = data; else box.insertAdjacentHTML('beforeend', data);
   if ($('#stDeskLogin')) $('#stDeskLogin').onchange = async (e) => { e.target.checked = await window.ohDesktop.loginItem(e.target.checked).catch(() => !e.target.checked); };
   if ($('#stDeskAwake')) $('#stDeskAwake').onchange = async (e) => { const r = await window.ohDesktop.keepAwake(e.target.checked).catch(() => null); if (!r) { e.target.checked = !e.target.checked; return; } e.target.checked = r.on; $('#stDeskAwakeNow').hidden = !r.held; };
   $('#stDeskHome').onclick = () => window.ohDesktop.openHome();
@@ -16028,7 +16329,7 @@ function drawUpdate(u) {
     h.classList.toggle('secondary', !hot);
     h.disabled = ['checking', 'downloading', 'dev', 'no-feed'].includes(u.state);
   }
-  const s = $('#stDeskUpd');
+  const s = $('#stDeskUpdState');
   if (s) s.textContent = { dev: 'Running from the repo: updates come from git.', store: `Updates come from the Microsoft Store.${u.error ? ` Couldn't check for a newer version: ${u.error}.` : ''}`, 'store-current': `Up to date (v${u.current || '?'}). Updates come from the Microsoft Store.`, 'store-available': `v${u.version} is out (you have v${u.current || '?'}). Quit QuorX from its tray icon (right-click → Quit QuorX), then press Update on its Store page.`, 'no-feed': 'No update feed set.', checking: 'Checking…', current: `Up to date (v${u.current || '?'}).`, available: `v${u.version} is available.`, downloading: `Downloading… ${u.percent ?? 0}%`, ready: `v${u.version} is downloaded: restart to install.`, error: `Couldn't check: ${u.error || 'unknown error'}` }[u.state] || `v${u.current || '?'}`;
 }
 // Preview of the update strip in a browser on this computer: ?demo-update=available | downloading:42 | ready | error
@@ -16091,7 +16392,7 @@ async function restartHarness() {
   const runs = await getJ('/api/runs');
   const n = Array.isArray(runs) ? runs.length : 0;
   // The page reloads after the restart, so Settings changes that weren't saved would be lost: say so.
-  const unsaved = $('#settings')?.open && ST.dirty;
+  const unsaved = settingsOpen() && ST.dirty;
   if (!await uiConfirm(`Restart the harness?\n\nIt loads the latest server code. Dev servers it started stop and can be run again from 🖥.${n ? `\n\n${n} repl${n > 1 ? 'ies are' : 'y is'} running: ${n > 1 ? 'they pause' : 'it pauses'} and can be resumed afterwards.` : ''}${unsaved ? '\n\nYour unsaved changes in Settings will be lost: press Save first to keep them.' : ''}`)) return;
   const btn = $('#restartBtn'), note = $('#staleNote'), head = $('#stHeadRestart');
   const before = (await getJ('/api/config'))?.started;
@@ -16503,5 +16804,5 @@ function newsClick(e) {
 
 // The permissions window and the chat's "what applies here" (public/perms.js) use the page's own helpers.
 initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TOOL_NAME, listFilter, flashTip, ago, clip, savePrefs, showChat,
-  closeWindows: () => { for (const id of ['permsDlg', 'projSubDlg', 'projDlg', 'settings']) document.getElementById(id)?.close?.(); },
+  closeWindows: () => { for (const id of ['permsDlg']) document.getElementById(id)?.close?.(); if (ST.host === 'page') closeSettings({ force: true }); }, // a Settings tab stays beside the chat
   yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });

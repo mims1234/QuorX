@@ -1,0 +1,93 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* ⚙ Settings as a tab (app.js "the Settings tab"): the same pages, rows and controls as settings.css draws, filling
+   the tab that shows them instead of a dialog. Adds the scopes (App · Project · This chat), the search filters, the
+   dot and ↺ on a changed row, the Project scope's pages, This chat's read-only rows and the settings file. A narrow
+   tab lists the pages first, then the page. */
+
+#settings.st-tab { width: 100%; height: 100%; min-height: 0; display: flex; container-type: inline-size; container-name: sttab; color: var(--text); }
+#settings.st-tab[hidden] { display: none; }
+#settings.st-tab .settings-modal { width: 100%; height: 100%; max-width: none; border-radius: 0; border: 0; box-shadow: none; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+/* No chat on screen (the start screen): it fills the middle of the window, still not a dialog. */
+#settings.st-tab.st-page { position: absolute; inset: 0; z-index: 30; background: var(--panel); }
+.work:has(> #settings.st-page) { position: relative; }
+
+/* ---------- head: title · scopes · search · actions ---------- */
+#settings.st-tab .st-head { height: auto; min-height: 50px; padding: 8px 10px 8px 16px; gap: 12px; }
+#settings.st-tab .st-head-left { gap: 14px; }
+#settings .st-scopes { flex: none; display: inline-flex; }
+#settings .st-scopes .st-seg-btn { white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+#settings .st-scopes .st-seg-btn:disabled { opacity: .45; cursor: default; }
+#settings .st-head-act { height: 32px; white-space: nowrap; }
+
+/* ---------- filters under the head: rounded-square ✓ boxes, never pills ---------- */
+#settings .st-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+#settings .st-filters[hidden] { display: none; }
+#settings .st-fchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+#settings .st-fchip:has(input:checked) { color: var(--text-bright); }
+#settings .st-fchip .sx-word { display: none; }
+#settings .st-fchip-n { font: 600 10.5px var(--mono); color: var(--dim); }
+#settings .st-fchip-n:empty { display: none; }
+
+/* ---------- a row that differs from the default: a dot before its name, and ↺ ---------- */
+#settings .st-row.sx-mod .st-row-label::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+#settings .sx-row-reset { margin-left: 6px; width: 22px; height: 22px; padding: 0; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; vertical-align: middle; }
+#settings .sx-row-reset:hover { background: var(--panel-3); color: var(--text-bright); border-color: var(--line-strong); }
+
+/* ---------- scopes: the footer's Save is the App scope's (Project pages save on their own; This chat is read only) ---------- */
+#settings .settings-modal[data-scope="project"] .st-foot, #settings .settings-modal[data-scope="chat"] .st-foot { display: none; }
+#settings .settings-modal[data-scope="project"], #settings .settings-modal[data-scope="chat"] { grid-template-rows: auto auto minmax(0, 1fr); }
+#settings .st-proj-pick { width: 100%; height: 32px; margin: 0 0 4px; }
+#settings .st-nav-note { padding: 6px 10px; }
+
+/* The Project scope: the old project settings window, as a page. */
+#settings .st-proj-panel { padding: 0 !important; }
+#settings .st-pj.pj { height: auto !important; max-height: none !important; border: 0; border-radius: 0; box-shadow: none; overflow: visible; background: transparent; }
+#settings .st-pj .pj-scroll { overflow: visible; padding: 4px 22px 22px !important; }
+#settings .st-pj .pj-head { padding: 16px 22px 10px !important; }
+#settings .st-pj .pj-sec h4 { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+#settings .st-pj .pj-sec h4 small { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--dim); }
+#settings .st-pj .pj-sec { padding-top: 14px; padding-bottom: 14px; }
+#settings .st-pj .pj-folder { border-radius: 9px; }
+#settings .st-pj .kx-btn { border-radius: 8px; border-color: var(--line-strong); background: var(--panel-2); }
+#settings .st-pj .kx-btn.primary { background: var(--ok); border-color: var(--ok); color: var(--ok-ink); }
+/* Design system, Hooks, Permissions: their windows' content, filling the page. */
+#settings .st-pjx.pjx { height: 100% !important; min-height: 520px; border: 0; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+#settings .st-proj-panel:has(.st-pjx) { height: 100%; }
+#settings .st-main:has(.st-pjx) { overflow: hidden; display: flex; flex-direction: column; }
+#settings .st-main:has(.st-pjx) .st-proj-panel, #settings .st-main:has(.st-pjx) .st-proj-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* This chat: read-only values, each with Change in chat. */
+#settings .st-chat-row .st-row-ctrl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+#settings .st-chat-val { color: var(--text-bright); font-size: 13px; text-align: right; }
+#settings .st-chat-sub { display: block; margin-top: 2px; color: var(--dim); font-size: 11.5px; }
+#settings .st-chat-tag { margin-left: 6px; }
+
+/* Let through in YOLO, drawn in its page. */
+#settings .lt-inline .lt-list { max-height: none; }
+
+/* ---------- the settings file (a tab of its own) ---------- */
+.stf { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+.stf-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.stf-bar small { color: var(--dim); }
+.stf-bar .grow { flex: 1; }
+.stf-code { flex: 1; min-height: 0; margin: 0; padding: 12px 16px; overflow: auto; font: 12px/1.55 var(--mono); color: var(--text); white-space: pre; user-select: text; }
+#settings .stf { height: auto; border: 1px solid var(--line); border-radius: 12px; margin: 16px; }
+#settings .stf .stf-code { max-height: 70vh; }
+
+/* ---------- a narrow tab (a side group, a small pop-out): pages first, then the page ---------- */
+@container sttab (max-width: 760px) {
+  #settings .st-head { flex-wrap: wrap; row-gap: 8px; }
+  #settings .st-head-left { flex: 1 1 100%; order: 2; flex-wrap: wrap; row-gap: 8px; }
+  #settings .st-head-title-wrap { display: none; }
+  #settings .st-head-right { order: 1; margin-left: auto; }
+  #settings .st-head-restart, #settings .st-head-upd { display: none; }
+  #settings .st-search-wrap { flex: 1 1 100%; max-width: none; }
+  #settings .st-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  #settings .st-nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; gap: 10px; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--line); max-height: 96px; }
+  #settings .st-nav-group { flex-direction: row; align-items: center; flex: none; }
+  #settings .st-nav-group-label { padding: 0 4px 0 0; }
+  #settings .st-nav-item { width: auto; white-space: nowrap; }
+  #settings .sx-nav-sum, #settings .st-nav-note { display: none; }
+  #settings .st-proj-pick { width: auto; margin: 0; }
+  #settings .sx-grid.two { grid-template-columns: minmax(0, 1fr); }
+}
