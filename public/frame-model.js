@@ -91,6 +91,8 @@ export const MENUS = [
     { label: 'Spending…', act: 'spending' },
   ] },
   { name: 'Window', items: [
+    { label: 'Layout', sub: 'layouts' },
+    { label: 'Save layout as…', act: 'saveLayout' }, '-',
     { label: 'Split right', act: 'splitRight' },
     { label: 'Split down', act: 'splitDown' },
     { label: 'Pop out to its own window', act: 'popOut' },

@@ -9,6 +9,8 @@ import * as K from '../public/keymap.js';
 import * as QF from '../public/frame-model.js';
 import fs from 'node:fs';
 
+// A four-group shape (the chat, steps, and a page over a terminal): the cap, in the W4/W5 tests.
+const FOUR = { root: W.split('row', [{ t: 'g', id: 'chat', kind: null, w: 1.2 }, { t: 'g', id: 's1', kind: 'trace', w: 1 }, W.split('col', [{ t: 'g', id: 's2', kind: 'browser', w: 1 }, { t: 'g', id: 's3', kind: 'term', w: 1 }])]), follow: 's2' };
 const shape = (n) => (n.t === 'g' ? `${n.id}[${n.tabs.join(',')}]` : `${n.dir}(${n.kids.map(shape).join(' ')})`);
 const ids = (lay) => W.groups(lay).map((g) => g.id);
 
@@ -422,29 +424,29 @@ test('workspace W4: layouts fit the project without closing anything; your own a
       assert.equal(W.findGroup(r.layout, 'chat').active, 'chat:main', `${k} keeps the chat`);
       assert.equal(W.findGroup(r.layout, 'g1')?.id, 'g1', `${k} keeps the first pane group (its box stays)`);
     }
-    const b = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build);
+    const b = W.fitLayout(W.defaultLayout(), W.LAYOUTS.pageTerm);
     assert.deepEqual(W.groups(b.layout).map((g) => g.active), ['chat:main', 'browser:g1', 'terminal:g2']);
     assert.equal(b.follow, 'g1');
     assert.deepEqual(b.added, ['g2']);
-    const c = W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare, { chat2: 'b' });
+    const c = W.fitLayout(W.defaultLayout(), W.LAYOUTS.twoPages, { chat2: 'b' });
     assert.equal(shape(c.layout.root).replace(/\[[^\]]*\]/g, ''), 'row(col(chat g1) col(chat2 g2))');
     assert.deepEqual(c.pins, { g1: 0, g2: 1 });
-    // Without a second chat Compare drops its second chat group.
-    assert.equal(W.findGroup(W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare).layout, 'chat2'), null);
+    // Without a second chat Two chats + pages drops its second chat group.
+    assert.equal(W.findGroup(W.fitLayout(W.defaultLayout(), W.LAYOUTS.twoPages).layout, 'chat2'), null);
   }
   { // workspace W4: switching keeps every tab: file tabs go to the nearest group, pane groups keep their ids
-    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout; // chat, g1, g2, g3
+    let lay = W.fitLayout(W.defaultLayout(), FOUR).layout; // chat, g1, g2, g3
     lay = W.placeTab(lay, 'viewer:a', 'g3', 'center').layout;
     lay = W.placeTab(lay, 'viewer:b', 'g1', 'center').layout;
     const r = W.fitLayout(lay, W.LAYOUTS.review); // one pane group
     assert.deepEqual(r.removed, ['g2', 'g3']);
     const g1 = W.findGroup(r.layout, 'g1');
     assert.ok(g1.tabs.includes('viewer:a') && g1.tabs.includes('viewer:b'), 'nothing closes');
-    assert.equal(g1.active, 'files:g1');
+    assert.equal(g1.active, 'artifact:g1');
     assert.deepEqual(W.allTabs(r.layout).filter((t) => t.startsWith('viewer:')).sort(), ['viewer:a', 'viewer:b']);
   }
   { // workspace W4: what is on screen saves as a shape that fits again; stored shapes are checked
-    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.compare, { chat2: 'b' }).layout;
+    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.twoPages, { chat2: 'b' }).layout;
     const sh = W.shapeOf(lay, { follow: 'g2', pins: { g1: 'a', g2: 'b' }, chats: ['a', 'b'] });
     assert.equal(sh.follow, 's2');
     assert.deepEqual(sh.pins, { s1: 0, s2: 1 });
@@ -457,10 +459,10 @@ test('workspace W4: layouts fit the project without closing anything; your own a
     assert.equal(W.cleanShape(null), null);
   }
   { // workspace W4: a second chat stays beside the first when the layout has room; the first area is kept first
-    const two = W.withChat2(W.LAYOUTS.build);
+    const two = W.withChat2(W.LAYOUTS.pageTerm);
     assert.equal(W.groups(two.root).map((g) => g.id).join(), 'chat,chat2,s1,s2');
-    assert.equal(W.withChat2(W.LAYOUTS.debug), W.LAYOUTS.debug, 'no room past the cap');
-    let lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout;
+    assert.equal(W.withChat2(FOUR), FOUR, 'no room past the cap');
+    let lay = W.fitLayout(W.defaultLayout(), FOUR).layout;
     const r = W.fitLayout(lay, W.LAYOUTS.review, { order: ['g3', 'g1', 'g2'] });
     assert.deepEqual(W.sideGroups(r.layout).map((g) => g.id), ['g3']);
     assert.equal(W.parse(W.serialise(r.layout, {}, [], { preset: 'review' })).preset, 'review');
@@ -500,7 +502,7 @@ test('shortcuts: find (Ctrl+F) and search inside chats (Ctrl+Shift+F) are on the
 
 test('workspace W5: pop-out windows: what goes there, docking back where it was, remembered boxes on a screen that is there', async () => {
   { // workspace W5: a whole group out and back in the same place; the last pane group stays
-    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout; // chat | g1 over g2
+    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.pageTerm).layout; // chat | g1 over g2
     const r = W.popGroup(lay, 'g2');
     assert.equal(r.ok, true);
     assert.deepEqual(W.groups(r.layout).map((g) => g.id), ['chat', 'g1']);
@@ -526,13 +528,13 @@ test('workspace W5: pop-out windows: what goes there, docking back where it was,
     assert.ok(W.findGroup(d.layout, d.gid).tabs.includes('viewer:b'), 'a file opened in the window comes back too');
   }
   { // workspace W5: at the cap, docking back puts the files in the nearest group: nothing is lost
-    const full = W.fitLayout(W.defaultLayout(), W.LAYOUTS.debug).layout; // 4 groups
+    const full = W.fitLayout(W.defaultLayout(), FOUR).layout; // 4 groups
     const d = W.dockBack(full, { gid: 'g9', tabs: [...W.paneTabs('g9'), 'viewer:x'], active: 'viewer:x', near: 'g2', zone: 'right' });
     assert.equal(d.merged, true);
     assert.equal(W.groups(d.layout).length, 4);
     assert.ok(W.findGroup(d.layout, 'g2').tabs.includes('viewer:x'));
     // A gid taken meanwhile: a fresh one.
-    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout;
+    const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.pageTerm).layout;
     assert.notEqual(W.dockBack(lay, { gid: 'g1', tabs: W.paneTabs('g1'), active: 'browser:g1', near: 'g1', zone: 'right' }).gid, 'g1');
   }
   { // workspace W5: remembered boxes per kind of window; records are checked
@@ -663,15 +665,138 @@ test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ f
 
 test('Single: every tab in one row; the chat and its pane share the space; a project starts in it', () => {
   assert.equal(W.LAYOUT_ORDER[0], 'single', 'Single heads the Layout list');
-  const r = W.fitLayout(W.fitLayout(W.defaultLayout(), W.LAYOUTS.build).layout, W.LAYOUTS.single);
+  const r = W.fitLayout(W.fitLayout(W.defaultLayout(), W.LAYOUTS.pageTerm).layout, W.LAYOUTS.single);
   assert.deepEqual(W.groups(r.layout).map((g) => g.id), ['chat', 'g1'], 'one chat group and one pane group');
   assert.deepEqual(r.removed, ['g2'], 'the other groups go (their file tabs move over)');
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   for (const fn of ['const wsSingle = ', 'function wsFrontFor(', 'function wsSingleStrip(', 'function wsSingleWire(']) assert.ok(app.includes(fn), fn);
   const front = app.slice(app.indexOf('function wsFrontFor('), app.indexOf('\n}\n', app.indexOf('function wsFrontFor(')));
   assert.match(front, /!WP\.agent/, 'what the agent opens never pulls the pane in front');
-  assert.match(app, /WK\.preset = ok \? r\.preset \|\| null : 'single'/, 'a project with no saved layout starts in Single');
+  assert.match(app, /WK\.preset = ok \? WS\.layoutKey\(r\.preset\) : 'single'/, 'a project with no saved layout starts in Single (old preset keys read as their new names)');
   const strip = app.slice(app.indexOf('function wsSingleStrip('), app.indexOf('\n}\n', app.indexOf('function wsSingleStrip(')));
   for (const k of ["'t:trace', '🧭', 'Steps'", "'t:art'", 'p:', 'k:all', "'t:files'", 'f:']) assert.ok(strip.includes(k), `the row has ${k}`);
   assert.ok(strip.indexOf("'t:trace'") < strip.indexOf("'t:art'"), 'Steps sits right after the chats');
+});
+
+test('shell phase 5: honest preset layouts in groups, each with a picture and a key; old saves read as the new names', () => {
+  assert.deepEqual(W.LAYOUT_ORDER, ['single', 'focus', 'preview', 'previewFirst', 'watch', 'three', 'stacked', 'pageTerm', 'twoChats', 'twoPages', 'review']);
+  assert.deepEqual(W.LAYOUT_GROUPS.map((g) => g[0]), ['Basic', 'Build', 'Debug', 'Compare', 'Review']);
+  // Every preset fits a fresh project within the cap, keeps the chat and the first group's box, and only moves tabs.
+  for (const k of W.LAYOUT_ORDER) {
+    const lay = W.placeTab(W.defaultLayout(), 'viewer:a', 'g1', 'center').layout;
+    const r = W.fitLayout(lay, W.LAYOUTS[k], { chat2: 'b' });
+    assert.ok(W.groups(r.layout).length <= W.MAX_GROUPS, `${k} stays within ${W.MAX_GROUPS} groups`);
+    assert.equal(W.findGroup(r.layout, 'chat').active, 'chat:main', `${k} keeps the chat`);
+    assert.ok(W.findGroup(r.layout, 'g1'), `${k} keeps the first group`);
+    assert.deepEqual(W.allTabs(r.layout).filter((t) => t.startsWith('viewer:')), ['viewer:a'], `${k} closes nothing`);
+    assert.ok(W.LAYOUTS[k].name && W.LAYOUTS[k].tip, `${k} has a name and a tip`);
+    assert.ok(W.layoutBoxes(W.LAYOUTS[k]).length >= 2, `${k} has a picture`);
+  }
+  // The pictures follow the shapes: Watch the build is the chat left, Steps over the page right (the page follows).
+  assert.deepEqual(W.layoutBoxes(W.LAYOUTS.watch).map((b) => [b.kind, b.x, b.y, b.w, b.h, b.follow]), [['chat', 0, 0, 0.45, 1, false], ['trace', 0.45, 0, 0.55, 0.45, false], ['browser', 0.45, 0.45, 0.55, 0.55, true]]);
+  assert.equal(W.layoutBoxes(W.LAYOUTS.previewFirst)[0].kind, 'browser', 'Preview first: the page on the left');
+  assert.equal(W.layoutBoxes(W.LAYOUTS.stacked)[1].y, 0.5, 'Stacked: the page below');
+  // Ctrl+Alt+1…9: the first nine, ids in the shortcuts table with the same names, Ctrl+Alt+n, no clash.
+  assert.deepEqual(Object.keys(W.LAYOUT_KEYS), W.LAYOUT_ORDER.slice(0, 9));
+  const def = K.bindings({});
+  W.LAYOUT_ORDER.slice(0, 9).forEach((k, i) => {
+    const row = K.byId.get(W.LAYOUT_KEYS[k]);
+    assert.equal(row?.keys, `Ctrl+Alt+${i + 1}`);
+    assert.equal(row.label, `Layout: ${W.LAYOUTS[k].name}`, 'the shortcuts table names the same layout');
+    assert.equal(K.actionFor(`Ctrl+Alt+${i + 1}`, def), W.LAYOUT_KEYS[k]);
+  });
+  assert.equal(K.conflicts(def).size, 0);
+  // Saved projects from before: Build, Debug and Compare read as the nearest preset now; own layouts pass through.
+  assert.equal(W.layoutKey('build'), 'pageTerm');
+  assert.equal(W.layoutKey('debug'), 'three');
+  assert.equal(W.layoutKey('compare'), 'twoPages');
+  assert.equal(W.layoutKey('my:abc'), 'my:abc');
+  assert.equal(W.layoutKey(''), null);
+});
+
+test('shell phase 5: a preset only promises what it can fill: greyed with a reason, slots show what exists, hints say what fills a side', () => {
+  assert.equal(W.layoutBlock('twoChats', { chats: 1 }), 'Open a second chat first');
+  assert.equal(W.layoutBlock('twoPages', { chats: 1 }), 'Open a second chat first');
+  assert.equal(W.layoutBlock('twoChats', { chats: 2 }), '');
+  assert.equal(W.layoutBlock('review', { changes: 0 }), 'No changes in this chat yet');
+  assert.equal(W.layoutBlock('review', { changes: 3 }), '');
+  for (const k of ['single', 'focus', 'preview', 'previewFirst', 'watch', 'three', 'stacked', 'pageTerm']) assert.equal(W.layoutBlock(k, { chats: 1, changes: 0 }), '', `${k} needs nothing more than a chat`);
+  // Chat + preview's side shows the page when there is one, else the steps, else the page's hint.
+  const side = W.groups(W.LAYOUTS.preview.root)[1];
+  assert.equal(W.pickKind(side, { browser: true, trace: true }), 'browser');
+  assert.equal(W.pickKind(side, { trace: true }), 'trace');
+  assert.equal(W.pickKind(side, {}), 'browser');
+  assert.equal(W.pickKind(W.groups(W.LAYOUTS.watch.root)[1], {}), 'trace', 'a slot without preferences shows its own tab');
+  // fitLayout passes each slot on, so the page can pick per group.
+  assert.deepEqual(W.fitLayout(W.defaultLayout(), W.LAYOUTS.preview).slots, { g1: { kind: 'browser', prefer: ['browser', 'trace', 'art'] } });
+  // Hints: never made-up content, only what fills the side.
+  assert.deepEqual(W.hintFor('browser', { pages: 0, layout: 'watch' }), { note: 'The agent\'s page appears here when it starts.', acts: ['page'] });
+  assert.equal(W.hintFor('browser', { pages: 0, layout: 'preview' }).note, 'The agent\'s page and steps appear here when it starts.');
+  assert.equal(W.hintFor('browser', { pages: 0, pinned: true, layout: 'twoPages' }).note, 'This chat hasn\'t opened a page yet.');
+  assert.deepEqual(W.hintFor('browser', { pages: 0, servers: 1 }).acts, ['server', 'page']);
+  assert.equal(W.hintFor('browser', { pages: 2 }), null, 'a side with a page needs no hint');
+  assert.equal(W.hintFor('trace', { steps: false }).note, 'Steps appear here when the agent starts a reply.');
+  assert.equal(W.hintFor('trace', { steps: true }), null);
+  assert.deepEqual(W.hintFor('art', { layout: 'review', changes: 4, changesOpen: 0 }), { note: '4 files changed in this chat. Their Changes aren\'t open yet.', acts: ['changes'] });
+  assert.equal(W.hintFor('art', { layout: 'review', changes: 4, changesOpen: 1 }), null);
+  assert.equal(W.hintFor('art', { layout: 'single', changes: 4 }), null, 'only Review changes asks for the Changes');
+});
+
+test('shell phase 5: switching keeps each group\'s box for the tab it already shows; the first group always stays', () => {
+  // chat | g1 (page) over g2 (terminal) → Watch the build (steps over page): the page stays in g1's box, the steps take g2.
+  const lay = W.fitLayout(W.defaultLayout(), W.LAYOUTS.pageTerm).layout;
+  const r = W.fitLayout(lay, W.LAYOUTS.watch, { order: ['g1', 'g2'], shows: { g1: 'browser', g2: 'term' } });
+  assert.deepEqual(r.kinds, { g2: 'trace', g1: 'browser' });
+  assert.deepEqual(r.removed, []);
+  // To one pane group: the group showing the page would win, but the first group (the page's own area) is kept.
+  const one = W.fitLayout(lay, W.LAYOUTS.stacked, { order: ['g2', 'g1'], shows: { g1: 'browser', g2: 'term' } });
+  assert.deepEqual(W.sideGroups(one.layout).map((g) => g.id), ['g2']);
+  // A file tab follows the group that keeps its box.
+  const l2 = W.placeTab(lay, 'viewer:f', 'g2', 'center').layout;
+  const r2 = W.fitLayout(l2, W.LAYOUTS.watch, { order: ['g1', 'g2'], shows: { g1: 'browser', g2: 'term' } });
+  assert.ok(W.findGroup(r2.layout, 'g2').tabs.includes('viewer:f'));
+  // Without shows: as before (slots in order).
+  assert.deepEqual(W.fitLayout(lay, W.LAYOUTS.watch).kinds, { g1: 'trace', g2: 'browser' });
+});
+
+test('shell phase 5: Layout ▾ in the project row, Window → Layout, Settings → Window & layout, Focus brings back what it hid', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const fn = (name) => { const i = app.indexOf(name); assert.ok(i >= 0, name); return app.slice(i, app.indexOf('\n}\n', i)); };
+  // Window menu has the Layout list and Save layout as… (View keeps it too).
+  const win = QF.MENUS.find((m) => m.name === 'Window').items;
+  assert.ok(win.some((x) => x.sub === 'layouts') && win.some((x) => x.act === 'saveLayout'));
+  const subs = app.slice(app.indexOf('  layouts: () => {'), app.indexOf('  approval: () =>'));
+  for (const k of ['WS.LAYOUT_GROUPS', 'ico: lyDiag', 'key: WS.LAYOUT_KEYS[k]', 'wsLayoutWhy(k)', 'wsLayoutPick(k)']) assert.ok(subs.includes(k), `the Layout list has ${k}`);
+  // The menu shows a greyed entry's reason and its picture.
+  assert.match(fn('function qfItemsHTML('), /qf-why/);
+  assert.match(fn('function qfItemsHTML('), /qf-ico/);
+  // Ctrl+Alt+n runs the pick (greyed ones say why) through the shortcuts table.
+  assert.match(app, /Object\.entries\(WS\.LAYOUT_KEYS\)\.map\(\(\[ly, id\]\) => \[id, \{ run: \(\) => \{[^}]*wsLayoutPick\(ly\)/);
+  // ▦ Layout ▾ moves to the right end of the project row with the frame on.
+  assert.match(fn('function qfPlace('), /\$\('#qfRight'\)\.after\(ly\)/);
+  // A pick: greyed says why, Two chats asks which two, Focus again leaves Focus.
+  const pick = fn('function wsLayoutPick(');
+  for (const k of ['wsFocusOff()', 'wsLayoutWhy(key)', 'wsPickPair(key, anchor)']) assert.ok(pick.includes(k), k);
+  const pair = fn('function wsPickPair(');
+  assert.match(pair, /\(suggested\)/);
+  assert.match(pair, /which two chats\?/);
+  // Applying: each group picks what exists; Focus hides the sidebar and remembers it; nothing re-parents a page.
+  const apply = fn('async function wsApplyLayout(');
+  assert.match(apply, /WS\.pickKind\(s, \{ browser: [^}]*browserTabs\(ac\)\.length > 0, trace: chatHasSteps\(ac\) \}\)/);
+  assert.match(apply, /WK\.focusPrev = \{ side: !!G\.sideHidden, preset: WK\.preset \}/);
+  assert.match(apply, /shows: Object\.fromEntries\(PA\.list\.map/);
+  assert.ok(!/appendChild|\.append\(|insertBefore/.test(apply), 'applying a layout never moves a page\'s element (pages are placed by their rects)');
+  assert.match(app, /e\.key !== 'Escape' \|\| e\.defaultPrevented \|\| WK\.preset !== 'focus'/, 'Esc leaves Focus');
+  // Hints: drawn over a group's body, only in a preset, with what fills the side.
+  const hints = fn('function wsHintFor(');
+  assert.match(hints, /key === 'single' \|\| key === 'focus'/);
+  assert.match(hints, /WS\.hintFor\(paneTab\(\)/);
+  assert.match(fn('function renderPane('), /wsHintsQueue\(\)/);
+  // Settings → Window & layout: the tiles and the layout for new projects.
+  assert.match(app, /stCard\('Layouts', [^\n]*data-live="layouts"/);
+  assert.match(app, /data-bind="ui\.newLayout"/);
+  assert.match(app, /if \(act === 'applyLayout'\)/);
+  assert.match(app, /newLayout: 'single' \};/);
+  const NEW = app.match(/const NEW_LAYOUTS = (\[[^\]]*\])/)[1];
+  for (const k of JSON.parse(NEW.replace(/'/g, '"'))) assert.equal(W.layoutBlock(k, { chats: 1, changes: 0 }), '', `${k} can start a new project`);
 });

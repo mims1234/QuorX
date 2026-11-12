@@ -485,23 +485,78 @@ export function migrateAreas(old, chats, have = new Set()) {
   return Object.fromEntries([...best].map(([pid, { text }]) => [pid, text]));
 }
 
-// ---------- layouts: Build, Debug, Compare, Review, Focus, and your own ----------
+// ---------- layouts: the presets, and your own ----------
 // A layout is a shape: a tree like a layout's, whose chat groups are 'chat' / 'chat2' and whose pane groups are slots
 // 's1', 's2'… each with the pane tab it shows (kind: art, browser, trace, term, files). It may name the slot that
 // follows the agent (follow), slots pinned to the first or second chat (pins: { s1: 0 }), and hide the pane (focus).
 // fitLayout puts a project's groups into a shape without closing anything: its pane groups keep their ids (so their
 // boxes, frames and terminals stay), file tabs go to the nearest slot, and the chats keep their tabs.
-const slot = (id, kind, w = 1) => ({ t: 'g', id, kind, w: w3(w) });
+//
+// The presets are honest: a layout only arranges tabs the project has. A slot may list the pane tabs it prefers
+// (prefer), and shows the first one that has something in it (pickKind); a side with nothing yet gets a short hint with
+// what fills it (hintFor), never made-up content. A preset that needs what the project hasn't got (a second chat,
+// changes to review) is greyed with the reason (layoutBlock). The first nine have Ctrl+Alt+1…9 (LAYOUT_KEYS, ids in
+// the shortcuts table).
+const slot = (id, kind, w = 1, prefer = null) => ({ t: 'g', id, kind, w: w3(w), ...(prefer ? { prefer } : {}) });
 export const LAYOUTS = {
   // Single: every tab in one strip and one group; the chat and its pane share the space, the tab you pick in front.
   single: { name: 'Single', tip: 'Every tab in one row: the chat, its steps, pages, terminals and files; the one you pick fills the space', root: split('row', [slot(CHAT_GROUP, null, 1), slot('s1', 'art', 1)]), single: true },
-  build: { name: 'Build', tip: 'The chat on the left; the browser over the terminal on the right', root: split('row', [slot(CHAT_GROUP, null, 1.4), split('col', [slot('s1', 'browser'), slot('s2', 'term')])]), follow: 's1' },
-  debug: { name: 'Debug', tip: 'The chat, its steps, and the browser over the terminal', root: split('row', [slot(CHAT_GROUP, null, 1.2), slot('s1', 'trace'), split('col', [slot('s2', 'browser'), slot('s3', 'term')])]), follow: 's2' },
-  compare: { name: 'Compare', tip: 'Two chats side by side, each with its own browser below it', root: split('row', [split('col', [slot(CHAT_GROUP, null, 1.3), slot('s1', 'browser')]), split('col', [slot(CHAT2_GROUP, null, 1.3), slot('s2', 'browser')])]), follow: 's1', pins: { s1: 0, s2: 1 }, chats: 2 },
-  review: { name: 'Review', tip: 'The chat and the project\'s files, to read what changed', root: split('row', [slot(CHAT_GROUP, null, 1), slot('s1', 'files', 1.3)]) },
-  focus: { name: 'Focus', tip: 'Only the chat', root: split('row', [slot(CHAT_GROUP, null, 1.4), slot('s1', 'art')]), focus: true },
+  focus: { name: 'Focus', tip: 'The chat alone: the sidebar and the other groups hide. Esc or Focus again brings them back', root: split('row', [slot(CHAT_GROUP, null, 1.4), slot('s1', 'art')]), focus: true },
+  preview: { name: 'Chat + preview', tip: 'The chat on the left; the agent\'s page, steps, plans and files on the right, following the agent', root: split('row', [slot(CHAT_GROUP, null, 0.45), slot('s1', 'browser', 0.55, ['browser', 'trace', 'art'])]), follow: 's1' },
+  previewFirst: { name: 'Preview first', tip: 'The agent\'s page big on the left, the chat on the right: for games and visual work', root: split('row', [slot('s1', 'browser', 0.62), slot(CHAT_GROUP, null, 0.38)]), follow: 's1' },
+  watch: { name: 'Watch the build', tip: 'The chat on the left; its steps over the agent\'s page on the right', root: split('row', [slot(CHAT_GROUP, null, 0.45), split('col', [slot('s1', 'trace', 0.45), slot('s2', 'browser', 0.55)], 0.55)]), follow: 's2' },
+  three: { name: 'Three columns', tip: 'The chat, its steps and the page side by side: for wide screens', root: split('row', [slot(CHAT_GROUP, null, 0.38), slot('s1', 'trace', 0.27), slot('s2', 'browser', 0.35)]), follow: 's2' },
+  stacked: { name: 'Stacked', tip: 'The chat on top, the page below: for tall or portrait screens', root: split('col', [slot(CHAT_GROUP, null, 0.5), slot('s1', 'browser', 0.5)]), follow: 's1' },
+  pageTerm: { name: 'Chat + page + terminal', tip: 'The chat on the left; the page over the project\'s terminal and server output on the right', root: split('row', [slot(CHAT_GROUP, null, 0.45), split('col', [slot('s1', 'browser', 0.6), slot('s2', 'term', 0.4)], 0.55)]), follow: 's1' },
+  twoChats: { name: 'Two chats', tip: 'Two chats side by side, each over its own steps, pages and files', root: split('row', [split('col', [slot(CHAT_GROUP, null, 1.6), slot('s1', 'trace')]), split('col', [slot(CHAT2_GROUP, null, 1.6), slot('s2', 'trace')])]), pins: { s1: 0, s2: 1 }, chats: 2 },
+  twoPages: { name: 'Two chats + pages', tip: 'Two chats side by side, each over its own page', root: split('row', [split('col', [slot(CHAT_GROUP, null, 0.55), slot('s1', 'browser', 0.45)]), split('col', [slot(CHAT2_GROUP, null, 0.55), slot('s2', 'browser', 0.45)])]), follow: 's1', pins: { s1: 0, s2: 1 }, chats: 2 },
+  review: { name: 'Review changes', tip: 'The chat on the left; the Changes of its replies on the right', root: split('row', [slot(CHAT_GROUP, null, 0.42), slot('s1', 'art', 0.58)]), needs: 'changes' },
 };
-export const LAYOUT_ORDER = ['single', 'build', 'debug', 'compare', 'review', 'focus'];
+/** Layout ▾ in groups, in this order; the first nine take Ctrl+Alt+1…9. */
+export const LAYOUT_GROUPS = [['Basic', ['single', 'focus']], ['Build', ['preview', 'previewFirst', 'watch', 'three', 'stacked']], ['Debug', ['pageTerm']], ['Compare', ['twoChats', 'twoPages']], ['Review', ['review']]];
+export const LAYOUT_ORDER = LAYOUT_GROUPS.flatMap((g) => g[1]);
+/** layout key → its id in the shortcuts table ('layout.1'…'layout.9'). */
+export const LAYOUT_KEYS = Object.fromEntries(LAYOUT_ORDER.slice(0, 9).map((k, i) => [k, `layout.${i + 1}`]));
+// The keys a project saved before the presets were rethought: the nearest one now.
+const OLD_KEYS = { build: 'pageTerm', debug: 'three', compare: 'twoPages' };
+/** A saved preset key as it is now (an old one renamed); own layouts ('my:…') pass through. null for nothing. */
+export const layoutKey = (k) => (typeof k === 'string' && k ? OLD_KEYS[k] || k : null);
+/**
+ * Why a preset can't be used right now ('' when it can). facts: { chats: open chats in the project, changes: files the
+ * chat's replies changed (and not undone) }.
+ */
+export function layoutBlock(key, { chats = 1, changes = 0 } = {}) {
+  const l = LAYOUTS[key];
+  if (!l) return '';
+  if (l.chats === 2 && chats < 2) return 'Open a second chat first';
+  if (l.needs === 'changes' && !changes) return 'No changes in this chat yet';
+  return '';
+}
+/** Which pane tab a slot shows: the first it prefers that has something (has: { browser: true, … }), else its own. */
+export const pickKind = (s, has = {}) => (s?.prefer || []).find((k) => has[k]) || s?.kind || 'art';
+/**
+ * The hint a side with nothing yet shows: { note, acts } or null when it has what it is there for. acts are what fill
+ * it: 'page' (open a page), 'server' (start the project's server), 'changes' (open the Changes tabs). kind: the pane tab
+ * it shows; facts: { pages, steps, changes, changesOpen, servers, pinned (a chat of its own), layout (preset key) }.
+ */
+export function hintFor(kind, { pages = 0, steps = false, changes = 0, changesOpen = 0, servers = 0, pinned = false, layout = null } = {}) {
+  if (kind === 'browser' && !pages) {
+    const note = pinned ? 'This chat hasn\'t opened a page yet.' : layout === 'preview' && !steps ? 'The agent\'s page and steps appear here when it starts.' : 'The agent\'s page appears here when it starts.';
+    return { note, acts: servers ? ['server', 'page'] : ['page'] };
+  }
+  if (kind === 'trace' && !steps) return { note: pinned ? 'This chat hasn\'t started a reply yet: its steps appear here.' : 'Steps appear here when the agent starts a reply.', acts: [] };
+  if (kind === 'art' && layout === 'review' && changes && !changesOpen) return { note: `${changes} file${changes === 1 ? '' : 's'} changed in this chat. Their Changes aren't open yet.`, acts: ['changes'] };
+  return null;
+}
+/**
+ * A layout's little diagram: each group's box as fractions of the whole ({ id, kind, follow, x, y, w, h }), in reading
+ * order. Works for presets and your own; kind is 'chat' for a chat group.
+ */
+export function layoutBoxes(shape) {
+  if (!shape?.root) return [];
+  const r = rects(shape.root, { x: 0, y: 0, w: 1000, h: 1000 }, 0).groups, f = (v) => Math.round(v) / 1000;
+  return groups(shape.root).map((g) => ({ id: g.id, kind: isChatGroup(g.id) ? 'chat' : g.kind, follow: shape.follow === g.id, x: f(r[g.id].x), y: f(r[g.id].y), w: f(r[g.id].w), h: f(r[g.id].h) }));
+}
 const SLOT_KINDS = new Set(['art', 'browser', 'trace', 'term', 'files']);
 /** A layout's shape, from what is on screen (Save layout as…). chats: the chat ids on screen, in order. */
 export function shapeOf(lay, { follow = null, pins = {}, chats = [], focus = false } = {}) {
@@ -545,23 +600,33 @@ export function withChat2(shape) {
 }
 /**
  * The project's layout in a shape. chat2: the chat for the second chat group (null drops it from the shape).
- * Gives { layout, follow, pins: { gid: chatIndex }, kinds: { gid: pane }, added: [gid], removed: [gid] }.
+ * Gives { layout, follow, pins: { gid: chatIndex }, kinds: { gid: pane }, slots: { gid: { kind, prefer? } }, added: [gid],
+ * removed: [gid] }.
  */
-export function fitLayout(lay, shape, { chat2 = null, order = null } = {}) {
+export function fitLayout(lay, shape, { chat2 = null, order = null, shows = null } = {}) {
   // order: which pane groups are kept first (the page's own first area holds the project's terminal, so it goes first).
+  // shows: what each group shows now ({ gid: pane }): a slot takes the group already showing its tab, so a page or a
+  // terminal keeps its own box (nothing reloads, nothing loses its screen); the first group in order is always kept.
   const side = sideGroups(lay), old = order ? [...order.map((id) => side.find((g) => g.id === id)).filter(Boolean), ...side.filter((g) => !order.includes(g.id))] : side, slots = groups(shape.root).filter((g) => !isChatGroup(g.id));
   let next = lay.next;
-  const ids = {}; slots.forEach((g, i) => { ids[g.id] = old[i]?.id || `g${next++}`; });
-  // Tabs of the pane groups that aren't their five pane tabs (files): to the slot at the same place, else the last.
+  const ids = {}, used = new Set(), take = (s, g) => { ids[s.id] = g.id; used.add(g.id); };
+  if (shows) for (const s of slots) { const g = old.find((o) => !used.has(o.id) && shows[o.id] === s.kind); if (g) take(s, g); }
+  if (old[0] && !used.has(old[0].id) && slots.length) {
+    const s = slots.find((x) => !ids[x.id]) || [...slots].reverse().find((x) => ids[x.id] !== old[0].id);
+    used.delete(ids[s.id]); take(s, old[0]);
+  }
+  for (const s of slots) if (!ids[s.id]) { const g = old.find((o) => !used.has(o.id)); if (g) take(s, g); else ids[s.id] = `g${next++}`; }
+  // Tabs of the pane groups that aren't their five pane tabs (files): to the slot that keeps their group, else the slot
+  // at the same place, else the last.
   const extra = slots.map(() => []);
-  old.forEach((g, i) => { for (const t of g.tabs) if (!isPaneTab(t, g.id)) extra[Math.min(i, slots.length - 1)].push(t); });
+  old.forEach((g, i) => { const at = slots.findIndex((s) => ids[s.id] === g.id); for (const t of g.tabs) if (!isPaneTab(t, g.id)) extra[at >= 0 ? at : Math.min(i, slots.length - 1)].push(t); });
   const curChat = findGroup(lay, CHAT_GROUP), cur2 = findGroup(lay, CHAT2_GROUP);
-  const kinds = {};
+  const kinds = {}, slotOf = {};
   const build = (n) => {
     if (n.t === 'g') {
       if (n.id === CHAT_GROUP) return group(CHAT_GROUP, curChat?.tabs?.length ? curChat.tabs : [tabId('chat', 'main')], curChat?.active, n.w);
       if (n.id === CHAT2_GROUP) { const id = chat2 ?? (cur2 ? chat2Id(lay) : null); return id ? group(CHAT2_GROUP, [tabId('chat', id)], null, n.w) : null; }
-      const gid = ids[n.id], i = slots.findIndex((x) => x.id === n.id); kinds[gid] = n.kind;
+      const gid = ids[n.id], i = slots.findIndex((x) => x.id === n.id); kinds[gid] = n.kind; slotOf[gid] = { kind: n.kind, ...(n.prefer ? { prefer: [...n.prefer] } : {}) };
       return group(gid, [...paneTabs(gid), ...extra[i]], tabId(PANE_KINDS[n.kind] || 'artifact', gid), n.w);
     }
     const kids = n.kids.map(build).filter(Boolean);
@@ -572,7 +637,7 @@ export function fitLayout(lay, shape, { chat2 = null, order = null } = {}) {
   if (!findGroup(root, layout.focus)) layout.focus = groups(root)[0]?.id ?? null;
   const pins = Object.fromEntries(Object.entries(shape.pins || {}).filter(([k]) => ids[k]).map(([k, v]) => [ids[k], v]));
   const now = new Set(Object.values(ids));
-  return { layout, follow: ids[shape.follow] || null, pins, kinds, added: Object.values(ids).filter((g) => !old.some((o) => o.id === g)), removed: old.map((g) => g.id).filter((g) => !now.has(g)) };
+  return { layout, follow: ids[shape.follow] || null, pins, kinds, slots: slotOf, added: Object.values(ids).filter((g) => !old.some((o) => o.id === g)), removed: old.map((g) => g.id).filter((g) => !now.has(g)) };
 }
 
 // ---------- where things open ----------

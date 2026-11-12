@@ -4,12 +4,18 @@
 // read from here, so a key you change is changed everywhere. Keys are written the way the page reads them from a key
 // press (keyCombo in app.js): modifiers Ctrl, Shift, Alt, Meta in that order, then the key ("Ctrl+Shift+T").
 
-export const KEY_GROUPS = { tabs: 'Chat tabs', move: 'Moving around', view: 'Window', find: 'Search', typing: 'Typing', edit: 'Editing text', mic: 'Mic', settings: 'Settings', zoom: 'Zoom' };
+export const KEY_GROUPS = { tabs: 'Chat tabs', move: 'Moving around', view: 'Window', find: 'Search', typing: 'Typing', edit: 'Editing text', mic: 'Mic', settings: 'Settings', zoom: 'Zoom', layouts: 'Layouts' };
 
 const tabJumps = Array.from({ length: 9 }, (_, i) => ({
   id: `tab.${i + 1}`, group: 'tabs', keys: `Ctrl+${i + 1}`,
   label: i === 8 ? 'Go to the last chat tab' : `Go to chat tab ${i + 1}`,
   help: i === 0 ? 'Counted from the left of the chat tabs strip.' : '',
+}));
+// The first nine layouts of Layout ▾, in its order (workspace.js LAYOUT_ORDER and LAYOUT_KEYS; a test keeps them in step).
+const LAYOUT_NAMES = ['Single', 'Focus', 'Chat + preview', 'Preview first', 'Watch the build', 'Three columns', 'Stacked', 'Chat + page + terminal', 'Two chats'];
+const layoutKeys = LAYOUT_NAMES.map((name, i) => ({
+  id: `layout.${i + 1}`, group: 'layouts', keys: `Ctrl+Alt+${i + 1}`, label: `Layout: ${name}`,
+  help: i === 0 ? 'Arranges the tabs this project already has; nothing opens or closes. Window → Layout lists them all.' : i === 1 ? 'Again, or Esc, brings back what Focus hid.' : '',
 }));
 /**
  * The table. fixed: shown in the list but not changeable (typing keys, keys the desktop app or a dialog handles).
@@ -24,6 +30,7 @@ export const SHORTCUTS = [
   { id: 'tab.next', group: 'tabs', keys: 'Ctrl+Tab', label: 'Next chat tab' },
   { id: 'tab.prev', group: 'tabs', keys: 'Ctrl+Shift+Tab', label: 'Previous chat tab' },
   ...tabJumps,
+  ...layoutKeys,
   { id: 'tab.close', group: 'tabs', keys: 'Ctrl+W', label: 'Close the chat tab' },
   { id: 'tab.reopen', group: 'tabs', keys: 'Ctrl+Shift+T', label: 'Reopen the last closed tab', help: 'A chat, an area, a file or a page.' },
   { id: 'nav.back', group: 'move', keys: 'Alt+ArrowLeft', label: 'Back', help: 'To what was in front before. Inside a page of the Browser tab, Alt+← goes back in that page.' },

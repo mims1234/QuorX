@@ -8108,7 +8108,7 @@ const PANE_TAB_NAMES = { art: 'Artifact', browser: 'Browser', trace: 'Steps', te
 // keeping one of each: what an area used to keep for itself now sits on its tabs, so later two chats can each have
 // their own Steps, Browser and Terminal. The page's old names (G.view, G.bActive, AREA.st…) read and write them.
 // WK.history records what you bring to the front (chats, tabs, files, settings pages) for back / forward.
-const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory(), pins: {}, max: null, follow: null, preset: null };
+const WK = { lay: WS.defaultLayout(), tabs: new Map(), history: createHistory(), pins: {}, max: null, follow: null, preset: null, focusPrev: null };
 const LAYOUT_KEY = (projectId) => `oh-layout:${projectId}`, LAYOUT_MIGRATED = 'oh-layout-migrated';
 function wsTab(id) {
   let t = WK.tabs.get(id);
@@ -8872,12 +8872,16 @@ async function popBoot() {
   popState();
 }
 
-// ---------- layouts: Build, Debug, Compare, Review, Focus, and your own ----------
-// One click puts the whole workspace in a layout (WS.LAYOUTS). Nothing closes: pane groups keep their boxes (so pages
-// don't reload and terminals keep their screen), file tabs go to the nearest group, and the chats stay open as tabs.
-// Compare brings a second chat on screen (the next open tab); with two chats on screen the other layouts keep both
-// when there is room. The layout picked is kept per project; your own ("Save layout as…" in a group's ⋯) are kept on
-// this computer and offered in every project. A phone shows one group at a time instead.
+// ---------- layouts: the presets (Layout ▾), and your own ----------
+// One pick arranges the whole workspace (WS.LAYOUTS, grouped by WS.LAYOUT_GROUPS). Nothing opens or closes: pane groups
+// keep their boxes (so pages don't reload and terminals keep their screen), file tabs go to the nearest group, and the
+// chats stay open as tabs. Each group shows the pane tab its slot prefers that has something in it; a side with
+// nothing yet shows a short hint with what fills it (see "layout hints"). A preset the project can't fill (Two chats
+// with one chat, Review changes with no changes) is greyed and says why. Two chats asks which two when more are open.
+// The layout picked is kept per project ("Custom" once you split or move by hand); your own ("Save layout as…") are
+// kept on this computer and offered in every project. Layout ▾ sits at the right end of the project row (in the old
+// top bar without the frame); Window → Layout, Settings → Window & layout and Ctrl+Alt+1…9 make the same picks. Focus
+// also hides the sidebar; Focus again or Esc brings back what it hid. A phone shows one group at a time instead.
 const MY_LAYOUTS = 'oh-layouts-mine';
 function myLayouts() {
   let l = []; try { l = JSON.parse(localStorage.getItem(MY_LAYOUTS) || '[]'); } catch { /* storage off */ }
@@ -8885,18 +8889,55 @@ function myLayouts() {
 }
 function saveMyLayouts(list) { try { localStorage.setItem(MY_LAYOUTS, JSON.stringify(list)); } catch { /* storage off */ } wsLayoutsDraw(); }
 const layoutOf = (key) => WS.LAYOUTS[key] || myLayouts().find((x) => `my:${x.id}` === key)?.shape || null;
-const layoutName = (key) => WS.LAYOUTS[key]?.name || myLayouts().find((x) => `my:${x.id}` === key)?.name || 'Layout';
-async function wsApplyLayout(key) {
+const layoutName = (key) => WS.LAYOUTS[key]?.name || myLayouts().find((x) => `my:${x.id}` === key)?.name || (key ? 'Layout' : 'Custom');
+// What a preset needs from the project: the open chats here, and the files this chat's replies changed (not undone).
+function chatChanges(c) {
+  return (c?.agent?.messages || []).filter((m) => m.role === 'assistant' && !m.live && !m.undone).reduce((n, m) => n + Math.max(0, (m.stats?.changed?.length || 0) - (m.undoneFiles?.length || 0)), 0);
+}
+const chatHasSteps = (c) => !!c?.agent?.messages?.some((m) => m.role === 'assistant' && m.runId);
+const wsOpenChats = () => [...new Set([...G.panes, ...WT.tabs])].filter((id) => chatInfo(id));
+function wsLayoutWhy(key) {
+  if (isPhone()) return 'A phone shows one group at a time';
+  if (!primaryChat()) return 'Open a chat first';
+  return WS.layoutBlock(key, { chats: wsOpenChats().length, changes: chatChanges(primaryChat()) });
+}
+// Layout ▾, a menu, a key or Settings picked one: greyed ones say why, Two chats asks which two, Focus again leaves it.
+function wsLayoutPick(key, anchor = null) {
+  key = WS.layoutKey(key);
+  if (!layoutOf(key)) return;
+  if (key === 'focus' && WK.preset === 'focus') return wsFocusOff();
+  const why = WS.LAYOUTS[key] ? wsLayoutWhy(key) : '';
+  if (why) return flashTip(anchor?.isConnected ? anchor : $('#wsLayouts .wl-btn') || document.body, `${layoutName(key)}: ${why}`, 2600);
+  if (WS.LAYOUTS[key]?.chats === 2) return wsPickPair(key, anchor);
+  return wsApplyLayout(key);
+}
+// Which two chats: the two on screen, else the chat you use and the only other one; with more, a short list with the
+// chat you use and each other first (the next one suggested), then other pairs.
+function wsPickPair(key, anchor) {
+  const cur = G.panes[0];
+  if (G.panes.length === 2) return wsApplyLayout(key, { pair: [...G.panes] });
+  const others = wsOpenChats().filter((id) => id !== cur);
+  if (others.length === 1) return wsApplyLayout(key, { pair: [cur, others[0]] });
+  const pairName = (a, b) => `${clip(chatTitle(a), 24)} + ${clip(chatTitle(b), 24)}`;
+  const firsts = others.map((id, i) => [`${pairName(cur, id)}${i ? '' : '  (suggested)'}`, () => wsApplyLayout(key, { pair: [cur, id] })]);
+  const rest = others.flatMap((x, i) => others.slice(i + 1).map((y) => [pairName(x, y), () => wsApplyLayout(key, { pair: [x, y] })])).slice(0, 8);
+  const el = anchor?.isConnected ? anchor : $('#wsLayouts .wl-btn') || document.body;
+  popMenu({ preventDefault() {}, stopPropagation() {}, clientX: 0, clientY: 0, anchor: el }, [[`${layoutName(key)}: which two chats?`, () => {}, { disabled: true }], ...firsts, ...(rest.length ? [null, ...rest] : [])]);
+}
+async function wsApplyLayout(key, { pair = null } = {}) {
+  key = WS.layoutKey(key);
+  if (pair && pair[0] !== G.panes[0] && chatInfo(pair[0])) await showChat(pair[0], 0);
   const shape0 = layoutOf(key), c = primaryChat();
   if (!shape0 || !c || isPhone()) return;
-  let chat2 = G.panes[1] || null, shape = shape0;
+  let chat2 = pair ? pair[1] : G.panes[1] || null, shape = shape0;
+  if (pair && !(await getChat(chat2))) return;
   if (shape.chats === 2 && !chat2) {
     const other = WT.tabs.find((id) => !G.panes.includes(id) && chatInfo(id));
-    if (!other || !(await getChat(other))) return flashTip($('#wsLayouts') || document.body, `${layoutName(key)} needs a second chat: open one from the sidebar first`, 2600);
+    if (!other || !(await getChat(other))) return flashTip($('#wsLayouts .wl-btn') || document.body, `${layoutName(key)}: open a second chat first`, 2600);
     chat2 = other;
   }
   if (chat2 && shape.chats !== 2) { shape = WS.withChat2(shape); if (shape.chats !== 2) chat2 = null; }
-  const r = WS.fitLayout(WK.lay, shape, { chat2, order: PA.list.map((a) => a.gid) });
+  const r = WS.fitLayout(WK.lay, shape, { chat2, order: PA.list.map((a) => a.gid), shows: Object.fromEntries(PA.list.map((a) => [a.gid, inArea(a, paneTab)])) });
   for (const gid of r.removed) { const a = areaOf(gid); if (a) paneDropArea(a, { keepTabs: true }); }
   WK.lay = r.layout;
   for (const gid of r.added) paneMakeArea(gid);
@@ -8907,67 +8948,145 @@ async function wsApplyLayout(key) {
   WK.follow = r.follow; WK.max = null;
   if (!areaOf(PA.focus?.gid)) PA.focus = PA.list[0];
   AREA = PA.focus;
-  // Each group shows the pane tab the layout gives it (its file tabs stay in its strip).
-  for (const [gid, kind] of Object.entries(r.kinds)) { const a = areaOf(gid); if (a) inArea(a, () => { G.view = paneView(focused(), kind); }); }
+  // Each group shows the pane tab its slot prefers that has something for its chat (its file tabs stay in its strip).
+  for (const [gid, s] of Object.entries(r.slots)) { const a = areaOf(gid); if (a) inArea(a, () => { const ac = focused(); G.view = paneView(ac, WS.pickKind(s, { browser: !!ac && browserTabs(ac).length > 0, trace: chatHasSteps(ac) })); }); }
+  // Focus hides the sidebar too, and remembers how things were so Focus again or Esc brings them back.
+  if (shape.focus && WK.preset !== 'focus' && !WK.focusPrev) { WK.focusPrev = { side: !!G.sideHidden, preset: WK.preset }; if (!G.sideHidden) qfToggleSidebar(); }
+  else if (!shape.focus && WK.focusPrev) { if (!WK.focusPrev.side && G.sideHidden) qfToggleSidebar(); WK.focusPrev = null; }
   setPaneHidden(!!shape.focus, true);
   WK.preset = key; if (key === 'single') WK.front = 'chat';
   if (chatsChanged) renderPanes(); else { syncLayout(); eachArea(renderPane); paneMarkAreas(); }
   paneSave(); wsChrome(); wsLayoutsDraw(); deskPlace(true); window.dispatchEvent(new Event('resize'));
 }
-// The layout buttons in the top bar: the five, then yours (▾).
+// Focus again, or Esc: the sidebar comes back as it was, and the layout from before (Single if it can't be used now).
+function wsFocusOff() {
+  const p = WK.focusPrev, back = WS.layoutKey(p?.preset);
+  return wsApplyLayout(back && back !== 'focus' && layoutOf(back) && !(WS.LAYOUTS[back] && wsLayoutWhy(back)) ? back : 'single');
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || WK.preset !== 'focus' || isPhone() || inTerminal(e.target)) return;
+  if (document.querySelector('dialog[open], .exp-menu, .qf-menu, .wl-menu') || (e.target.closest?.('textarea, input, [contenteditable="true"]') && (e.target.value || e.target.textContent))) return;
+  e.preventDefault(); wsFocusOff();
+});
+// A layout's little picture: its groups as boxes (the chat filled, the group that follows the agent in the accent).
+// Single is one box (every tab in one row); Focus is the chat alone.
+function lyDiag(shape, w = 22, h = 14) {
+  const bx = shape?.single ? [{ kind: 'art', x: 0, y: 0, w: 1, h: 1 }] : shape?.focus ? [{ kind: 'chat', x: 0.22, y: 0, w: 0.56, h: 1 }] : WS.layoutBoxes(shape);
+  return `<svg class="ly-diag" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${bx.map((b) => `<rect x="${(b.x * w + 0.75).toFixed(1)}" y="${(b.y * h + 0.75).toFixed(1)}" width="${Math.max(1, b.w * w - 1.5).toFixed(1)}" height="${Math.max(1, b.h * h - 1.5).toFixed(1)}" rx="1.2" class="${b.kind === 'chat' ? 'lyd-chat' : b.follow ? 'lyd-follow' : 'lyd-pane'}"/>`).join('')}</svg>`;
+}
+// What is on screen as a shape (for Custom's picture).
+const wsShapeNow = () => WS.shapeOf(WK.lay, { follow: wsFollowGid(), pins: WK.pins, chats: G.panes, focus: G.paneHidden });
+// ▦ Layout ▾: the current layout's picture and name ("Custom" after a change by hand).
 function wsLayoutsDraw() {
   const box = $('#wsLayouts'); if (!box) return;
-  const mine = myLayouts(), cur = WK.preset, on = !!focused();
-  const sig = JSON.stringify([cur, on, mine.map((x) => [x.id, x.name])]);
-  if (box.dataset.sig === sig) return;
-  box.dataset.sig = sig;
-  const myCur = cur?.startsWith('my:') ? mine.find((x) => `my:${x.id}` === cur) : null;
-  box.innerHTML = WS.LAYOUT_ORDER.map((k) => `<button type="button" data-ly="${k}" aria-pressed="${cur === k}" title="${esc(WS.LAYOUTS[k].tip)}" ${on ? '' : 'disabled'}>${esc(WS.LAYOUTS[k].name)}</button>`).join('')
-    + `<button type="button" class="wl-mine" aria-haspopup="menu" aria-pressed="${!!myCur}" title="Your own layouts: apply, rename or delete (save one from a group's ⋯)" ${on ? '' : 'disabled'}>${myCur ? esc(clip(myCur.name, 16)) : 'Mine'} ▾</button>`;
+  const cur = WS.layoutKey(WK.preset), on = !!focused() && !isPhone(), shape = (cur && layoutOf(cur)) || (WK.lay?.root ? wsShapeNow() : null);
+  const name = cur && layoutOf(cur) ? layoutName(cur) : 'Custom', pic = shape ? lyDiag(shape) : '';
+  const sig = JSON.stringify([name, on, pic]);
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    box.innerHTML = !on ? '' : `<button type="button" class="wl-btn" aria-haspopup="menu" aria-label="Layout: ${esc(name)}" title="Layout: arrange this project's tabs (also Window → Layout, Ctrl+Alt+1…9)" ${on ? '' : 'disabled'}>${pic}<span class="wl-name">${esc(clip(name, 22))}</span><span class="wl-caret" aria-hidden="true">▾</span></button>`;
+  }
+  wsHintsQueue();
 }
 function wsLayoutsWire() {
   const box = $('#wsLayouts'); if (!box) return;
-  box.onclick = (e) => {
-    const b = e.target.closest('button'); if (!b || b.disabled) return;
-    if (b.dataset.ly) return wsApplyLayout(b.dataset.ly);
-    if (b.classList.contains('wl-mine')) return wsMyLayoutsMenu(b);
-  };
+  box.onclick = (e) => { const b = e.target.closest('.wl-btn'); if (b && !b.disabled) wsLayoutMenu(b); };
   wsLayoutsDraw();
 }
-// Your layouts: apply one, rename it, delete it (a search past 8).
-function wsMyLayoutsMenu(anchor) {
-  document.querySelector('.wl-list')?.remove();
-  const mine = myLayouts();
-  const m = document.createElement('div'); m.className = 'wl-list exp-menu fx-menu'; m.setAttribute('role', 'menu');
-  m.innerHTML = `${mine.length > 8 ? '<div class="wl-lf"></div>' : ''}<div class="wl-rows">${mine.map((x) => `<div class="wl-row" data-lf-text="${esc(x.name.toLowerCase())}" data-id="${esc(x.id)}"><button type="button" role="menuitem" class="wl-apply ${WK.preset === `my:${x.id}` ? 'on' : ''}">${esc(x.name)}</button><button type="button" class="wl-ren" title="Rename" aria-label="Rename ${esc(x.name)}">✏</button><button type="button" class="wl-del" title="Delete" aria-label="Delete ${esc(x.name)}">🗑</button></div>`).join('') || '<span class="wt-none">None yet. In a group\'s ⋯, choose Save layout as…</span>'}</div>`;
+// One row of Layout ▾ (also the tiles in Settings): picture, name, why it is greyed, its key.
+function wsLayoutRow(k, cur) {
+  const why = WS.LAYOUTS[k] ? wsLayoutWhy(k) : '', key = WS.LAYOUT_KEYS[k] ? keyLabel(WS.LAYOUT_KEYS[k]) : '';
+  return `<button type="button" role="menuitemradio" aria-checked="${cur === k}" class="wl-item ${cur === k ? 'on' : ''}" data-ly="${esc(k)}" ${why ? `aria-disabled="true" title="${esc(why)}"` : `title="${esc(WS.LAYOUTS[k]?.tip || '')}"`}>${lyDiag(layoutOf(k))}<span class="wl-txt"><span class="wl-nm">${esc(layoutName(k))}</span>${why ? `<small class="wl-why">${esc(why)}</small>` : ''}</span><kbd class="wl-key">${esc(key)}</kbd></button>`;
+}
+// Layout ▾: the presets in their groups, then yours (rename, delete; a search past 8), then Save layout as….
+function wsLayoutMenu(anchor) {
+  const open = document.querySelector('.wl-menu'); open?.remove(); if (open?._anchor === anchor) return;
+  const mine = myLayouts(), cur = WS.layoutKey(WK.preset);
+  const m = document.createElement('div'); m.className = 'wl-menu exp-menu fx-menu'; m.setAttribute('role', 'menu'); m.setAttribute('aria-label', 'Layouts'); m._anchor = anchor;
+  m.innerHTML = WS.LAYOUT_GROUPS.map(([g, ks]) => `<div class="wl-head">${esc(g)}</div>${ks.map((k) => wsLayoutRow(k, cur)).join('')}`).join('')
+    + `<div class="wl-head">Your own</div>${mine.length > 8 ? '<div class="wl-lf"></div>' : ''}<div class="wl-rows">${mine.map((x) => `<div class="wl-row" data-lf-text="${esc(x.name.toLowerCase())}" data-id="${esc(x.id)}"><button type="button" role="menuitemradio" aria-checked="${cur === `my:${x.id}`}" class="wl-item wl-apply ${cur === `my:${x.id}` ? 'on' : ''}">${lyDiag(x.shape)}<span class="wl-txt"><span class="wl-nm">${esc(x.name)}</span></span></button><button type="button" class="wl-ren" title="Rename" aria-label="Rename ${esc(x.name)}">✏</button><button type="button" class="wl-del" title="Delete" aria-label="Delete ${esc(x.name)}">🗑</button></div>`).join('') || '<span class="wt-none">None yet: arrange the groups, then Save layout as…</span>'}</div>`
+    + `<hr class="fx-sep" role="separator"><button type="button" role="menuitem" class="wl-item wl-save">💾 <span class="wl-txt"><span class="wl-nm">Save layout as…</span></span></button>`;
   document.body.append(m);
   if (mine.length > 8) listFilter($('.wl-lf', m), { key: 'myLayouts', rows: () => m.querySelectorAll('.wl-row'), placeholder: 'Find a layout' });
   const r = anchor.getBoundingClientRect(), w = m.getBoundingClientRect();
-  m.style.left = `${Math.max(8, Math.min(r.right - w.width, innerWidth - w.width - 8))}px`; m.style.top = `${Math.min(r.bottom + 4, innerHeight - w.height - 8)}px`;
+  m.style.left = `${Math.max(8, Math.min(r.right - w.width, innerWidth - w.width - 8))}px`; m.style.top = `${Math.max(8, Math.min(r.bottom + 4, innerHeight - w.height - 8))}px`;
+  m.style.maxHeight = `${innerHeight - 16}px`;
   const close = () => { m.remove(); removeEventListener('pointerdown', away, true); removeEventListener('keydown', key, true); };
-  const away = (ev) => { if (!m.contains(ev.target) && ev.target !== anchor && !ev.target.closest?.('dialog')) close(); };
-  const key = (ev) => { if (ev.key === 'Escape' && !document.querySelector('dialog[open]')) { ev.preventDefault(); close(); anchor.focus(); } };
+  const away = (ev) => { if (!m.contains(ev.target) && !anchor.contains(ev.target) && !ev.target.closest?.('dialog')) close(); };
+  const items = () => [...m.querySelectorAll('.wl-item:not([aria-disabled="true"]), .lf-q')];
+  const key = (ev) => {
+    if (document.querySelector('dialog[open]')) return;
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); anchor.focus(); return; }
+    if (ev.key === 'Tab') return close();
+    const list = items(), i = list.indexOf(document.activeElement), to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[ev.key];
+    if (to == null || !list.length || (document.activeElement?.matches?.('.lf-q') && (ev.key === 'Home' || ev.key === 'End'))) return;
+    ev.preventDefault(); list[(to + list.length) % list.length].focus();
+  };
   addEventListener('pointerdown', away, true); addEventListener('keydown', key, true);
   m.onclick = async (ev) => {
+    if (ev.target.closest('.wl-save')) { close(); return wsSaveLayoutAs(); }
+    const pre = ev.target.closest('.wl-item[data-ly]');
+    if (pre) { if (pre.getAttribute('aria-disabled') === 'true') return flashTip(pre, pre.title, 2200); close(); return wsLayoutPick(pre.dataset.ly, anchor); }
     const row = ev.target.closest('.wl-row'); if (!row) return;
     const id = row.dataset.id, list = myLayouts(), x = list.find((y) => y.id === id); if (!x) return;
-    if (ev.target.closest('.wl-apply')) { close(); return wsApplyLayout(`my:${id}`); }
+    if (ev.target.closest('.wl-apply')) { close(); return wsLayoutPick(`my:${id}`, anchor); }
     if (ev.target.closest('.wl-ren')) { close(); const name = await uiPrompt('Rename this layout', x.name); if (name && String(name).trim()) { x.name = String(name).trim().slice(0, 60); saveMyLayouts(list); } return; }
-    if (ev.target.closest('.wl-del')) { close(); if (await uiConfirm(`Delete the layout “${x.name}”? Your groups and tabs stay as they are.`, { ok: 'Delete', danger: true })) { saveMyLayouts(list.filter((y) => y.id !== id)); if (WK.preset === `my:${id}`) { WK.preset = null; paneSave(); } } }
+    if (ev.target.closest('.wl-del')) { close(); if (await uiConfirm(`Delete the layout “${x.name}”? Your groups and tabs stay as they are.`, { ok: 'Delete', danger: true })) { saveMyLayouts(list.filter((y) => y.id !== id)); if (WK.preset === `my:${id}`) { WK.preset = null; paneSave(); wsLayoutsDraw(); } } }
   };
-  (m.querySelector('.lf-q') || m.querySelector('.wl-apply'))?.focus();
+  (m.querySelector('.wl-item.on:not([aria-disabled="true"])') || items()[0])?.focus();
 }
-// ⋯ → Save layout as…: what is on screen now, as one of your layouts (a name used again replaces it).
+// Save layout as…: what is on screen now, as one of your layouts (a name used again replaces it).
 async function wsSaveLayoutAs() {
   const name = await uiPrompt('Save this layout as', WK.preset?.startsWith('my:') ? layoutName(WK.preset) : 'My layout');
   if (!name || !String(name).trim()) return;
   const n = String(name).trim().slice(0, 60), list = myLayouts();
-  const shape = WS.shapeOf(WK.lay, { follow: wsFollowGid(), pins: WK.pins, chats: G.panes, focus: G.paneHidden });
+  const shape = wsShapeNow();
   const was = list.find((x) => x.name.toLowerCase() === n.toLowerCase());
   const id = was?.id || Date.now().toString(36);
   saveMyLayouts([...list.filter((x) => x !== was), { id, name: n, shape }]);
   WK.preset = `my:${id}`; paneSave(); wsLayoutsDraw();
-  flashTip($('#wsLayouts .wl-mine') || document.body, `Saved as “${n}”: in every project, under Mine`, 2200);
+  flashTip($('#wsLayouts .wl-btn') || document.body, `Saved as “${n}”: in every project, under Layout ▾ › Your own`, 2400);
+}
+// The layout a project starts in (Settings → Window & layout); only presets that need nothing more than one chat.
+const NEW_LAYOUTS = ['single', 'focus', 'preview', 'previewFirst', 'watch', 'three', 'stacked', 'pageTerm'];
+const newProjectLayout = () => { const k = uiOf(G.settings || {}).newLayout; return NEW_LAYOUTS.includes(k) ? k : 'single'; };
+
+// ---------- layout hints: a side with nothing yet says what fills it ----------
+// A layout never makes up content. A group in a preset whose pane tab has nothing for its chat (no page yet, no reply
+// yet, Changes not open) shows a quiet note over its body with the action that fills it; the note goes as soon as
+// there is something to show. Only in a preset (not Single, Focus or a layout of your own), only over the group's
+// body (its tabs and toolbar stay usable), and never over a real page (it only shows when there is none).
+let lyHintRaf = 0;
+function wsHintsQueue() { if (!lyHintRaf) lyHintRaf = requestAnimationFrame(() => { lyHintRaf = 0; wsHintsDraw(); }); }
+function wsHintFor(a) {
+  const key = WS.layoutKey(WK.preset);
+  if (!WS.LAYOUTS[key] || key === 'single' || key === 'focus' || isPhone() || G.paneHidden) return null;
+  return inArea(a, () => {
+    const c = focused(); if (!c || G.view.ftab) return null;
+    const changesOpen = fileTabs(a.gid).filter((t) => { const st = WK.tabs.get(t)?.st; return st?.f?.kind === 'changes' && st.chat === c.id; }).length;
+    return WS.hintFor(paneTab(), { pages: browserTabs(c).length, steps: chatHasSteps(c), changes: key === 'review' ? chatChanges(c) : 0, changesOpen, pinned: !!pinOf(a), layout: key });
+  });
+}
+const LY_ACTS = { page: '＋ Open a page', servers: '🖥 Servers & pages…', changes: '± Open the Changes' };
+function wsHintsDraw() {
+  for (const a of PA.list) {
+    const h = wsHintFor(a), body = $('#paneBody', a.el) || a.el.querySelector('.pane-body');
+    let el = a.el.querySelector(':scope > .ly-hint');
+    if (!h || !body) { el?.remove(); continue; }
+    const sig = JSON.stringify(h);
+    if (!el) { el = document.createElement('div'); el.className = 'ly-hint'; el.setAttribute('role', 'note'); a.el.append(el); el.onclick = (e) => { const b = e.target.closest('[data-ly-act]'); if (b) wsHintAct(a, b.dataset.lyAct); }; }
+    if (el.dataset.sig !== sig) { el.dataset.sig = sig; el.innerHTML = `<p class="lh-note">${esc(h.note)}</p>${h.acts.length ? `<div class="lh-acts">${h.acts.map((x) => `<button type="button" class="st-btn secondary sm" data-ly-act="${x}">${esc(LY_ACTS[x] || x)}</button>`).join('')}</div>` : ''}`; }
+    el.style.top = `${body.offsetTop}px`;
+  }
+}
+function wsHintAct(a, act) {
+  inArea(a, () => {
+    const c = focused(); if (!c) return;
+    if (act === 'page') { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl', a.el)?.focus()); }
+    if (act === 'servers') FRAME_ACTS.servers?.run?.();
+    if (act === 'changes') for (const m of c.agent.messages.filter((x) => x.role === 'assistant' && !x.live && !x.undone && (x.stats?.changed?.length || 0) > (x.undoneFiles?.length || 0))) wsOpenFile(c, { id: `changes:${m.runId}:all`, kind: 'changes', run: m.runId, ref: 'all', name: PANE_CARDS.changes.name(m) }, { into: a.gid, keep: true });
+  });
+  wsHintsQueue();
 }
 
 // After the tree changed: placed again and saved.
@@ -9173,7 +9292,8 @@ function paneChat(c) {
   const r = c ? wsLoad(c) : null;
   const ok = r?.layout && WS.findGroup(r.layout, WS.CHAT_GROUP) && WS.sideGroups(r.layout).length;
   const lay = ok ? r.layout : wsDefaultLayout();
-  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? r.preset || null : 'single'; WK.front = 'chat'; queueMicrotask(() => wsLayoutsDraw()); // a project's first layout: Single (every tab in one row)
+  WK.max = ok ? r.max || null : null; WK.follow = ok ? r.follow || null : null; WK.pins = ok ? { ...(r.pins || {}) } : {}; WK.preset = ok ? WS.layoutKey(r.preset) : 'single'; WK.front = 'chat'; if (WK.focusPrev && !WK.focusPrev.side && G.sideHidden) qfToggleSidebar(); WK.focusPrev = null; queueMicrotask(() => wsLayoutsDraw()); // a project's first layout: Single (every tab in one row), or the one Settings → Window & layout picks
+  if (!ok && c && newProjectLayout() !== 'single') setTimeout(() => { if (PA.pid === pid && WK.preset === 'single' && !wsLayoutWhy(newProjectLayout())) wsApplyLayout(newProjectLayout()); }, 0);
   PA.saved = '';
   const side = WS.sideGroups(lay).slice(0, PANE_MAX_AREAS);
   if (a0.gid !== side[0].id) { const old = a0.gid; a0.st.dsk = null; bindArea(a0, side[0].id); wsForget(old); }
@@ -9268,7 +9388,7 @@ function posBack(a) {
 // Page artifacts are hosted by the server (/art/<chat>/<id>), so the preview is always the newest version;
 // sites and apps reload by themselves when files in the project folder change.
 // What the area drew, then back to where you were reading in it.
-function renderPane() { return inArea(AREA, () => { const r = renderPaneNow(); posBack(AREA); return r; }); }
+function renderPane() { wsHintsQueue(); return inArea(AREA, () => { const r = renderPaneNow(); posBack(AREA); return r; }); }
 function renderPaneNow() {
   const c = focused();
   // Another chat brings back its own areas: the others are drawn too. The layout is the first chat's project's.
@@ -9739,6 +9859,8 @@ const KEY_RUN = {
   // The activity bar's views (QF.VIEWS); Search is chatsearch above.
   ...Object.fromEntries([...QF.VIEWS, ...QF.VIEWS_BOTTOM].filter((v) => v.key !== 'chatsearch').map((v) => [v.key, { run: () => { avPick(v.id); } }])),
   ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`tab.${i + 1}`, { run: () => wtJump(i + 1) }])),
+  // Ctrl+Alt+1…9: the first nine layouts of Layout ▾ (greyed ones say why).
+  ...Object.fromEntries(Object.entries(WS.LAYOUT_KEYS).map(([ly, id]) => [id, { run: () => { if (!focused() || isPhone()) return false; wsLayoutPick(ly); } }])),
 };
 // The few that must be caught before the page's own boxes see the key (find) run in the capture phase.
 document.addEventListener('keydown', (e) => {
@@ -10358,11 +10480,14 @@ function qfPlace(on) {
     if (nav) $('#qfNav').append(nav);
     if (pal) { $('#qfCmdSlot').append(pal); const s = $('span', pal); if (s) s.textContent = 'Go to or run…'; }
     for (const q of ['#staleNote', '#spend']) { const el = $(q); if (el) $('#qfRight').append(el); }
+    // ▦ Layout ▾ at the right end of the project row.
+    const ly = $('#wsLayouts'); if (ly) $('#qfRight').after(ly);
     qfOverlay();
     return true;
   }
   if (title.parentElement !== document.body) document.body.prepend(title, proj);
   if (nav && ws) ws.prepend(nav);
+  const ly = $('#wsLayouts'); if (ly && ws) ($('#wtPaneTabs') || ws.lastElementChild)?.after(ly);
   if (pal && top) { ($('.spacer', top) || top.lastElementChild)?.after(pal); const s = $('span', pal); if (s) s.textContent = 'Search'; }
   return false;
 }
@@ -10503,11 +10628,12 @@ const FRAME_SUBS = {
     ...[...QF.VIEWS, ...QF.VIEWS_BOTTOM].map((v) => ({ label: v.label, key: v.key, on: () => avOn() && !G.sideHidden && AV.view === v.id, run: () => avShow(v.id, { focus: v.id === 'search' }) })),
     '-', { label: 'Home', run: () => goHome() }, { label: 'Settings', run: () => openSettings() },
   ],
+  // Layout: the presets in their groups, each with its picture and key; greyed ones say why. Then yours.
   layouts: () => {
-    const on = !!focused() && !isPhone(), mine = myLayouts();
+    const on = !!focused() && !isPhone(), mine = myLayouts(), cur = () => WS.layoutKey(WK.preset);
     return [
-      ...WS.LAYOUT_ORDER.map((k) => ({ label: WS.LAYOUTS[k].name, on: () => WK.preset === k, ok: () => on, run: () => wsApplyLayout(k) })),
-      ...(mine.length ? ['-', ...mine.map((x) => ({ label: x.name, on: () => WK.preset === `my:${x.id}`, ok: () => on, run: () => wsApplyLayout(`my:${x.id}`) }))] : []),
+      ...WS.LAYOUT_GROUPS.flatMap(([, ks], gi) => [...(gi ? ['-'] : []), ...ks.map((k) => ({ label: WS.LAYOUTS[k].name, ico: lyDiag(WS.LAYOUTS[k], 18, 12), key: WS.LAYOUT_KEYS[k] || '', why: () => (on ? wsLayoutWhy(k) : ''), on: () => cur() === k, ok: () => on && !wsLayoutWhy(k), run: () => wsLayoutPick(k) }))]),
+      ...(mine.length ? ['-', ...mine.map((x) => ({ label: x.name, ico: lyDiag(x.shape, 18, 12), on: () => cur() === `my:${x.id}`, ok: () => on, run: () => wsLayoutPick(`my:${x.id}`) }))] : []),
       '-', { label: 'Save layout as…', ok: () => on, run: () => wsSaveLayoutAs() },
     ];
   },
@@ -10523,7 +10649,8 @@ function qfResolve(list) {
     const a = it.act ? FRAME_ACTS[it.act] : it, sub = it.sub ? FRAME_SUBS[it.sub]() : null;
     let ok = true; try { ok = sub ? sub.some((x) => x !== '-' && (!x.ok || x.ok())) : a?.ok ? !!a.ok() : true; } catch { ok = false; }
     let on = null; try { on = a?.on ? !!a.on() : null; } catch { on = null; }
-    return { label: it.label, run: a?.run, sub, disabled: !ok || (!sub && !a?.run), on, keyText: it.key ? keyLabel(it.key) : '' };
+    let why = ''; try { why = typeof it.why === 'function' ? it.why() : it.why || ''; } catch { why = ''; }
+    return { label: it.label, run: a?.run, sub, disabled: !ok || (!sub && !a?.run), on, keyText: it.key ? keyLabel(it.key) : '', ico: it.ico || '', why };
   });
 }
 function qfMenubarDraw() {
@@ -10533,7 +10660,7 @@ function qfMenubarDraw() {
 const qfMenuEl = (sub = false) => document.querySelector(sub ? '.qf-menu.qf-sub' : '.qf-menu:not(.qf-sub)');
 function qfItemsHTML(items, hi) {
   return items.map((it, i) => (it === '-' ? '<div class="qf-sep" role="separator"></div>'
-    : `<div class="qf-mi ${i === hi ? 'hi' : ''}" role="${it.on != null ? 'menuitemcheckbox' : 'menuitem'}" ${it.on != null ? `aria-checked="${it.on}"` : ''} ${it.sub ? 'aria-haspopup="menu"' : ''} aria-disabled="${it.disabled}" data-i="${i}" id="qf-mi-${it.subOf ?? 'm'}-${i}"><span class="qf-chk" aria-hidden="true">${it.on ? '✓' : ''}</span><span class="qf-ml">${esc(it.label)}</span><span class="qf-mk">${esc(it.keyText || '')}</span><span class="qf-ma" aria-hidden="true">${it.sub ? '›' : ''}</span></div>`)).join('');
+    : `<div class="qf-mi ${i === hi ? 'hi' : ''}" role="${it.on != null ? 'menuitemcheckbox' : 'menuitem'}" ${it.on != null ? `aria-checked="${it.on}"` : ''} ${it.sub ? 'aria-haspopup="menu"' : ''} aria-disabled="${it.disabled}" data-i="${i}" id="qf-mi-${it.subOf ?? 'm'}-${i}" ${it.why ? `title="${esc(it.why)}"` : ''}><span class="qf-chk" aria-hidden="true">${it.on ? '✓' : ''}</span><span class="qf-ml">${it.ico ? `<span class="qf-ico" aria-hidden="true">${it.ico}</span>` : ''}${esc(it.label)}${it.why ? `<small class="qf-why">${esc(it.why)}</small>` : ''}</span><span class="qf-mk">${esc(it.keyText || '')}</span><span class="qf-ma" aria-hidden="true">${it.sub ? '›' : ''}</span></div>`)).join('');
 }
 function qfOpen(i, { kb = false, hi = -1 } = {}) {
   const menu = QF.MENUS[i], btn = $(`#qfMenubar [data-m="${i}"]`); if (!menu || !btn) return;
@@ -11397,7 +11524,7 @@ function wireCatEditor(el) {
 }
 // ---------- settings page: categories on the left, that category's settings on the right ----------
 const UI_DEFAULTS = { density: 'comfortable', fontSize: 14, reduceMotion: 'system', timestamps: 'time', paneMode: 'auto', sidebarStart: 'remember', idleHide: 0,
-  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false };
+  showBalance: false, maskAmounts: true, blurPaths: false, usageBtn: true, notify: 'all', searchEngine: 'google', searchCustom: '', perfReadout: false, newLayout: 'single' };
 // The pages and their groups are in public/settings-map.js (the Settings tab: App, Project and This chat).
 const SETTINGS_NAV = SM.navFor(!!window.ohDesktop?.available); // (DESK is set further down)
 // host: where the Settings tab is shown now ('tab', 'page' with no chat open, null closed); scope: app, project, chat.
@@ -11572,6 +11699,9 @@ function settingsPanels(S) {
         + stRow('Artifact pane', 'Auto shows it only when the chat has built something. ◧ in a chat\'s header still toggles it.', stSeg('ui.paneMode', [['auto', 'Auto'], ['always', 'Always'], ['never', 'Only when asked']], U.paneMode), { id: 'stRowPane' })
         + stRow('Fold idle chats', 'Chats with nothing new for this long fold into an “Older” row at the end of their project in the sidebar. One click shows them; nothing is deleted. Pinned, open and working chats always stay in view. Pin a chat from its ⋯ menu.', stSeg('ui.idleHide', [['0', 'Off'], ['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['30', '30 days']], String(uiOf(S).idleHide || 0)))
         + stRow('Sidebar project order', 'Drag a project\'s header in the sidebar to move it.', `<button type="button" class="st-btn ghost sm" data-act="resetOrder">Reset order</button>`)),
+      // Layouts (the presets of Layout ▾): pick one for this project, or the one new projects start in.
+      stCard('Layouts', 'Each arranges the tabs this project already has: nothing opens or closes, and a side with nothing yet says what fills it. Also in Layout ▾ at the right of the project row, Window → Layout and Ctrl+Alt+1…9.', '<div data-live="layouts"></div>'
+        + stRow('Layout for new projects', 'What a project with no layout of its own starts in. Layouts that need a second chat or changes aren\'t offered here.', `<select class="st-select" data-bind="ui.newLayout" aria-label="Layout for new projects">${NEW_LAYOUTS.map((k) => `<option value="${k}" ${(U.newLayout || 'single') === k ? 'selected' : ''}>${esc(WS.LAYOUTS[k].name)}</option>`).join('')}</select>`, { id: 'stRowNewLayout' })),
       ...(DESK ? ['<div id="stDesktop"></div>'] : []),
     ]],
     privacy: ['Privacy & display', 'For streaming and screen sharing: what other people would see on your screen.', [
@@ -12153,6 +12283,15 @@ function stSummary(id, S) {
 }
 // Small parts of a page that draw what the draft says right now (they redraw after every change).
 const ST_LIVE = {
+  // The presets as tiles in Layout ▾'s groups, then yours: the one in use marked, greyed ones saying why.
+  layouts: () => {
+    const cur = WS.layoutKey(WK.preset);
+    const tile = (k) => {
+      const why = WS.LAYOUTS[k] ? wsLayoutWhy(k) : '', key = WS.LAYOUT_KEYS[k] ? keyLabel(WS.LAYOUT_KEYS[k]) : '';
+      return `<button type="button" class="ly-tile ${cur === k ? 'on' : ''}" data-act="applyLayout" data-ly="${esc(k)}" aria-pressed="${cur === k}" ${why ? `aria-disabled="true" title="${esc(why)}"` : `title="${esc(WS.LAYOUTS[k]?.tip || 'Apply this layout')}"`}>${lyDiag(layoutOf(k), 64, 40)}<span class="lt-name">${esc(layoutName(k))}</span>${key ? `<kbd class="lt-key">${esc(key)}</kbd>` : ''}${why ? `<small class="lt-why">${esc(why)}</small>` : ''}</button>`;
+    };
+    return `<div class="ly-tiles">${[...WS.LAYOUT_GROUPS, ['Your own', myLayouts().map((x) => `my:${x.id}`)]].filter(([, ks]) => ks.length).map(([g, ks]) => `<div class="ly-tgroup"><div class="ly-thead">${esc(g)}</div><div class="ly-trow">${ks.map(tile).join('')}</div></div>`).join('')}</div>`;
+  },
   preview: (S) => { const U = uiOf(S), t = U.timestamps === 'relative' ? '<small>2 min ago</small>' : '<small>14:02</small>';
     return `<div class="sx-preview ${U.density === 'compact' ? 'compact' : ''}" style="--pv-size:${U.fontSize}px" aria-hidden="true"><div class="sx-pv-side"><i></i><i></i><i></i><i style="width:70%"></i><i></i></div><div class="sx-pv-chat"><div class="sx-pv-msg me">Build me a pomodoro timer${t}</div><div class="sx-pv-msg">Done: a 25/5 timer with a start button and a chime. Open it in the preview.${t}</div></div></div>`; },
   window: (S) => { const U = uiOf(S);
@@ -12496,6 +12635,7 @@ function wireSettings() {
     const v = inp.type === 'checkbox' ? inp.checked : inp.type === 'text' ? inp.value.trim() : Number(inp.value);
     setPath(S, inp.dataset.bind, v); ST.changed.add(inp.dataset.bind); inp.closest('.st-row')?.classList.add('changed'); mark();
   };
+  for (const sel of main.querySelectorAll('select[data-bind]')) sel.onchange = () => { setPath(S, sel.dataset.bind, sel.value); ST.changed.add(sel.dataset.bind); sel.closest('.st-row')?.classList.add('changed'); mark(); };
   // The mic key: press the keys you want while the box has the focus.
   for (const k of main.querySelectorAll('.st-keycap[data-bind]')) k.onkeydown = (e) => { if (e.key === 'Tab') return; e.preventDefault(); if (e.key === 'Escape') { e.stopPropagation(); k.blur(); return; } const v = keyCombo(e); if (v) { k.value = v; k.onchange(); } };
   for (const seg of main.querySelectorAll('.st-segmented[data-bind]')) for (const b of seg.querySelectorAll('.st-seg-btn')) b.onclick = () => {
@@ -12549,6 +12689,7 @@ function wireSettings() {
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
+    if (act === 'applyLayout') { const b = e.target.closest('[data-ly]'); if (b.getAttribute('aria-disabled') === 'true') return flashTip(b, b.title, 2200); await wsLayoutPick(b.dataset.ly, b); stRefresh(); return; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
     if (act === 'openCosts') openCosts();
     if (act === 'reportBundle') reportProblem();

@@ -256,21 +256,57 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .rmx-dialog .sq-check { display: flex; margin: 6px 0; }
 @media (max-width: 900px) { body.two-chats .chat-head .ch-own, .wt-tab .own-sq { display: none !important; } }
 
-/* ---------- W4: the layout buttons in the top bar (a segmented control) ---------- */
-.ws-layouts { display: inline-flex; align-items: center; flex: none; height: 26px; margin: 0 6px; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
+/* ---------- layouts: ▦ Layout ▾ (right end of the project row), its menu, the pictures, hints, Settings tiles ---------- */
+.ws-layouts { display: inline-flex; align-items: center; flex: none; margin: 0 4px; }
 .ws-layouts:empty { display: none; }
-.ws-layouts button { height: 20px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
-.ws-layouts button:hover:not(:disabled) { color: var(--text); background: var(--panel-3, var(--line)); }
-.ws-layouts button[aria-pressed="true"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
-.ws-layouts button:disabled { opacity: .45; cursor: default; }
-.ws-layouts .wl-mine { border-left: 1px solid var(--line); border-radius: 0 5px 5px 0; }
-@media (max-width: 1100px) { .ws-layouts button { padding: 0 6px; } }
+.ws-layouts .wl-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 220px; padding: 0 7px 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.ws-layouts .wl-btn:hover:not(:disabled), .ws-layouts .wl-btn:focus-visible { border-color: var(--accent); }
+.ws-layouts .wl-btn:disabled { opacity: .45; cursor: default; }
+.ws-layouts .wl-name { overflow: hidden; text-overflow: ellipsis; }
+.ws-layouts .wl-caret { color: var(--muted); font-size: 10px; }
 @media (max-width: 900px) { .ws-layouts { display: none !important; } }
-.wl-list { min-width: 220px; max-height: 360px; overflow: auto; }
-.wl-list .wl-row { display: flex; align-items: center; gap: 2px; }
-.wl-list .wl-apply { flex: 1; text-align: left; }
-.wl-list .wl-apply.on { color: var(--accent); }
-.wl-list .wl-ren, .wl-list .wl-del { flex: none; width: 28px; }
+/* The pictures: the chat filled, other groups outlined, the group that follows the agent in the accent. */
+.ly-diag { flex: none; display: block; }
+.ly-diag rect { fill: none; stroke: currentColor; stroke-width: 1.2; opacity: .75; }
+.ly-diag .lyd-chat { fill: color-mix(in srgb, currentColor 28%, transparent); }
+.ly-diag .lyd-follow { stroke: var(--accent); opacity: 1; }
+/* Layout ▾ */
+.wl-menu { width: 300px; overflow: auto; padding: 4px; }
+.wl-menu .wl-head { padding: 7px 8px 3px; color: var(--muted); font: 700 10.5px var(--font-ui); letter-spacing: .06em; text-transform: uppercase; }
+.wl-menu .wl-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 28px; padding: 3px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font: 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+.wl-menu .wl-item:hover, .wl-menu .wl-item:focus-visible { background: var(--accent-dim, var(--panel-3)); outline: none; }
+.wl-menu .wl-item.on { color: var(--accent); }
+.wl-menu .wl-item.on .wl-nm::after { content: ' ✓'; }
+.wl-menu .wl-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.wl-menu .wl-item[aria-disabled="true"] .ly-diag { opacity: .45; }
+.wl-menu .wl-txt { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.wl-menu .wl-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-menu .wl-why { color: var(--muted); font-size: 11px; }
+.wl-menu .wl-key { flex: none; color: var(--muted); font: 11px var(--mono, monospace); background: none; border: 0; }
+.wl-menu .wl-row { display: flex; align-items: center; gap: 2px; }
+.wl-menu .wl-row .wl-apply { flex: 1; min-width: 0; }
+.wl-menu .wl-ren, .wl-menu .wl-del { flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.wl-menu .wl-ren:hover, .wl-menu .wl-del:hover { background: var(--panel-3); color: var(--text); }
+.wl-menu .wt-none { display: block; padding: 4px 8px 6px; color: var(--muted); font-size: 12px; }
+/* The menu bar's Layout list: the picture before the name, greyed ones' reason after it. */
+.qf-ico { display: inline-block; vertical-align: -2px; margin-right: 7px; color: var(--muted); }
+.qf-why { margin-left: 8px; color: var(--muted); font-size: 11px; }
+/* A side with nothing yet: a quiet note over the group's body (its tabs and toolbar stay usable). */
+.pane-area > .ly-hint { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; background: var(--bg); color: var(--muted); text-align: center; }
+.ly-hint .lh-note { max-width: 320px; margin: 0; font: 13px/1.45 var(--font-ui); }
+.ly-hint .lh-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+/* Settings → Window & layout: the presets as tiles. */
+.ly-tiles { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 8px; }
+.ly-thead { margin-bottom: 4px; color: var(--muted); font: 700 10.5px var(--font-ui); letter-spacing: .06em; text-transform: uppercase; }
+.ly-trow { display: flex; flex-wrap: wrap; gap: 8px; }
+.ly-tile { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; width: 200px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: 12.5px var(--font-ui); text-align: left; cursor: pointer; }
+.ly-tile .ly-diag { grid-row: span 2; color: var(--muted); }
+.ly-tile .lt-name { font-weight: 600; }
+.ly-tile .lt-key { justify-self: start; color: var(--muted); font: 11px var(--mono, monospace); background: none; border: 0; padding: 0; }
+.ly-tile .lt-why { grid-column: 2; color: var(--muted); font-size: 11px; }
+.ly-tile:hover:not([aria-disabled="true"]), .ly-tile:focus-visible { border-color: var(--accent); }
+.ly-tile.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ly-tile[aria-disabled="true"] { opacity: .6; cursor: default; }
 
 /* ---------- W5: a pop-out window (desktop app): only its group or chat, with a bar to dock it back ---------- */
 .pop-bar { display: none; }
