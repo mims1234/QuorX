@@ -128,3 +128,5 @@ body.ws-on .shell.wr-run .ws-panel { width: clamp(280px, var(--side-w, 300px), 4
 /* The dev-build marker (last.css, dev builds only) in the desktop app's frame: Windows draws − □ × over the top right
    corner, so the marker ends cleanly where those buttons start, with a rounded end, instead of running under them. */
 body.qf-desk.dev-build::before { right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px))); border-radius: 0 0 3px 0; }
+/* Row 1 spans the window again: the mark sits over the activity bar, the same width. */
+body.qf-on .qf-logo { width: 44px; }
