@@ -254,6 +254,7 @@ export async function directStream(src, body, signal, onText, onThink, { info = 
   const t = Date.now(), b = base || def.base, messages = def.wire === 'messages';
   const real = info.realId || String(body.model || '').slice(src.length + 1);
   const post = (req) => fetchFn(`${b}${messages ? '/messages' : '/chat/completions'}`, { method: 'POST', signal: ac.signal, headers: { ...authHeaders(src, key), 'Content-Type': 'application/json', 'User-Agent': 'QuorX' }, body: JSON.stringify(req) });
+  const spend = def.credits ? spendStart(src, key, b, fetchFn) : null;
   try {
     let req = messages ? messagesBody(body, { ...info, realId: real }) : directChatBody(src, body, { ...info, realId: real });
     let r = await post(req);
@@ -279,11 +280,56 @@ export async function directStream(src, body, signal, onText, onThink, { info = 
     else if (Object.keys(sigs).length) out.passBack = { gemini_sigs: sigs };
     else if (info.interleaved && out.thinking) out.passBack = { [info.interleaved]: out.thinking };
     delete out.thinkingBlocks;
+    // Refuseless names no prices: what the call really cost, from the key's spend (agent.js corrects the estimate).
+    if (spend) { const late = spend.end(true); if (late) out.lateCost = late; }
     return out;
   } catch (e) {
     if (ac.signal.aborted && ac.signal.reason?.name === 'TimeoutError' && !signal?.aborted) throw Object.assign(ac.signal.reason, { partial: e?.partial });
     throw e;
-  } finally { signal?.removeEventListener('abort', stop); }
+  } finally { signal?.removeEventListener('abort', stop); spend?.end(false); }
+}
+
+// ---------- a call's real cost from the key's spend (Refuseless) ----------
+// Its answers carry no cost and its models no prices, but GET /credits says what the key has spent so far (in dollars,
+// free to ask). Read just before a call and again after it ends, the difference is that call's cost, as long as no
+// other call on the same key ran meanwhile: when calls overlap, each keeps its estimate (no share is guessed).
+const watches = new Map(); // key → { busy, epoch, mixed }
+async function keySpent(src, key, base, fetchFn) {
+  const j = await getJSON(`${base}/credits`, { headers: authHeaders(src, key), fetchFn, ms: 10000 });
+  const v = Number(j?.key_spent);
+  return Number.isFinite(v) && v >= 0 ? v : null;
+}
+export const SPEND_WAITS = [1500, 3000, 6000]; // the spend can show a moment after the answer ends
+export function spendStart(src, key, base, fetchFn = fetch, waits = SPEND_WAITS) {
+  const w = watches.get(key) || { busy: 0, epoch: 0, mixed: false };
+  watches.set(key, w);
+  w.busy++; w.epoch++;
+  if (w.busy > 1) w.mixed = true;
+  const before = keySpent(src, key, base, fetchFn).catch(() => null);
+  let ended = false;
+  return {
+    /** Ends the call; resolves to its cost in dollars, or null when it can't be told apart (or failed). */
+    end(ok) {
+      if (ended) return null;
+      ended = true;
+      w.busy--;
+      const solo = !w.mixed, epoch = w.epoch;
+      if (w.busy === 0) w.mixed = false;
+      if (!ok || !solo) return null;
+      return (async () => {
+        const b = await before;
+        if (b == null) return null;
+        for (const ms of waits) {
+          await new Promise((r) => setTimeout(r, ms));
+          if (w.epoch !== epoch) return null; // another call started: the difference may hold it too
+          const a = await keySpent(src, key, base, fetchFn).catch(() => null);
+          if (w.epoch !== epoch) return null;
+          if (a != null && a > b) return Math.round((a - b) * 1e6) / 1e6;
+        }
+        return null;
+      })().catch(() => null);
+    },
+  };
 }
 
 // ---------- deciders ----------

@@ -1076,7 +1076,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const sourceSession = () => sessionFor(req.chatId || req.runId || 'quorx');
   // A whole answer (a long chat's summary, setup D's drafts) on a source model: there, else OpenRouter's fallback.
   const sourceChatOpts = () => ({ orChat: chat, stream: (b, sg) => fromSource(b, sg, null, null, { session: sourceSession() }), checkOn: !deps.sourceStream, fallback: async (id) => sourceFallbackFor(id, S, await getCatalogue()) });
-  const getCatalogue = () => (catalogueP ??= deps.catalogue ? Promise.resolve(deps.catalogue) : Promise.all([chatModels().catch(() => []), sourceModels().catch(() => [])]).then(([a, b]) => [...a, ...b]));
+  const getCatalogue = () => (catalogueP ??= deps.catalogue ? Promise.resolve(deps.catalogue) : Promise.all([chatModels().catch(() => []), sourceModels({ forModel: setup.model }).catch(() => [])]).then(([a, b]) => [...a, ...b]));
   // Resuming a reply that a harness restart cut off: start again from its last checkpoint.
   const resumed = req.resume ? loadCheckpoint(String(req.resume)) : null;
   if (req.resume && !resumed) throw new Error('Nothing to resume: the checkpoint for that reply is gone.');
@@ -1232,6 +1232,17 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     // On a plan (OpenCode Go, Grok Build, Claude Code): what the call counted against its limits, at list price.
     const pv = planValue(u.plan_cost);
     if (pv) { stats.planCost = (stats.planCost || 0) + pv; m.planCost = (m.planCost || 0) + pv; }
+    // Priced at the same model's OpenRouter price (no figure of the source's own): the page says so next to the cost.
+    if ((u.plan_ref === 'openrouter' || u.cost_ref === 'openrouter') && u.ref_model) m.refModel = String(u.ref_model);
+    // Refuseless: the key's spend gives the real figure a few seconds later, and the difference replaces the estimate.
+    if (u.late && typeof u.late.then === 'function') {
+      u.late.then((real) => {
+        if (real == null || !Number.isFinite(real) || Math.abs(real - c) < 1e-7) return;
+        correctPartial(real - c, model, role, false);
+        if (stats.byModel[model]) { stats.byModel[model].exact = (stats.byModel[model].exact || 0) + 1; }
+        emit({ t: 'note', level: 'info', msg: `${short(model)} (${role}) cost $${real.toFixed(4)} by the key's spend (estimated at $${c.toFixed(4)} from OpenRouter's price).`, at: at() });
+      }, () => { /* the estimate stands */ });
+    }
     // A call that stopped before its usage arrived (see callModel): counted like any other, and marked.
     if (u.partial) {
       const p = (stats.partialCalls ??= { calls: 0, cost: 0, estimated: 0 });
@@ -1248,32 +1259,32 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
     spendNow();
   };
   const spendNow = () => {
-    const lv = live.get(runId); if (lv) lv.cost = stats.cost;
+    const lv = live.get(runId); if (lv) { lv.cost = stats.cost; lv.plan = planTotal(stats.planCost); }
     // The page shows what this reply has spent so far, after every call (the chat, its header and the sidebar).
-    emit({ t: 'spend', cost: +stats.cost.toFixed(6), calls: Object.values(stats.byModel).reduce((n, x) => n + x.calls, 0), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, byModel: structuredClone(stats.byModel), ...(stats.partialCalls ? { partialCalls: { ...stats.partialCalls, cost: +stats.partialCalls.cost.toFixed(6) } } : {}), at: at() });
+    emit({ t: 'spend', cost: +stats.cost.toFixed(6), ...(planTotal(stats.planCost) ? { planCost: +stats.planCost.toFixed(6) } : {}), calls: Object.values(stats.byModel).reduce((n, x) => n + x.calls, 0), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, byModel: structuredClone(stats.byModel), ...(stats.partialCalls ? { partialCalls: { ...stats.partialCalls, cost: +stats.partialCalls.cost.toFixed(6) } } : {}), at: at() });
   };
   // OpenRouter's own figure for a cut-off call, found after it was counted at an estimate: the difference goes on this
   // reply while it runs, and on a ledger row of its own once the reply has ended (so budgets and today's spending see it).
   let lateFixes = 0;
-  const correctPartial = (delta, model, role) => {
+  const correctPartial = (delta, model, role, partial = true) => {
     if (!spent.closed) {
       stats.cost += delta;
       stats.byRole[role] = (stats.byRole[role] || 0) + delta;
       if (stats.byModel[model]) stats.byModel[model].cost += delta;
-      if (stats.partialCalls) { stats.partialCalls.cost += delta; stats.partialCalls.estimated = Math.max(0, stats.partialCalls.estimated - 1); }
+      if (partial && stats.partialCalls) { stats.partialCalls.cost += delta; stats.partialCalls.estimated = Math.max(0, stats.partialCalls.estimated - 1); }
       spendNow();
     } else if (projectId && !req.bench && !deps.quiet) {
-      recordRun({ ts: new Date().toISOString(), runId: `${runId}-late${++lateFixes}`, kind: 'partial', chatId: req.chatId || null, project: projectId, model, stop: 'cut-off call', cost: +delta.toFixed(6) });
+      recordRun({ ts: new Date().toISOString(), runId: `${runId}-late${++lateFixes}`, kind: 'partial', chatId: req.chatId || null, project: projectId, model, stop: partial ? 'cut-off call' : 'late figure', cost: +delta.toFixed(6) });
     }
   };
   // While this reply runs, its cost counts toward the chat's budget (and its project's spend). However it ends, the
   // ledger keeps what it cost (a stopped or failed reply never reaches a chat file with its cost).
   if (projectId && !req.bench) {
-    live.set(runId, { project: projectId, chat: req.chatId || null, cost: stats.cost, recorded: false });
+    live.set(runId, { project: projectId, chat: req.chatId || null, cost: stats.cost, plan: planTotal(stats.planCost), recorded: false });
     cleanups.push(async () => {
       const lv = live.get(runId);
       live.delete(runId);
-      if (lv && !lv.recorded && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: signal.aborted ? 'stopped' : 'error', cost: +lv.cost.toFixed(6), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), resumed: !!resumed });
+      if (lv && !lv.recorded && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: signal.aborted ? 'stopped' : 'error', cost: +lv.cost.toFixed(6), ...(lv.plan ? { planCost: +lv.plan.toFixed(6) } : {}), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), resumed: !!resumed });
     });
   }
 
@@ -1754,7 +1765,10 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
     if (served !== setup.model && !r.servedBy) emit({ t: 'note', level: 'warn', msg: `${short(setup.model)} was unavailable, so OpenRouter answered with the fallback model ${short(served)}.`, at: at() });
     account(r.usage, served, 'writer');
     emit({ t: 'llm_done', step, ms: r.ms, firstMs: r.firstMs, tokensOut: r.usage.completion_tokens || 0, cost: r.usage.cost || 0, toolCalls: r.toolCalls.map((c) => c.function.name), provider: r.provider || null, model: served, actual: r.model || null,
-      ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(planValue(r.usage.plan_cost) ? { planCost: planValue(r.usage.plan_cost) } : {}), at: at() });
+      ...(r.source ? { source: r.source } : {}), ...(r.servedBy ? { fellBackFrom: setup.model } : {}), ...(planValue(r.usage.plan_cost) ? { planCost: planValue(r.usage.plan_cost) } : {}),
+      // Priced at the same model's OpenRouter price (the source gave no figure): the trace says so.
+      ...((r.usage.plan_ref === 'openrouter' || r.usage.cost_ref === 'openrouter') && r.usage.ref_model ? { refModel: String(r.usage.ref_model) } : {}),
+      ...(r.usage.cost_unknown ? { costUnknown: true } : {}), at: at() });
     // Nothing came back (no text, no tool call): usually all of the output went on thinking. Never end
     // a reply silently on that: tell the model to act, think less, and try again (twice at most).
     // A call written on a step that allows none was dropped (viaSource): that is the step limit, not an empty answer.
@@ -2038,7 +2052,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   if (!oosCard) dropCheckpoint(runId);
   if (!req.bench && !deps.quiet) recordRun({ ts: new Date().toISOString(), runId, chatId: req.chatId || null, project: projectId, model: setup.model, stop: run.stop, steps: run.steps, tools: run.tools,
     retries: run.retries, trimmed: run.trimmed, questions: run.questions, changed: stats.changed.length, verify: stats.verify ? { ok: stats.verify.ok, problems: stats.verify.problems.length, rounds: stats.verify.rounds, lint: stats.verify.lint || null } : null,
-    cost: +stats.cost.toFixed(6), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
+    cost: +stats.cost.toFixed(6), ...(planTotal(stats.planCost) ? { planCost: +stats.planCost.toFixed(6) } : {}), tokensIn: stats.tokensIn, tokensOut: stats.tokensOut, ...(stats.cachedIn ? { cacheRead: stats.cacheRead, cachedIn: stats.cachedIn } : {}), ...(stats.partialCalls ? { partialCalls: stats.partialCalls.calls } : {}), ms: stats.ms, resumed: !!resumed, looksFirst: run.looksFirst || 0, firstWrite: run.firstWrite ?? null });
   if (live.has(runId)) live.get(runId).recorded = true;
 
   // ================= loop helpers =================
@@ -2163,6 +2177,9 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         // An answer that ended without its usage (a gateway that left the last chunk out) counts at an estimate.
         if (r.partial && !Object.keys(r.usage || {}).length) r.usage = sourcePartial(r.partial, body);
         r.usage ??= {};
+        // The real figure, found after the answer (Refuseless's key spend): account() swaps it in for the estimate.
+        // Not enumerable, so it never rides into a saved copy of the usage.
+        if (r.lateCost && typeof r.lateCost.then === 'function') Object.defineProperty(r.usage, 'late', { value: r.lateCost, enumerable: false, configurable: true });
         noteSourceResult(s.source, sm, null);
         // Calls written as text follow the step as an API's would: none on a step that allows none, only the tool a
         // step asks for, and (in callTool) never a tool this chat doesn't offer.
@@ -2217,11 +2234,15 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
   // A source call cut off before its usage arrived: about 4 characters a token, at the catalogue's price.
   function sourcePartial(p, body) {
     const info = catalogue.find((m) => m.id === body.model);
-    const [pin, pout] = info?.price || [0, 0];
+    // A plan model counts its list price against the budget (OpenRouter's, else models.dev's); a model its app prices
+    // itself (Claude Code, Grok Build on a key) counts at OpenRouter's price, since the app's figure never came.
+    const plan = info?.plan === 'plan', viaRef = (plan || info?.priceFromApp) && info?.ref?.cost;
+    const [pin, pout] = viaRef ? [Number(info.ref.cost.input) || 0, Number(info.ref.cost.output) || 0] : plan ? info?.listPrice || [0, 0] : info?.price || [0, 0];
     const prompt_tokens = promptTokens(body), completion_tokens = Math.ceil((p.outChars || 0) / 4);
-    const cost = (prompt_tokens * pin + completion_tokens * pout) / 1e6;
-    if (cost) emit({ t: 'note', level: 'info', msg: `A call to ${short(body.model)} ended part-way; it is counted at an estimated $${cost.toFixed(4)}.`, at: at() });
-    return { prompt_tokens, completion_tokens, cost, partial: true, estimated: true };
+    const value = (prompt_tokens * pin + completion_tokens * pout) / 1e6;
+    if (value) emit({ t: 'note', level: 'info', msg: `A call to ${short(body.model)} ended part-way; it is counted at an estimated $${value.toFixed(4)}${plan ? ' of plan value' : ''}${viaRef ? ` (${info.ref.model}'s price on OpenRouter)` : ''}.`, at: at() });
+    const ref = viaRef ? { [plan ? 'plan_ref' : 'cost_ref']: 'openrouter', ref_model: info.ref.model } : {};
+    return plan ? { prompt_tokens, completion_tokens, cost: 0, plan_cost: value, ...ref, partial: true, estimated: true } : { prompt_tokens, completion_tokens, cost: value, ...ref, partial: true, estimated: true };
   }
   // Tokens in, for a call that never reported them: about 4 characters a token over the messages and the tool
   // definitions, with a flat allowance for each picture (its data URL says nothing about its tokens).

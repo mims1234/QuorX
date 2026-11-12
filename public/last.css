@@ -952,6 +952,11 @@ input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
 /* ---------- trace: which provider answered, and a fallback model when one was used ---------- */
 .trace .tr-prov { font-family: var(--mono); color: var(--accent); }
 .trace .tr-fallback { color: var(--amber, #f59e0b); }
+/* a cost counted at the same model's OpenRouter price (the source gave none): a quiet dashed note, not a button */
+.trace .tr-ref, .mp-ref, .f-pop .fi-model i[title], .bud-pop .bp-sub { color: var(--dim); border-bottom: 1px dashed currentColor; cursor: help; font-style: normal; font-size: .92em; }
+.mp-ref { margin-left: 4px; }
+.bud-pop .bp-sub { display: block; width: fit-content; margin-top: 2px; }
+.f-pop .fi-note { display: block; margin-top: 6px; color: var(--dim); font-size: .9em; }
 /* Creativity menu sits beside Reasoning and uses the same dropdown */
 .st-fb { display: flex; gap: 6px; align-items: center; }
 
