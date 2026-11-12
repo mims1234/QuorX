@@ -91,3 +91,6 @@
   #settings .st-proj-pick { width: auto; margin: 0; }
   #settings .sx-grid.two { grid-template-columns: minmax(0, 1fr); }
 }
+/* A medium-width tab: the search keeps room to type; Restart harness stays in the QuorX menu. */
+#settings .st-search-wrap { min-width: 180px; }
+@container sttab (max-width: 1100px) { #settings .st-head-restart { display: none; } #settings .st-head-left { gap: 10px; } }

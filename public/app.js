@@ -15,6 +15,9 @@ import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts
 import { bulkGroups, bulkWords } from './approve-all.js';
 import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
 import * as SM from './settings-map.js';
+// Phones (and the desktop app shrunk beside an app for computer use) get the phone layout below this width; any
+// wider window keeps the desktop shell, folding its parts as it narrows (see "narrow windows"). CSS uses the same 720px.
+const PHONE_MQ = '(max-width: 720px)';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -3214,8 +3217,10 @@ function placeChrome() {
   const upd = $('#updNote'), btns = ['#restartBtn', '#themeBtn', '#settingsBtn'].map((q) => $(q)).filter(Boolean);
   // The ☰ panel toggle leads the title row on wider screens; phones keep it beside the search.
   const tog = $('#sbCollapseBtn'), tools = $('.sb-tools');
-  // The window frame (rows 1 and 2) takes over the top on wider screens: see qfPlace.
-  const frame = qfPlace(desk && !POP);
+  // The window frame (rows 1 and 2) takes over the top on wider screens, pop-out windows included: see qfPlace.
+  document.body.classList.toggle('qx-desk', !!DESK);
+  const frame = qfPlace(desk);
+  if (!frame) qfOverlay(); // phone-sized (computer use): − □ × take the top bar's colours
   if (frame) { if (tog && tools) tools.prepend(tog); foot.append(...btns); if (upd) $('#wsbUpd')?.append(upd); return; } // ⬆ Update: the status bar's right end
   if (desk) { title.append(brand, ...(perm ? [perm] : []), ...(git ? [git] : []), ...bits); if (tog) title.prepend(tog); foot.append(...(upd ? [upd] : []), ...btns); return; }
   if (tog && tools) tools.prepend(tog);
@@ -3225,12 +3230,68 @@ function placeChrome() {
   if (sep) sep.after(...bits, ...(upd ? [upd] : [])); else top.append(...bits, ...(upd ? [upd] : []));
   top.append(...btns);
 }
+// ---------- narrow windows: the desktop shell folds instead of shrinking (phones keep their own layout) ----------
+// From 1000px down to the phone layout (720px) the window keeps rows 1 and 2, the activity bar and the status bar, and
+// folds the parts that need room: the sidebar becomes a drawer over the editor area (closed when the window gets
+// narrow, closed again after you pick something in it, opened from the activity bar or Ctrl+B), the nine menus fold
+// into ≡ below 900px (frame.css), tab strips scroll, and the status bar drops its least needed items first
+// (shell-polish.css reads each item's priority). Widening the window again opens the sidebar if it was open before.
+const NARROW_MQ = '(max-width: 1000px)';
+const QN = { on: false, wasOpen: null };
+const narrowOn = () => document.body.classList.contains('qx-narrow');
+function narrowSide(open) { if (avOn()) avSet(AV.view, open); else { G.sideHidden = !open; savePrefs(); syncLayout(); } }
+function narrowSync() {
+  const on = !isPhone() && !POP && matchMedia(NARROW_MQ).matches;
+  document.body.classList.toggle('qx-narrow', on);
+  if (on === QN.on) return;
+  QN.on = on;
+  if (on) { QN.wasOpen = !G.sideHidden; if (!G.sideHidden) narrowSide(false); }
+  else if (QN.wasOpen && G.sideHidden) narrowSide(true);
+}
+function narrowInit() {
+  narrowSync();
+  for (const q of [NARROW_MQ, PHONE_MQ]) matchMedia(q).addEventListener('change', narrowSync);
+  // The drawer closes once you pick a chat, a project's ＋ or a result in it, or click the editor area beside it.
+  $('#sidebar')?.addEventListener('click', (e) => { if (narrowOn() && !G.sideHidden && e.target.closest('.sb-chat-item, .sb-new, [data-new], .cs-hit, .pal-item')) setTimeout(() => narrowSide(false), 0); });
+  $('#wsPanel')?.addEventListener('click', (e) => { if (narrowOn() && !G.sideHidden && e.target.closest('.rl-row [data-chat], .run-chat, .cs-hit, .pal-item')) setTimeout(() => narrowSide(false), 0); });
+  $('.ws-main')?.addEventListener('pointerdown', () => { if (narrowOn() && !G.sideHidden) narrowSide(false); }, true);
+}
 // 🏠 Home (sidebar, rail, and the app name in the top bar): back to the start screen. Lit while you're on it.
 function goHome() { withTransition(showLanding); closeDrawer(); if (isPhone()) setMView('chat'); }
 function syncHome() {
   // Settings filling the middle (opened on the start screen) becomes a tab once a chat is on screen.
   if (ST.host === 'page' && G.panes.length && !isPhone()) queueMicrotask(() => { if (ST.host === 'page' && G.panes.length) stMount(); });
-  const on = !G.panes.length && !$('.work')?.classList.contains('news-on'); for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
+  const on = !G.panes.length && !$('.work')?.classList.contains('news-on'); document.body.classList.toggle('qx-home', on); for (const b of document.querySelectorAll('#homeBtn, #railHome')) { b.classList.toggle('active', on); b.setAttribute('aria-current', on ? 'page' : 'false'); } }
+// Home's quick actions: places and windows QuorX already has. [action, icon, label, hint]
+const HOME_ACTS = [
+  ['new', '＋', 'New chat in this project', 'An empty chat in the project above'],
+  ['search', '🔎', 'Search inside chats', 'Your messages and the agent’s replies', 'chatsearch'],
+  ['running', '▶', 'Running', 'Everything QuorX runs now, in every project'],
+  ['servers', '🖥', 'Servers & pages', 'This project\'s servers and pages'],
+  ['schedules', '⏰', 'Schedules', 'Chats that run on their own'],
+  ['projset', '📁', 'Project settings', 'Folder, design system, hooks, permissions, costs'],
+  ['settings', '⚙', 'Settings', 'Every setting, for every project'],
+  ['news', '📰', 'What\'s new', 'News and release notes'],
+];
+const homePid = () => (G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : 'scratch');
+function homeAct(k) {
+  const pid = homePid(), p = G.projects.find((x) => x.id === pid);
+  ({ new: () => newChat(pid), search: () => openChatSearch(), running: () => wrRunning(true), servers: () => wrServers(), schedules: () => openSchedules(),
+    projset: () => p && openProjectSettings(p), settings: () => openSettings(), news: () => openNews('updates') })[k]?.();
+}
+// Home's top: the project (its folder is in the start box below) and its five latest chats (redrawn when the start box picks another project).
+function drawHomeProject(box = document) {
+  const head = $('#homeHead', box), list = $('#homeRecent', box); if (!head || !list) return;
+  const pid = homePid(), p = G.projects.find((x) => x.id === pid);
+  head.setAttribute('style', p ? projStyle(p) : '');
+  head.innerHTML = p ? `<span class="home-dot" aria-hidden="true"></span><h2 title="${esc(p.dir || '')}">${esc(p.name)}</h2><span class="home-sp"></span><button type="button" class="ld-p-set" data-home-act="projset" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button>` : '';
+  const where = $('#homeWhere', box); if (where) where.textContent = p ? `· ${p.name}` : '';
+  const chats = G.chats.filter((c) => c.messages > 0 && (c.projectId || 'scratch') === pid).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)).slice(0, 5);
+  list.innerHTML = chats.map((c) => `<button type="button" class="ld-chat home-row" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="home-t">${esc(c.title)}</span><small>${c.model ? `${esc(short(c.model))} · ` : ''}${ago(c.lastAt || Date.now())}</small><span class="money">$${(c.cost || 0).toFixed(3)}</span></button>`).join('')
+    || `<p class="home-none">No chats in ${esc(p?.name || 'this project')} yet: the box above starts one.</p>`;
+  for (const b of list.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
+  for (const b of head.querySelectorAll('[data-home-act]')) b.onclick = () => homeAct(b.dataset.homeAct);
+}
 function renderLanding(box) {
   const archived = new Set(G.projects.filter((p) => p.archived).map((p) => p.id));
   const allRecent = [...G.chats].filter((c) => c.messages > 0 && !archived.has(c.projectId || 'scratch')).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
@@ -3244,16 +3305,11 @@ function renderLanding(box) {
   const last = G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : (allRecent[0]?.projectId || 'scratch');
   G.ldProjPage = Math.min(G.ldProjPage || 0, pages(projects.length) - 1);
   const shownProjects = projects.slice(G.ldProjPage * PAGE, G.ldProjPage * PAGE + PAGE);
-  box.innerHTML = `<section class="landing">
-    <header class="ld-brand"><img class="ld-mark ld-logo" src="brand/quorx-64.png" alt=""><h1>Quor<span>X</span></h1><span class="ld-tag">What are we building?</span></header>
-    <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
-    <div class="ld-projects">${shownProjects.map((p) => {
-      const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
-      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
-        <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span> spent</small>
-        <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
-    }).join('')}</div>
-    <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
+  // Home sits in the editor area under the project row, as the prototype draws it: the project the start box starts
+  // in (row 2's tab, or the one picked in the box) with its folder, the start box, that project's latest chats and
+  // the quick actions QuorX already has, then every project (pinned first). Nothing here is new content.
+  box.innerHTML = `<section class="landing qx-home">
+    <div class="home-h" id="homeHead"></div>
     <div class="ld-dock">
     <div class="ld-sbox has-draft" id="ldStart">
       <div class="ld-sb-row">
@@ -3268,6 +3324,18 @@ function renderLanding(box) {
     </div>
     <p class="ld-folder-err" role="alert" hidden></p>
     </div>
+    <div class="home-cols">
+      <section class="home-col"><h3>Recent chats <small id="homeWhere"></small></h3><div class="home-list" id="homeRecent"></div></section>
+      <section class="home-col"><h3>Quick actions</h3><div class="home-list">${HOME_ACTS.map(([k, ico, label, hint, key]) => `<button type="button" class="home-act" data-home-act="${k}" title="${esc(hint)}"><span class="home-ico" aria-hidden="true">${ico}</span><span>${esc(label)}</span>${key && keyLabel(key) ? `<kbd>${esc(keyLabel(key))}</kbd>` : ''}</button>`).join('')}</div></section>
+    </div>
+    <div class="ld-hrow"><h2 class="ld-h">Projects <small>· pinned first, then latest chats</small></h2>${pager('proj', G.ldProjPage, projects.length, 'projects')}</div>
+    <div class="ld-projects">${shownProjects.map((p) => {
+      const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
+      return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">$${spent.toFixed(3)}</span> spent</small>
+        <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">$${(c.cost || 0).toFixed(3)}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
+    }).join('')}</div>
+    <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
   </section>`;
   for (const b of box.querySelectorAll('[data-pg]')) b.onclick = () => {
     const k = b.dataset.pg === 'chat' ? 'ldChatPage' : 'ldProjPage', y = $('.landing', box).scrollTop;
@@ -3276,6 +3344,8 @@ function renderLanding(box) {
     $(`[data-pg="${b.dataset.pg}"][data-d="${b.dataset.d}"]`, box)?.focus(); // keep paging with the keyboard
   };
   wireStartBox(box, last, projects);
+  drawHomeProject(box);
+  for (const b of box.querySelectorAll('.home-act')) b.onclick = () => homeAct(b.dataset.homeAct);
   loadGhMeta(box);
   for (const b of box.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
   for (const b of box.querySelectorAll('[data-new]')) b.onclick = () => newChat(b.dataset.new);
@@ -3419,7 +3489,7 @@ function wireStartBox(box, first, projects) {
   ta.oninput = () => { typed?.(); G.landingDraft = ta.value; };
   ta.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && e.altKey) { e.preventDefault(); openMenu(); } });
   // The chip's menu: recent projects (with what each has spent), then a folder, then templates.
-  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); drawWhere(); closeMenu(); ta.focus(); };
+  const pick = (id) => { G.landingProject = id; d.projectId = id; drawChip(); drawWhere(); closeMenu(); drawHomeProject(); ta.focus(); };
   const items = () => [...menu.querySelectorAll('.ld-mi:not([hidden])')];
   const closeMenu = () => { menu.hidden = true; chip.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); };
   const outside = (e) => { if (!menu.contains(e.target) && e.target !== chip && !chip.contains(e.target)) closeMenu(); };
@@ -8321,7 +8391,7 @@ function paneAreasInit() {
   AREA.el = el;
   bindArea(AREA, WS.sideGroups(WK.lay)[0].id);
   paneWireArea(AREA);
-  matchMedia('(max-width: 900px)').addEventListener('change', () => { paneMarkAreas(); deskPlace(true); });
+  matchMedia(PHONE_MQ).addEventListener('change', () => { paneMarkAreas(); deskPlace(true); });
   // The chat's own box is the chat group: a click in it means "the chat", so a file opened from it goes beside it.
   $('.layout > .work')?.addEventListener('pointerdown', () => { if (!WP.chatFocus) { WP.chatFocus = true; paneMarkAreas(); } }, true);
   if ('ResizeObserver' in window) { let raf = 0; new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; wsPlace(); }); }).observe($('.layout')); }
@@ -8940,6 +9010,7 @@ async function popBoot() {
   $('.pop-name', bar).textContent = POP.title || '';
   $('.pop-dock', bar).onclick = () => popCall('dock', POP.id);
   document.body.prepend(bar);
+  if (qfOn()) $('#qfTitle')?.append(bar); // row 1 holds it (qfPlace moves it too when the frame comes later)
   document.body.dataset.mview = POP.rec ? 'preview' : 'chat';
   await showChat(POP.chat);
   if (!POP.rec) { setPaneHidden(true); syncLayout(); }
@@ -10461,7 +10532,9 @@ function wsStatusDraw() {
   const items = SS.statusItems(facts), sig = JSON.stringify([items, p?.color]);
   if (bar.dataset.sig === sig) return;
   bar.dataset.sig = sig;
-  const btn = (it) => {
+  // Each button says how much it is needed (data-prio): a narrow window drops the least needed first (shell-polish.css).
+  const btn = (it) => btnOf(it).replace('<button ', `<button data-prio="${it.prio || 3}" `);
+  const btnOf = (it) => {
     const tone = it.tone ? ` sb-${it.tone}` : '', label = esc(it.title.split('\n')[0]);
     if (it.kind === 'toggle') return `<button type="button" class="wsb-tog" data-sb="${it.act}" aria-pressed="${it.on}" aria-label="${label}" title="${esc(it.title)}">${SB_ICO[it.id]}</button>`;
     if (it.id === 'project') return `<button type="button" class="wsb-proj" data-sb="${it.act}" title="${esc(it.title)}"><i class="wsb-dot" style="${p ? projStyle(p) : ''}"></i><span class="wsb-pname">${esc(it.text)}</span>${it.branch ? `${SB_ICO.branch}<span class="wsb-mono">${esc(it.branch)}</span>` : ''}</button>`;
@@ -10828,6 +10901,14 @@ function qfPlace(on) {
   document.body.classList.toggle('qf-on', on);
   document.body.classList.toggle('qf-desk', on && DESK);
   const nav = $('.wt-nav'), pal = $('#paletteBtn'), top = $('header.top'), ws = $('#wsTop');
+  if (on && POP) {
+    // A pop-out window: row 1 with the menus, the window's name and Dock back (popBoot's bar moves in); one project, so
+    // no project row. Its own tab strip is the group's.
+    if (title.parentElement !== document.body) document.body.prepend(title);
+    const bar = $('.pop-bar'); if (bar && bar.parentElement !== title) title.append(bar);
+    qfOverlay();
+    return true;
+  }
   if (on) {
     // Row 1 (mark, menus, window buttons) spans the whole window; below it the activity bar and the sidebar run down to
     // the status bar, and row 2 (back / forward, project tabs, Go to or run) sits above the editor area only.
@@ -10847,9 +10928,9 @@ function qfPlace(on) {
 }
 // The desktop app: − □ × in the theme's colours (the native buttons sit over row 1).
 function qfOverlay() {
-  if (!DESK || !window.ohDesktop?.frame || !qfOn()) return;
+  if (!DESK || !window.ohDesktop?.frame) return;
   requestAnimationFrame(() => {
-    const el = $('#qfTitle'); if (!el) return;
+    const el = qfOn() ? $('#qfTitle') : $('header.top'); if (!el) return;
     const hex = (v) => { const m = String(v).match(/\d+(\.\d+)?/g); return m && m.length >= 3 ? `#${m.slice(0, 3).map((x) => Math.round(+x).toString(16).padStart(2, '0')).join('')}` : null; };
     const cs = getComputedStyle(el), color = hex(cs.backgroundColor), symbolColor = hex(cs.color); // row 1's own colours
     if (color && symbolColor) window.ohDesktop.frame('overlay', { color, symbolColor }).catch(() => {});
@@ -11030,8 +11111,8 @@ function qfOpen(i, { kb = false, hi = -1 } = {}) {
   m.setAttribute('aria-label', menu.name);
   m.innerHTML = qfItemsHTML(QFS.items, QFS.hi);
   const r = btn.getBoundingClientRect(), w = m.getBoundingClientRect();
-  m.style.left = `${Math.max(4, Math.min(r.left, innerWidth - w.width - 4))}px`; m.style.top = `${r.bottom + 2}px`;
-  m.style.maxHeight = `${innerHeight - r.bottom - 12}px`;
+  if (qfFolded()) { m.style.left = `${Math.max(4, Math.min(r.right + 2, innerWidth - w.width - 4))}px`; m.style.top = `${r.top}px`; m.style.maxHeight = `${innerHeight - r.top - 12}px`; } // beside its name in ≡
+  else { m.style.left = `${Math.max(4, Math.min(r.left, innerWidth - w.width - 4))}px`; m.style.top = `${r.bottom + 2}px`; m.style.maxHeight = `${innerHeight - r.bottom - 12}px`; }
   if (kb) btn.focus();
 }
 function qfOpenSub(i, { hi = -1 } = {}) {
@@ -11051,6 +11132,7 @@ function qfOpenSub(i, { hi = -1 } = {}) {
 }
 function qfCloseSub() { qfMenuEl(true)?.remove(); QFS.sub = null; qfMenuEl()?.querySelector('[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false'); }
 function qfClose({ refocus = true } = {}) {
+  qfFold(false);
   if (QFS.open < 0) return;
   qfCloseSub(); qfMenuEl()?.remove();
   QFS.open = -1; QFS.hi = -1; QFS.items = [];
@@ -11113,8 +11195,19 @@ function qfKeys(e) {
   if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) { if (s) qfSubHi(QF.itemByLetter(s.items, k, s.hi)); else qfHi(QF.itemByLetter(QFS.items, k, QFS.hi)); return true; }
   return true; // nothing else reaches the page while a menu is open
 }
+// A narrow window (frame.css, below 900px): the nine menus fold into ≡, a list of their names; each opens beside it.
+const QF_FOLD_MQ = '(max-width: 900px)'; // frame.css and shell-polish.css fold the menus at the same width
+const qfFolded = () => qfOn() && matchMedia(QF_FOLD_MQ).matches;
+function qfFold(on) {
+  document.body.classList.toggle('qf-fold-open', !!on);
+  $('#qfBurger')?.setAttribute('aria-expanded', String(!!on));
+}
 function qfWireBar() {
-  const bar = $('#qfMenubar');
+  const bar = $('#qfMenubar'), burger = $('#qfBurger');
+  if (burger) {
+    burger.addEventListener('mousedown', (e) => e.preventDefault()); // the focus stays where you were typing
+    burger.onclick = () => { const on = !document.body.classList.contains('qf-fold-open'); if (!on) qfClose({ refocus: false }); qfFold(on); };
+  }
   bar.addEventListener('mousedown', (e) => { if (e.target.closest('.qf-mb') && !bar.contains(document.activeElement)) e.preventDefault(); });
   bar.addEventListener('click', (e) => {
     const b = e.target.closest('.qf-mb'); if (!b) return;
@@ -11133,7 +11226,7 @@ function qfWireBar() {
     // Alt + a menu's first letter opens it, unless that key is a shortcut of its own or a dialog has the keys.
     if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && /^[a-z]$/i.test(e.key) && !document.querySelector('dialog[open]') && !inTerminal(e.target) && !actionFor(keyCombo(e), keyMap())) {
       const j = QF.MENUS.findIndex((m) => m.name.toLowerCase().startsWith(e.key.toLowerCase()));
-      if (j >= 0) { e.preventDefault(); e.stopPropagation(); QFS.back = document.activeElement; qfOpen(j, { kb: true, hi: 'first' }); }
+      if (j >= 0) { e.preventDefault(); e.stopPropagation(); QFS.back = document.activeElement; if (qfFolded()) qfFold(true); qfOpen(j, { kb: true, hi: 'first' }); }
     }
   }, true);
   // Alt pressed and let go on its own: to the menu bar, or back from it.
@@ -11144,9 +11237,9 @@ function qfWireBar() {
     e.preventDefault();
     if (QFS.open >= 0) qfClose();
     else if (bar.contains(document.activeElement)) qfLeaveBar();
-    else { QFS.back = document.activeElement; QFS.kb = true; $('#qfMenubar [data-m="0"]')?.focus(); }
+    else { QFS.back = document.activeElement; QFS.kb = true; if (qfFolded()) qfFold(true); $('#qfMenubar [data-m="0"]')?.focus(); }
   }, true);
-  window.addEventListener('pointerdown', (e) => { QFS.altDown = false; if (QFS.open >= 0 && !e.target.closest?.('.qf-menu, #qfMenubar')) qfClose({ refocus: false }); }, true);
+  window.addEventListener('pointerdown', (e) => { QFS.altDown = false; if (!e.target.closest?.('.qf-menu, #qfMenubar, #qfBurger')) { if (QFS.open >= 0) qfClose({ refocus: false }); else qfFold(false); } }, true);
   window.addEventListener('blur', () => { QFS.altDown = false; qfClose({ refocus: false }); });
   window.addEventListener('resize', () => qfClose({ refocus: false }));
 }
@@ -11276,9 +11369,11 @@ function qfWireTabs() {
   new ResizeObserver(() => { $('#qfMore').hidden = box.scrollWidth <= box.clientWidth + 1; }).observe(box);
 }
 function qfInit() {
-  if (!$('#qfTitle') || POP) return;
-  qfMenubarDraw(); qfWireBar(); qfWireTabs();
-  $('#qfLogo').onclick = () => goHome();
+  if (!$('#qfTitle')) return;
+  // A pop-out window has the menus too (they act in that window); it has no project row, and its mark goes nowhere.
+  qfMenubarDraw(); qfWireBar(); if (!POP) qfWireTabs();
+  $('#qfLogo').onclick = () => { if (!POP) goHome(); };
+  if (POP) { $('#qfLogo').title = 'QuorX'; $('#qfLogo').setAttribute('aria-label', 'QuorX'); }
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', qfOverlay);
   if (DESK && window.ohDesktop?.keepAwake) window.ohDesktop.keepAwake().then((r) => { QFS.awake = !!r?.on; }).catch(() => {});
   qfOverlay();
@@ -14553,9 +14648,9 @@ function applyTheme() {
   $('#themeBtn').title = title; if ($('#railTheme')) $('#railTheme').dataset.tip = title.replace(/ \(.*\)$/, '');
   qfOverlay();
 }
-const isNarrow = () => matchMedia('(max-width: 900px)').matches;
+const isNarrow = () => matchMedia(PHONE_MQ).matches;
 // Phones get their own layout: one full-screen view at a time (chat list, chat, preview), chosen in the bottom bar.
-const isPhone = () => !POP && matchMedia('(max-width: 900px)').matches;
+const isPhone = () => !POP && matchMedia(PHONE_MQ).matches;
 function setMView(v) {
   G.mview = v;
   document.body.dataset.mview = v;
@@ -14662,7 +14757,8 @@ async function boot() {
   paneAreasInit();
   wirePaneChrome();
   $('#homeBtn').onclick = goHome; $('#railHome').onclick = goHome;
-  placeChrome(); matchMedia('(max-width: 900px)').addEventListener('change', placeChrome);
+  placeChrome(); matchMedia(PHONE_MQ).addEventListener('change', placeChrome);
+  narrowInit(); // narrow windows: see "narrow windows"
   for (const [rail, real] of [['#railRestart', '#restartBtn'], ['#railTheme', '#themeBtn'], ['#railSettings', '#settingsBtn']]) { const b = $(rail); if (b) b.onclick = () => $(real)?.click(); }
   // The GitHub mark by the name opens QuorX's code like any link: the Browser tab, or your browser with Ctrl+click.
   const bg = $('#brandGit'); if (bg) bg.onclick = (e) => { e.preventDefault(); followLink(bg.getAttribute('href'), bg, e.ctrlKey || e.metaKey); };
@@ -14680,7 +14776,7 @@ async function boot() {
   $('#railProject').onclick = () => $('#newProjectBtn').click();
   // 🔍 on the rail opens the sidebar with the cursor in the search box.
   $('#railSearch').onclick = () => { G.sideHidden = false; savePrefs(); syncLayout(); setTimeout(() => $('#chatSearch')?.focus(), 60); };
-  matchMedia('(max-width: 900px)').addEventListener('change', () => { $('#sidebar').classList.remove('mobile-open'); syncLayout(); });
+  matchMedia(PHONE_MQ).addEventListener('change', () => { $('#sidebar').classList.remove('mobile-open'); syncLayout(); });
   $('#chatSearch').oninput = sidebarSearch;
   $('#newProjectBtn').onclick = () => editProject(null);
   // No warning on close: running replies keep going on the server and this page reattaches on reload.

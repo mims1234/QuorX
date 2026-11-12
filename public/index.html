@@ -36,6 +36,7 @@
 <link rel="stylesheet" href="settings-tab.css">
 <link rel="stylesheet" href="tabs.css">
 <link rel="stylesheet" href="panel.css">
+<link rel="stylesheet" href="shell-polish.css">
 </head>
 <body>
 <!-- The window frame, row 1: the QuorX mark, the menu bar and room for the window's own controls (in the desktop app the
@@ -43,6 +44,7 @@
      empty part drags the window. Filled by "the window frame" in app.js; wider screens only, phones keep the top bar. -->
 <div class="qf-title" id="qfTitle">
   <button type="button" class="qf-logo" id="qfLogo" title="Home: the start screen" aria-label="QuorX: Home"><img src="brand/quorx-32.png" alt=""></button>
+  <button type="button" class="qf-burger" id="qfBurger" aria-haspopup="menu" aria-expanded="false" aria-label="Menus" title="Menus (Alt)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   <nav class="qf-menubar" id="qfMenubar" role="menubar" aria-label="Menu bar"></nav>
   <div class="qf-drag" aria-hidden="true"></div>
 </div>

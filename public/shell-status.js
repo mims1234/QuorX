@@ -44,9 +44,11 @@ export function setPanelPrefs(all, pid, patch) {
  * ⬆ Update, ⟳ Restart needed and 💲 the key's balance are the app's own buttons, moved in beside 🔔 (they keep their
  * own drawing and clicks).
  */
+// How much each item is needed when the window is narrow (1 = always kept): a narrow window drops the highest first.
+export const STATUS_PRIO = { sidebar: 1, need: 1, bell: 1, panel: 2, running: 2, check: 3, project: 4, ctx: 4, servers: 5, spend: 5 };
 export function statusItems(s = {}) {
   const out = [];
-  const add = (it) => out.push(it);
+  const add = (it) => out.push({ ...it, prio: STATUS_PRIO[it.id] || 3 });
   add({ id: 'sidebar', side: 'left', kind: 'toggle', on: s.sidebar !== false, text: '', title: 'Sidebar', act: 'sidebar' });
   add({ id: 'panel', side: 'left', kind: 'toggle', on: !!s.panel, text: '', title: 'Bottom panel: terminal, checks, debug', act: 'panel' });
   if (s.project?.name) add({ id: 'project', side: 'left', text: s.project.name, branch: s.branch || '', title: `${s.project.name}${s.branch ? ` · on the branch ${s.branch}` : ''}. Click for its source control: branches and pull requests.`, act: 'source' });

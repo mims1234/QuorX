@@ -49,7 +49,7 @@
 #settings .qx-role .sx-model { max-width: 100%; min-height: 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #settings .qx-role .sx-model small { color: var(--amber); font-family: var(--mono); }
 #settings .qx-role .st-stepper input.st-step-val { width: 44px; }
-@media (max-width: 900px) { .qx-role-grid { padding-left: 0; } }
+@media (max-width: 720px) { .qx-role-grid { padding-left: 0; } }
 
 /* ---------- Project settings → Hooks: the grouped When picker ---------- */
 .qx-ev-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }

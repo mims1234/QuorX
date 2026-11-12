@@ -1,6 +1,6 @@
 /* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
 /* The workspace's chrome (app.js, "the workspace's chrome"): the rail on the left, the chat tabs with back / forward
-   along the top, the Running panel in the sidebar's place, and the status bar at the bottom. Phones (≤ 900px) keep
+   along the top, the Running panel in the sidebar's place, and the status bar at the bottom. Phones (≤ 720px) keep
    their own layout: a chat switcher and a ☰ menu instead of the tabs and the rail, and no status bar. */
 
 /* ---------- the column beside the rail: tabs on top of the chat and the pane ---------- */
@@ -130,7 +130,7 @@ body.ws-on .shell.wr-run .ws-panel { display: flex; flex-direction: column; flex
 #wpBody .rl-need-kind { color: var(--amber); border-color: var(--amber-line, var(--line)); }
 
 /* ---------- phones: one view at a time (phone.css); the strip becomes a switcher, the rail a ☰ menu ---------- */
-@media (max-width: 900px) {
+@media (max-width: 720px) {
   body.ws-on .ws-rail, .ws-status, .ws-panel { display: none !important; }
   .ws-top { height: 44px; gap: 6px; }
   .ws-top .wt-strip, .ws-top .wt-more { display: none !important; }
@@ -197,7 +197,7 @@ main.layout.ws-free > aside#pane > .pane-area.maxed { border-left: 0; }
 .pf-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
 .pf-list b { font-size: 12px; color: var(--muted); }
 .chat-head .ch-btn.ch-move { cursor: grab; }
-@media (max-width: 900px) { .chat-head .ch-btn.desk-only { display: none !important; } }
+@media (max-width: 720px) { .chat-head .ch-btn.desk-only { display: none !important; } }
 
 /* ---------- dropping a tab: five zones per group, an outline where it would go ---------- */
 .ws-drop { position: absolute; inset: 0; z-index: 45; background: color-mix(in srgb, var(--bg) 30%, transparent); }
@@ -254,7 +254,7 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .rmx-dialog .rmx-model { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rmx-dialog .rmx-price { color: var(--money, #e8b04a); font: 11.5px var(--mono, monospace); white-space: nowrap; }
 .rmx-dialog .sq-check { display: flex; margin: 6px 0; }
-@media (max-width: 900px) { body.two-chats .chat-head .ch-own, .wt-tab .own-sq { display: none !important; } }
+@media (max-width: 720px) { body.two-chats .chat-head .ch-own, .wt-tab .own-sq { display: none !important; } }
 
 /* ---------- W4: the layout buttons in the top bar (a segmented control) ---------- */
 .ws-layouts { display: inline-flex; align-items: center; flex: none; height: 26px; margin: 0 6px; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
@@ -265,7 +265,7 @@ body.two-chats .chat-head .ch-own { display: inline-block; }
 .ws-layouts button:disabled { opacity: .45; cursor: default; }
 .ws-layouts .wl-mine { border-left: 1px solid var(--line); border-radius: 0 5px 5px 0; }
 @media (max-width: 1100px) { .ws-layouts button { padding: 0 6px; } }
-@media (max-width: 900px) { .ws-layouts { display: none !important; } }
+@media (max-width: 720px) { .ws-layouts { display: none !important; } }
 .wl-list { min-width: 220px; max-height: 360px; overflow: auto; }
 .wl-list .wl-row { display: flex; align-items: center; gap: 2px; }
 .wl-list .wl-apply { flex: 1; text-align: left; }

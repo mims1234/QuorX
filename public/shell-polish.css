@@ -1,0 +1,96 @@
+/* Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0 */
+/* The shell's last pass (loaded last): Home inside the editor area, narrow windows (app.js "narrow windows"), the
+   frame in pop-out windows, room for the window's − □ × when the desktop app is phone-sized (computer use), and light
+   theme touches for the shell's own surfaces. The chat, Steps, the browser and the other features keep their look. */
+
+/* ---------- narrow windows (720–1000px): the sidebar is a drawer over the editor area ---------- */
+body.qx-narrow .shell { position: relative; }
+body.qx-narrow .shell > .sidebar, body.qx-narrow .shell > .ws-panel { position: absolute; top: 0; bottom: 0; left: 44px; z-index: 45; box-shadow: 10px 0 28px rgba(0, 0, 0, .38); }
+body.qx-narrow .shell > .sidebar { width: min(300px, calc(100vw - 120px)) !important; }
+body.qx-narrow .shell > .ws-panel { width: min(360px, calc(100vw - 120px)) !important; }
+body.qx-narrow #sideResizer { display: none !important; }
+:root[data-theme="light"] body.qx-narrow .shell > .sidebar, :root[data-theme="light"] body.qx-narrow .shell > .ws-panel { box-shadow: 10px 0 28px rgba(16, 24, 20, .16); }
+
+/* ---------- the menus fold into ≡ below 900px ---------- */
+.qf-burger { display: none; place-items: center; flex: none; width: 34px; height: 26px; margin: 0 2px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--text); cursor: pointer; }
+.qf-burger svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.qf-burger:hover, .qf-burger[aria-expanded="true"] { background: var(--panel-3); }
+.qf-burger:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+body.qf-desk .qf-title .qf-burger { -webkit-app-region: no-drag; }
+@media (max-width: 900px) {
+  body.qf-on .qf-burger { display: grid; }
+  body.qf-on .qf-menubar { display: none; }
+  /* Open: the menu names as a list under ≡; each opens beside its name (qfOpen). */
+  body.qf-on.qf-fold-open .qf-menubar { display: flex; flex-direction: column; align-items: stretch; gap: 1px; position: fixed; top: 34px; left: 44px; z-index: 1190; height: auto; min-width: 150px; padding: 4px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-overlay, var(--panel)); box-shadow: 0 12px 30px rgba(0, 0, 0, .38); }
+  body.qf-on.qf-fold-open .qf-mb { display: flex; align-items: center; height: 28px; padding: 0 10px; text-align: left; }
+  /* Row 2: the command box shrinks to its icon; project tabs keep scrolling. */
+  .qf-cmd-slot .pal-open { width: auto !important; }
+  .qf-cmd-slot .pal-open span, .qf-cmd-slot .pal-open kbd { display: none; }
+  .qf-ptab { min-width: 108px !important; }
+}
+:root[data-theme="light"] body.qf-on.qf-fold-open .qf-menubar { box-shadow: 0 12px 30px rgba(16, 24, 20, .16); }
+
+/* ---------- tab strips scroll instead of squeezing ---------- */
+body.qx-narrow .wt-strip, body.qx-narrow .pa-tabs, body.qx-narrow .pa-pages, body.qx-narrow .pa-files, body.qx-narrow #wtPaneTabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+body.qx-narrow .wt-strip::-webkit-scrollbar, body.qx-narrow .pa-tabs::-webkit-scrollbar, body.qx-narrow #wtPaneTabs::-webkit-scrollbar { display: none; }
+/* The layout buttons (View › Layout has them too) give the narrow tab row its room. */
+body.qx-narrow .ws-layouts { display: none !important; }
+
+/* ---------- the status bar drops its least needed items first ---------- */
+@media (max-width: 1000px) { .ws-status [data-prio="5"] { display: none !important; } }
+@media (max-width: 880px) { .ws-status [data-prio="4"] { display: none !important; } }
+@media (max-width: 780px) { .ws-status [data-prio="3"] { display: none !important; } .ws-status .wsb-sep { display: none; } }
+
+/* ---------- Home: in the editor area under the project row (renderLanding) ---------- */
+/* No chat open: the empty chat-tab row gives Home the room. */
+body.qf-on.qx-home #wsTop:has(.wt-none) { display: none !important; }
+.landing.qx-home { gap: 16px; align-content: start; }
+.qx-home .home-h { --pc: hsl(var(--ph, 150) 55% 55%); display: flex; align-items: center; gap: 10px; min-width: 0; padding-top: 4px; }
+.qx-home .home-h[style*="--pcx"] { --pc: var(--pcx); }
+:root[data-theme="light"] .qx-home .home-h:not([style*="--pcx"]) { --pc: hsl(var(--ph, 150) 60% 34%); }
+.qx-home .home-dot { width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--pc); }
+.qx-home .home-h h2 { margin: 0; font: 700 18px/1.2 var(--font-ui); color: var(--text-bright, var(--text)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.qx-home .home-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted); }
+.qx-home .home-sp { flex: 1; }
+/* The start box sits under the project, not docked at the bottom; its project list opens downwards. */
+.qx-home .ld-dock { position: static; margin-top: 0; padding: 0; background: none; }
+.qx-home .ld-dock .ld-menu { top: calc(100% - 6px); bottom: auto; }
+.qx-home .home-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.qx-home .home-col { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 4px 0 6px; }
+.qx-home .home-col h3 { margin: 0; padding: 10px 12px 6px; font: 600 10.5px/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.qx-home .home-col h3 small { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.qx-home .home-list { display: grid; }
+.qx-home .home-row, .qx-home .home-act { display: grid; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 12px; border: 0; border-radius: 0; background: transparent; color: var(--text); font: 13px var(--font-ui); text-align: left; cursor: pointer; }
+.qx-home .home-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.qx-home .home-row .home-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qx-home .home-row small { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+.qx-home .home-act { grid-template-columns: 18px minmax(0, 1fr) auto; }
+.qx-home .home-act kbd { font: 10.5px var(--mono); color: var(--muted); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+.qx-home .home-ico { text-align: center; font-size: 13px; }
+.qx-home .home-row:hover, .qx-home .home-act:hover { background: var(--panel-2); }
+.qx-home .home-row:focus-visible, .qx-home .home-act:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qx-home .home-none { margin: 0; padding: 8px 12px 10px; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 720px) { .qx-home .home-cols { grid-template-columns: minmax(0, 1fr); } .qx-home .home-path { display: none; } .qx-home .home-h h2 { max-width: none; } }
+
+/* ---------- light theme touches for the shell's own surfaces ---------- */
+/* Menus, the folded menu list, the 🔔 list and the drawers cast a soft shadow on a light page, not a black one. */
+:root[data-theme="light"] .qf-menu, :root[data-theme="light"] .qx-notes { box-shadow: 0 10px 28px rgba(16, 24, 20, .16), 0 1px 3px rgba(16, 24, 20, .08); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .qf-menu, :root:not([data-theme="dark"]) .qx-notes { box-shadow: 0 10px 28px rgba(16, 24, 20, .16), 0 1px 3px rgba(16, 24, 20, .08); }
+  :root:not([data-theme="dark"]) body.qx-narrow .shell > .sidebar, :root:not([data-theme="dark"]) body.qx-narrow .shell > .ws-panel { box-shadow: 10px 0 28px rgba(16, 24, 20, .16); }
+}
+
+/* ---------- pop-out windows: row 1 (menus, the window's name, Dock back), then the group's own tab strip ---------- */
+body.qx-pop.qf-on .qf-title { display: flex !important; }
+body.qx-pop.qf-on .qf-proj { display: none !important; }
+body.qx-pop.qf-on .qf-title .pop-bar { display: flex; flex: none; height: 100%; padding: 0 4px 0 8px; gap: 8px; border: 0; background: transparent; -webkit-app-region: no-drag; }
+body.qx-pop.qf-on .qf-title .pop-sp { display: none; }
+body.qx-pop.qf-on .qf-title .pop-name { max-width: 30vw; color: var(--muted); font-size: 12px; }
+body.qx-pop.qf-on .qf-title .pop-dock { height: 24px; }
+body.qx-pop.qf-on .qf-logo { width: 40px; }
+
+/* ---------- the desktop app shrunk beside an app (computer use, phone layout): room for − □ × ---------- */
+/* The window keeps Windows' buttons over its top right corner; the phone top bar ends where they start and drags the
+   window, its own buttons excepted. */
+body.qx-desk:not(.qf-on) > header.top { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px))); min-height: env(titlebar-area-height, 34px); -webkit-app-region: drag; }
+body.qx-desk:not(.qf-on) > header.top :is(button, a, input, select, [role="button"]) { -webkit-app-region: no-drag; }

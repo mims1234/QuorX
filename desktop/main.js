@@ -334,8 +334,12 @@ function openPopout({ id, url, bounds, title } = {}) {
   let ok = false; try { ok = [origin, appOrigin()].includes(new URL(url).origin); } catch { /* not a URL */ }
   if (!ok || !win || win.isDestroyed()) return false;
   const box = fitBox(bounds, screen.getAllDisplays().map((d) => d.workArea), win.getBounds());
+  // Pop-outs get the same frame as the main window: the page's row 1 (menus, the window's name, Dock back) with
+  // Windows' − □ × over its right end, coloured from the page (handle 'frame', called by the pop-out page itself).
   const pw = new BrowserWindow({ ...box, minWidth: 360, minHeight: 260, show: false, backgroundColor: '#070908', title: String(title || 'QuorX').slice(0, 120), icon: iconImage(64), autoHideMenuBar: true,
+    titleBarStyle: 'hidden', titleBarOverlay: { color: FRAME_BAR.color, symbolColor: FRAME_BAR.symbolColor, height: FRAME_BAR.height },
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
+  pw.setMenuBarVisibility(false);
   popouts.set(id, { win: pw, state: null });
   pw.once('ready-to-show', () => { if (!compact && win?.isVisible()) pw.show(); });
   pw.webContents.on('did-finish-load', () => { const z = Number(readConfig().zoom); if (z >= 0.5 && z <= 2) pw.webContents.setZoomFactor(z); });
