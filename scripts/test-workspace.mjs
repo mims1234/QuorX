@@ -619,3 +619,28 @@ test('window frame: the shortcuts table has the window and editing keys the menu
   assert.match(main, /titleBarStyle: 'hidden', titleBarOverlay:/);
   assert.match(main, /handle\('frame'/);
 });
+
+test('activity bar: the views in order, each opened by a row of the shortcuts table; clicking the open one hides the sidebar', () => {
+  assert.deepEqual(QF.VIEWS.map((v) => v.id), ['chats', 'search', 'running', 'servers', 'source', 'extensions', 'schedules']);
+  assert.deepEqual(QF.VIEWS_BOTTOM.map((v) => v.id), ['spending']);
+  for (const v of [...QF.VIEWS, ...QF.VIEWS_BOTTOM]) assert.ok(K.byId.has(v.key), `${v.id} opens with ${v.key}, a row of the table`);
+  const def = K.bindings({});
+  assert.equal(K.actionFor('Ctrl+Shift+F', def), 'chatsearch', 'Search keeps the key search inside chats had');
+  assert.equal(K.actionFor('Ctrl+Shift+E', def), 'view.chats');
+  assert.equal(K.actionFor('Ctrl+Shift+G', def), 'view.source');
+  assert.equal(K.actionFor('Ctrl+Shift+X', def), 'view.extensions');
+  assert.equal(def.get('view.schedules'), '', 'some views start with no key');
+  assert.equal(K.conflicts(def).size, 0);
+  assert.deepEqual(QF.pickView({ view: 'chats', open: true }, 'search'), { view: 'search', open: true });
+  assert.deepEqual(QF.pickView({ view: 'search', open: true }, 'search'), { view: 'search', open: false }, 'the open view again: the sidebar hides');
+  assert.deepEqual(QF.pickView({ view: 'search', open: false }, 'search'), { view: 'search', open: true }, 'and comes back');
+  assert.deepEqual(QF.pickView({ view: 'running', open: false }, 'chats'), { view: 'chats', open: true });
+  assert.deepEqual(QF.pickView({ view: 'chats', open: true }, 'nope'), { view: 'chats', open: true }, 'an unknown view changes nothing');
+  assert.ok(QF.menuRefs().subs.has('views'), 'View › Views lists them');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const defs = app.slice(app.indexOf('const AV_DEF = {'), app.indexOf('\n};', app.indexOf('const AV_DEF = {')));
+  for (const v of QF.VIEWS.filter((x) => x.id !== 'chats').concat(QF.VIEWS_BOTTOM)) assert.match(defs, new RegExp(`\n  ${v.id}: \{`), `${v.id} has what it shows (AV_DEF)`);
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="avTools"/); assert.match(html, /id="avChatsTools"/);
+  assert.doesNotMatch(html, /data-rail="files"/, 'the rail\'s Files and Servers buttons are gone (the views replace them)');
+});

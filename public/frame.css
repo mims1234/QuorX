@@ -78,3 +78,49 @@ body.qf-desk .qf-title .qf-logo, body.qf-desk .qf-title .qf-menubar { -webkit-ap
 .qf-right #staleNote[hidden] { display: none; }
 .qf-pdot + .wt-name { margin-left: 2px; }
 @media (max-width: 1100px) { .qf-cmd-slot .pal-open { width: 190px; } .qf-ptab { min-width: 120px; } }
+
+/* ---------- the activity bar and the sidebar's views (phase 2) ---------- */
+/* The bar reuses the rail's look (.ws-rail .wr-btn in workspace.css). Views other than Chats show in #wsPanel. */
+body.qf-on .ws-rail { width: 44px; gap: 2px; padding: 6px 0; }
+.ws-rail .av-badge { position: absolute; top: -3px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 4px; background: var(--panel-3); color: var(--text); font: 700 9.5px/15px var(--mono); font-style: normal; text-align: center; }
+.ws-rail .av-badge[hidden] { display: none; }
+/* With the activity bar, the sidebar's own nav rows, ☰ fold and footer buttons are the bar's, the toolbar's and the menus' now. */
+body.qf-on.ws-on .sidebar .sb-nav, body.qf-on.ws-on #sbCollapseBtn, body.qf-on.ws-on #sbFootBtns { display: none !important; }
+.av-tools { display: none; }
+body.qf-on.ws-on .av-tools { display: block; flex: none; border-bottom: 1px solid var(--line); }
+body.qf-on.ws-on .sidebar .av-chats-tools { margin: 0 !important; }
+.av-bar { display: flex; align-items: center; gap: 1px; height: 34px; padding: 0 4px 0 12px; }
+.av-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 11px/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.av-sub { color: var(--dim, var(--muted)); font-size: 11px; margin-right: 6px; white-space: nowrap; }
+.av-ib { display: grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+.av-ib:hover { background: var(--panel-3); color: var(--text); }
+.av-ib:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.av-ib svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.av-seg { margin-right: 4px; }
+.av-seg .st-seg-btn { padding: 0 7px; font-size: 11px; height: 22px; }
+/* The panel: one body per view, each scrolling on its own. */
+body.ws-on .shell.wr-run .ws-panel { width: clamp(280px, var(--side-w, 300px), 460px); }
+.ws-panel[data-v="spending"], .ws-panel[data-v="schedules"] { width: clamp(380px, var(--side-w, 380px), 560px) !important; }
+.ws-panel .av-bodies { display: contents; }
+.ws-panel .av-view { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px; }
+.ws-panel .av-view[hidden] { display: none !important; }
+.ws-panel .wp-body.av-view { display: grid; align-content: start; gap: 10px; }
+/* Moved-in contents: the windows' own bodies, laid out for the narrower column. */
+.av-view .cs-box { width: auto; max-width: none; height: 100%; display: flex; flex-direction: column; border: 0; box-shadow: none; background: transparent; }
+.av-view .cs-box .pal-list { flex: 1; max-height: none; }
+.av-view .cs-box .pal-foot { display: none; }
+.av-view .srv-pop, .av-view .prp { position: static; width: auto; box-shadow: none; }
+.av-view #costBody, .av-view #schedBody { max-height: none; }
+.av-empty { padding: 18px 6px; color: var(--muted); font-size: 12.5px; display: grid; gap: 10px; justify-items: start; }
+.av-cards { display: grid; gap: 8px; }
+.av-card { display: grid; gap: 3px; text-align: left; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; font: 13px var(--font-ui); }
+.av-card small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.av-card:hover { border-color: var(--line-strong); background: var(--panel-3); }
+.av-note { margin: 2px 2px 0; color: var(--muted); font-size: 11.5px; }
+/* Help shows a dot when News has something new. */
+.qf-mb.qf-new { position: relative; }
+.qf-mb.qf-new::after { content: ""; position: absolute; top: 4px; right: 3px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }
+.av-view .cs-filters { flex-wrap: wrap; row-gap: 6px; }
+.av-view .cs-seg, .av-view .st-segmented { flex-wrap: wrap; height: auto; }
+.av-view .srv-sec.srv-kind { flex-wrap: wrap; gap: 4px 6px; }
+.av-view .srv-sec.srv-kind small { flex-basis: 100%; }
