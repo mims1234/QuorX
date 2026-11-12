@@ -1076,7 +1076,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   const sourceSession = () => sessionFor(req.chatId || req.runId || 'quorx');
   // A whole answer (a long chat's summary, setup D's drafts) on a source model: there, else OpenRouter's fallback.
   const sourceChatOpts = () => ({ orChat: chat, stream: (b, sg) => fromSource(b, sg, null, null, { session: sourceSession() }), checkOn: !deps.sourceStream, fallback: async (id) => sourceFallbackFor(id, S, await getCatalogue()) });
-  const getCatalogue = () => (catalogueP ??= deps.catalogue ? Promise.resolve(deps.catalogue) : Promise.all([chatModels().catch(() => []), sourceModels().catch(() => [])]).then(([a, b]) => [...a, ...b]));
+  const getCatalogue = () => (catalogueP ??= deps.catalogue ? Promise.resolve(deps.catalogue) : Promise.all([chatModels().catch(() => []), sourceModels({ forModel: setup.model }).catch(() => [])]).then(([a, b]) => [...a, ...b]));
   // Resuming a reply that a harness restart cut off: start again from its last checkpoint.
   const resumed = req.resume ? loadCheckpoint(String(req.resume)) : null;
   if (req.resume && !resumed) throw new Error('Nothing to resume: the checkpoint for that reply is gone.');

@@ -263,6 +263,34 @@ const dropCatalogue = (id) => { if (catalogue) catalogue = { ...catalogue, ids: 
 const per = (x) => (Number.isFinite(Number(x)) ? Number(x) : 0);
 // How each source lists its models (the app itself, started when needed).
 const LISTERS = Object.fromEntries(Object.entries(APPS).map(([id, a]) => [id, a.list]));
+// ---------- apps on this PC: started only when the user uses them ----------
+// Listing OpenCode, Claude Code or Grok Build starts the app, and Ollama may not be there at all, so opening QuorX
+// never lists them: their last list is kept on disk (data/source-lists.json) and the pickers show that. An app is
+// listed again when the user asks (Refresh, Test, switching it on) or right after a call to it (it is running then).
+const ON_PC = new Set([LOCAL_ID, CLAUDE_ID, GROK_ID, OLLAMA_ID]);
+const SAVED_LISTS = path.join(DATA, 'source-lists.json');
+let savedLists = null;
+const fromDisk = new Set(); // sources whose list this session is the saved copy
+function readSaved() {
+  if (savedLists) return savedLists;
+  try { const j = JSON.parse(fs.readFileSync(SAVED_LISTS, 'utf8')); savedLists = j && typeof j === 'object' ? j : {}; } catch { savedLists = {}; }
+  return savedLists;
+}
+function saveList(id, list) {
+  savedLists = { ...readSaved(), [id]: { at: Date.now(), list } };
+  try { fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(`${SAVED_LISTS}.tmp`, JSON.stringify(savedLists)); renameSoon(`${SAVED_LISTS}.tmp`, SAVED_LISTS); } catch { /* kept in memory */ }
+}
+// The saved lists of these sources go into the catalogue, nothing is started.
+function useSaved(ids) {
+  const s = readSaved(), at = { ...(catalogue?.at || {}) }, errs = { ...(catalogue?.errors || {}) }, old = catalogue?.list || [];
+  for (const id of ids) {
+    at[id] = s[id]?.at || 0;
+    if (s[id]?.list?.length) { delete errs[id]; fromDisk.add(id); }
+    else errs[id] = `${SOURCES[id].name} isn’t listed yet: QuorX starts it only when you ask. Press Test in ⚙ Settings → Providers, or Refresh in the model picker.`;
+  }
+  const keepIds = (catalogue?.ids || []).filter((id) => !ids.includes(id));
+  catalogue = { at, ids: [...keepIds, ...ids], list: [...old.filter((m) => keepIds.includes(m.source)), ...ids.flatMap((id) => (Array.isArray(s[id]?.list) ? s[id].list : []).filter((m) => !blockedLocal(m.id)))], errors: errs };
+}
 let refreshing = null; // the refresh under way: { ids, p }
 function refreshLists(ids, listers) {
   if (refreshing && ids.every((id) => refreshing.ids.includes(id))) return refreshing.p;
@@ -275,7 +303,7 @@ function refreshLists(ids, listers) {
     for (const id of ids) {
       at[id] = now;
       if (!sourceOn(id)) { delete errs[id]; got[id] = []; continue; }
-      if (got[id]?.length) { delete errs[id]; continue; }
+      if (got[id]?.length) { delete errs[id]; fromDisk.delete(id); if (ON_PC.has(id)) saveList(id, got[id]); continue; }
       // A list that failed, or came back empty, keeps its last good copy.
       errs[id] = errors[id] || `${SOURCES[id].name} listed no models QuorX can use`;
       got[id] = old.filter((m) => m.source === id);
@@ -296,15 +324,21 @@ function refreshLists(ids, listers) {
  * with no list yet (or `refresh`) is waited for. `all`: every source, on or not (Settings shows how many each has).
  * `listers`: tests put their own lists in place of the apps'.
  */
-export async function sourceModels({ refresh = false, all = false, listers = {} } = {}) {
+// An app on this PC is never listed here unless `refresh` or `listNow` names it (see ON_PC above).
+// `forModel`: a chat is about to use this model, so its app is listed now when there is no saved list of it yet.
+export async function sourceModels({ refresh = false, all = false, listers = {}, listNow = [], forModel = null } = {}) {
+  const fm = forModel ? sourceOf(forModel)?.source : null;
+  if (fm && ON_PC.has(fm) && !catalogue?.list.some((m) => m.id === forModel) && !readSaved()[fm]?.list?.some((m) => m.id === forModel)) listNow = [...listNow, fm];
   const want = SOURCE_IDS.filter((id) => all || sourceOn(id));
   if (!want.length) return [];
   const now = Date.now();
-  const missing = want.filter((id) => !catalogue?.ids.includes(id));
-  const stale = want.filter((id) => !missing.includes(id) && now - (catalogue.at?.[id] || 0) > (catalogue.errors?.[id] ? 60e3 : 3600e3));
+  const lazy = (id) => ON_PC.has(id) && !listNow.includes(id);
+  const missing = want.filter((id) => !catalogue?.ids.includes(id) || listNow.includes(id));
+  const stale = want.filter((id) => !missing.includes(id) && !lazy(id) && now - (catalogue.at?.[id] || 0) > (catalogue.errors?.[id] ? 60e3 : 3600e3));
   if (refresh) await refreshLists(want, listers);
   else {
-    if (missing.length) await refreshLists(missing, listers);
+    if (missing.some(lazy)) useSaved(missing.filter(lazy));
+    if (missing.some((id) => !lazy(id))) await refreshLists(missing.filter((id) => !lazy(id)), listers);
     if (stale.length) refreshLists(stale, listers).catch(() => {});
   }
   // OpenRouter's list may have arrived since the catalogue was priced (the first listing doesn't wait for it).
@@ -536,7 +570,7 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   const s = sourceOf(body.model);
   if (!s) throw Object.assign(new Error(`${body.model} is not a source model`), { kind: 'request' });
   // Right after a restart (a summary before anything loaded the list) the list is loaded first.
-  if (!given && !sourceInfo(body.model)) await sourceModels().catch(() => []);
+  if (!given && !sourceInfo(body.model)) await sourceModels({ forModel: body.model }).catch(() => []);
   stopped(signal);
   const info = given || sourceInfo(body.model) || { plan: 'paid' };
   // A model its app keeps for itself (OpenCode's own free ones): refused here, before a call goes out.
@@ -544,6 +578,8 @@ export async function sourceStream(body, signal, onText, onThink, { info: given,
   const out = await APPS[s.source].stream(body, signal, onText, onThink, { info, idleMs, ...(onCall ? { onCall } : {}) });
   out.usage = { ...(out.usage || {}), ...(Object.keys(out.usage || {}).length ? priced(info, out.usage) : {}) };
   out.source = s.source;
+  // The app answered, so it is running: its list (the saved copy until now) is brought up to date in the background.
+  if (fromDisk.has(s.source)) { fromDisk.delete(s.source); refreshLists([s.source], {}).catch(() => {}); }
   return out;
 }
 /**
@@ -629,6 +665,8 @@ export async function testSource(id) {
   try {
     await APPS[id].check();
     const list = (await LISTERS[id]()).filter((m) => !blockedLocal(m.id));
+    // The user asked: an app on this PC keeps this list, and the pickers show it from now on.
+    if (ON_PC.has(id) && list.length) { saveList(id, list); fromDisk.delete(id); dropCatalogue(id); }
     noteSourceResult(id, null, null);
     // A passing test means it works again: models set aside after a failure are tried at once.
     dropModels(id);

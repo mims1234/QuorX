@@ -1098,7 +1098,9 @@ const server = http.createServer(async (req, res) => {
         // A maker's API: the address its calls go to, and whether OpenRouter's ids of its models run on it.
         else if (srm[2] === 'options' && req.method === 'POST') setSourceOptions(srm[1], { ...(b.base !== undefined ? { base: String(b.base) } : {}), ...(b.route !== undefined ? { route: String(b.route) } : {}) });
         else return json(res, 405, { error: 'method not allowed' });
-        await sourceModels({ all: true }).catch(() => {});
+        // Switching an app on is asking for it: its models are listed now (an app on this PC is otherwise only listed
+        // when the user asks, see sources.js).
+        await sourceModels({ all: true, listNow: srm[2] === 'on' && b.on === true ? [srm[1]] : [] }).catch(() => {});
         return json(res, 200, { ok: true, sources: await sourceStatus() });
       } catch (e) { return json(res, 400, { error: e.message }); }
     }

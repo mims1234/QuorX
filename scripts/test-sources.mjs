@@ -669,6 +669,18 @@ test('OpenCode on this PC lists every text model of its connected providers, pri
       const listed = await sourceModels({ refresh: true, listers });
       assert.deepEqual(listed.filter((m) => m.source === 'opencode-local').map((m) => m.id), ['opencode-local/anthropic/claude-x', 'opencode-local/deepseek/deepseek-v4'], 'its other providers list; OpenCode’s own don’t');
       assert.equal((await sourceStatus({ versions: false })).find((x) => x.id === 'opencode-local').models, 2, 'Settings counts only the models offered');
+      // An app on this PC is listed only when asked: after a restart (here: switched off and on) its saved list shows
+      // and the app is not started; switching it on from Settings lists it again.
+      let calls = 0;
+      const counted = { ...listers, 'opencode-local': async () => { calls++; return appList(); } };
+      setSourceOn('opencode-local', false); setSourceOn('opencode-local', true);
+      const quiet = await sourceModels({ listers: counted });
+      assert.equal(calls, 0, 'nothing is started when the lists load');
+      assert.deepEqual(quiet.filter((m) => m.source === 'opencode-local').map((m) => m.id), ['opencode-local/anthropic/claude-x', 'opencode-local/deepseek/deepseek-v4'], 'the saved list stands in');
+      await sourceModels({ listers: counted, listNow: ['opencode-local'] });
+      assert.equal(calls, 1, 'asked for: listed');
+      await sourceModels({ listers: counted, forModel: 'opencode-local/anthropic/claude-x' });
+      assert.equal(calls, 1, 'a chat on a model the list has starts nothing extra');
       assert.match(blockedLocal('opencode-local/opencode/big-pickle'), /OpenCode Zen/);
       assert.match(blockedLocal('opencode-local/opencode-go/glm-5.3'), /Go key/);
       assert.equal(blockedLocal('opencode-local/anthropic/claude-x'), '');
@@ -1149,6 +1161,16 @@ const OL_SHOW = {
   'gpt-oss:120b-cloud': { capabilities: ['completion', 'tools', 'thinking'], remote_host: 'https://ollama.com:443', model_info: { 'gptoss.context_length': 131072 } },
 };
 const olFetch = async (url, init) => { if (/api\/tags/.test(url)) return OL_TAGS; const m = JSON.parse(init.body).model; if (!OL_SHOW[m]) throw new Error('gone'); return OL_SHOW[m]; };
+
+test('QuorX never starts Ollama: not running is said plainly, not installed too', async () => {
+  const was = process.env.OLLAMA_HOST;
+  process.env.OLLAMA_HOST = '127.0.0.1:9'; // nothing answers there
+  try {
+    const { ensureOllama } = await import('../server/ollamalocal.js');
+    await assert.rejects(ensureOllama({ find: () => 'ollama.exe' }), (e) => e.kind === 'network' && /isn’t running\. Start the Ollama app/.test(e.message));
+    await assert.rejects(ensureOllama({ find: () => null }), (e) => e.kind === 'notinstalled');
+  } finally { if (was == null) delete process.env.OLLAMA_HOST; else process.env.OLLAMA_HOST = was; }
+});
 
 test('Ollama lists the pulled models that call tools, takes calls on /api/chat with a context size, and streams into the usual shape', async () => {
   { // Ollama on this PC lists the pulled models that call tools: free on this PC, cloud ones on the Ollama plan
