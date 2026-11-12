@@ -644,3 +644,19 @@ test('activity bar: the views in order, each opened by a row of the shortcuts ta
   assert.match(html, /id="avTools"/); assert.match(html, /id="avChatsTools"/);
   assert.doesNotMatch(html, /data-rail="files"/, 'the rail\'s Files and Servers buttons are gone (the views replace them)');
 });
+
+test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ for any kind; the inner page strip is gone', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /class="pa-pages"/, 'a slot for page tabs in the group strip');
+  assert.match(html, /data-pa="add"/, '＋ in the group strip');
+  assert.match(html, /href="tabs\.css"/);
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const rb = app.slice(app.indexOf('function renderBrowser(c) {'), app.indexOf('\n}\n', app.indexOf('function renderBrowser(c) {')));
+  assert.doesNotMatch(rb, /class="btabs"/, 'the Browser view no longer draws its own page strip');
+  assert.match(rb, /class="bstage"/, 'the page stage is still there');
+  for (const fn of ['function drawPageTabs(', 'function pageTabMenu(', 'function paneAddMenu(', 'function pageTabsRefresh(']) assert.ok(app.includes(fn), fn);
+  const menu = app.slice(app.indexOf('function pageTabMenu('), app.indexOf('\n}\n', app.indexOf('function pageTabMenu(')));
+  assert.match(menu, /Mute tab/); assert.match(menu, /Mute the agent's pages/); assert.match(menu, /Give to agent/);
+  const add = app.slice(app.indexOf('function paneAddMenu('), app.indexOf('\n}\n', app.indexOf('function paneAddMenu(')));
+  for (const k of ['New chat', 'Browser page', 'Terminal', 'Files', 'Plan', 'Steps', 'Settings']) assert.ok(add.includes(k), `＋ offers ${k}`);
+});
