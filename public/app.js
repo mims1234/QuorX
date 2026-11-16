@@ -4042,9 +4042,9 @@ function keepAtBottom(c, msgs, root) {
   jump.title = 'Jump to the newest messages and keep following them';
   $('.composer', root)?.appendChild(jump);
   const nearEnd = () => msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
-  const toEnd = () => { if (!c.follow) return; msgs.scrollTop = msgs.scrollHeight; jump.hidden = true; };
+  const toEnd = () => { if (!c.follow) return; msgs.classList.remove('reading'); msgs.scrollTop = msgs.scrollHeight; jump.hidden = true; };
   c.toEnd = toEnd;
-  followScroll(msgs, { get: () => c.follow, set: (v) => { c.follow = v; }, near: 80, onChange: (v) => { jump.hidden = v; } });
+  followScroll(msgs, { get: () => c.follow, set: (v) => { c.follow = v; }, near: 40, onChange: (v) => { jump.hidden = v; } });
   edgeGlow(msgs);
   jump.onclick = () => { c.follow = true; toEnd(); };
   if ('ResizeObserver' in window) {
@@ -4081,17 +4081,40 @@ function keepAtBottom(c, msgs, root) {
 }
 // Keeps a scroll box at its end while following. Only your own scrolling (wheel, touch, keys, the scrollbar) stops
 // it; content that grows under it (a picture that loads late, maths that renders) moves it back to the end instead.
+// Any move up by you stops following at once (even a few pixels from the end), so a reply that is still coming in
+// never pulls you back down. While you are reading, the browser keeps the part you look at still when messages above
+// it change size (the .reading class turns scroll anchoring on, see last.css).
 function followScroll(box, { get, set, near = 60, onChange }) {
-  let userAt = 0, lastH = box.scrollHeight;
-  for (const ev of ['wheel', 'touchmove', 'keydown', 'pointerdown']) box.addEventListener(ev, () => { userAt = Date.now(); }, { passive: true });
-  box.addEventListener('scroll', () => {
-    const grew = box.scrollHeight !== lastH; lastH = box.scrollHeight;
-    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < near;
-    if (atEnd) set(true);
-    else if (get() && grew && Date.now() - userAt > 500) box.scrollTop = box.scrollHeight;
-    else set(false);
-    onChange?.(get());
+  let userAt = 0, held = false, touchY = 0, lastH = box.scrollHeight, lastTop = box.scrollTop;
+  const mark = () => { box.classList.toggle('reading', !get()); onChange?.(get()); };
+  const stop = () => { userAt = Date.now(); if (get()) { set(false); mark(); } };
+  const mine = () => { userAt = Date.now(); };
+  const gap = () => box.scrollHeight - box.scrollTop - box.clientHeight;
+  // Scrolling down onto the end follows again, judged as you scroll (a fast reply can add text before the scroll lands).
+  const down = (by) => { mine(); if (!get() && gap() - by < near) { set(true); mark(); } };
+  box.addEventListener('wheel', (e) => { if (e.deltaY < 0) stop(); else down(e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? box.clientHeight : 1)); }, { passive: true });
+  box.addEventListener('keydown', (e) => {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) || (e.key === ' ' && e.shiftKey)) stop();
+    else if (e.key === 'End') down(Infinity);
+    else if (['ArrowDown', 'PageDown', ' '].includes(e.key)) down(e.key === 'ArrowDown' ? 40 : box.clientHeight);
+    else mine();
   }, { passive: true });
+  box.addEventListener('touchstart', (e) => { touchY = e.touches[0]?.clientY || 0; mine(); }, { passive: true });
+  box.addEventListener('touchmove', (e) => { const y = e.touches[0]?.clientY || 0; if (y > touchY + 2) stop(); else mine(); touchY = y; }, { passive: true });
+  box.addEventListener('pointerdown', () => { held = true; mine(); }, { passive: true });
+  for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, () => { if (held) { held = false; mine(); } }, { passive: true });
+  box.addEventListener('scroll', () => {
+    const growth = box.scrollHeight - lastH, grew = growth !== 0; lastH = box.scrollHeight;
+    const up = box.scrollTop < lastTop - 1, wentDown = box.scrollTop > lastTop + 1; lastTop = box.scrollTop;
+    const yours = held || Date.now() - userAt < 500;
+    // dragging the scrollbar down onto the end: text the reply added since the last look doesn't count against you
+    const atEnd = gap() < near + (wentDown && growth > 0 ? growth : 0);
+    if (yours && up) set(false); // dragging the scrollbar up, or a scroll the events above didn't catch
+    else if (atEnd && (yours || get())) set(true);
+    else if (get() && grew && !yours) { box.scrollTop = box.scrollHeight; lastTop = box.scrollTop; }
+    mark();
+  }, { passive: true });
+  mark();
   // pictures that finish loading later
   box.addEventListener('load', (e) => { if (e.target.tagName === 'IMG' && get()) box.scrollTop = box.scrollHeight; }, true);
 }
