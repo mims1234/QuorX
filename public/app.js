@@ -17752,7 +17752,9 @@ function deskCovered(ph) {
 function deskHit(ph, v) {
   const over = (b) => b.width > 0 && b.height > 0 && b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top;
   for (const el of document.querySelectorAll('dialog[open], :popover-open, .oh-tip.on, #replyInfoPop:not([hidden])')) if (over(el.getBoundingClientRect())) return true;
-  const mine = (el) => !el || el === ph || ph.contains(el);
+  // A resize handle on the box's edge (the bottom panel's reaches 3px into the area above it) isn't covering the page:
+  // counted, it kept the tab hidden (an empty black box) for as long as the bottom panel was open.
+  const mine = (el) => !el || el === ph || ph.contains(el) || !!el.closest?.('[role="separator"]');
   const xs = [], ys = [];
   for (let x = v.left + 1; x < v.right - 1; x += DESK_GRID) xs.push(x);
   for (let y = v.top + 1; y < v.bottom - 1; y += DESK_GRID) ys.push(y);
