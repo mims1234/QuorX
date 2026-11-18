@@ -5,12 +5,23 @@
 QuorX is an AI coding agent that runs on your own computer. It works in a project folder you pick, with a real shell,
 a real browser and your real toolchains, and shows how it got every answer.
 
-![A build in QuorX: the chat, the reviewer's scores and the game running in the Browser tab](images/quorx-build.jpg)
+![A build in QuorX: the project's chats, the reply with its checks, and the finished page in the Browser tab](images/quorx-build.jpg)
 
 ## Highlights
 
-- **Any model, with its price.** Every model on OpenRouter, through one key. The model picker searches, sorts by
-  price, filters by what a model can do, and shows your own pass rate next to each price.
+- **A workspace laid out like an editor.** A menu bar and project tabs across the top, an activity bar for Chats,
+  Search, Running, Servers & pages, Source control, Extensions, Schedules and Spending, and a status bar along the
+  bottom. Chats open as tabs: put two side by side, split a chat beside its preview, pick a layout in one click (or
+  save your own), and pop any tab, group or chat out into its own window and dock it back. A bottom panel holds the
+  project's terminals, what's running and its servers. Home, with your projects and recent chats, opens when no chat
+  is. Settings opens in its own large window over the app.
+- **Any model, with its price.** Every model on OpenRouter through one key, plus makers' own APIs with your key
+  (OpenAI, Anthropic, Google Gemini, Moonshot, Meta, xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq, Cerebras),
+  coding-plan subscriptions (OpenCode Go, Command Code, Z.AI, Kimi, Alibaba and MiniMax plans), the coding CLIs
+  you've signed in to on this PC (Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code, Qwen Code and others), and
+  local models served by LM Studio, Ollama, Microsoft Foundry Local or llama.cpp at no cost. ⚙ Settings → Providers &
+  keys turns each on. The model picker searches, sorts by price, filters by what a model can do, and shows your own
+  pass rate next to each price.
 - **A card for each model.** Recommended and default models carry a short card: limits and quirks, prompting tips
   from the provider's docs (with the links), and QuorX's own benchmark results. Hover "card" in the model picker to
   read it. The agent gets the cards of the models it is using, a few lines each.
@@ -59,8 +70,9 @@ a real browser and your real toolchains, and shows how it got every answer.
   Kotlin, Android, Flutter, Electron, Tauri, Godot, Unity, Windows installers and Apple apps, plus one for every
   project. Each finds its toolchain (and whether it really builds here), compiles what a reply changed before the
   reply ends, runs and drives the app, and debugs it with breakpoints.
-- **The Running tab.** Everything running in a project in one list: background builds, servers, the agent's
-  terminals and yours, who started each one, with Stop and Stop all.
+- **Running.** Everything running, in one list: background builds, servers, the agent's terminals and yours, who
+  started each one, with its CPU and memory, Stop and Stop all (Kill for what won't stop). Anything that needs you sits
+  at the top. It's a view in the activity bar (every project) and a tab in the bottom panel (this project).
 - **Real apps, driven like a person would.** A real browser (a real tab you can take over in the desktop app),
   desktop windows through UI Automation, Android emulators, and terminal programs that ask questions. Keys and clicks
   go only to apps the agent started, never to your own windows.
@@ -91,8 +103,9 @@ a real browser and your real toolchains, and shows how it got every answer.
 - **News, inside the app.** What's new in each version, reports on models, tests and platforms, and research
   articles with interactive charts and flows. New articles arrive from the website between versions. Numbers about the
   computer it runs on are worked out from that computer's own logs and never uploaded.
-- **Settings you can see through.** Each Settings category is laid out for what it controls, with Reset category to go
-  back to the defaults. Storage shows what QuorX takes on this computer and clears it; Skills lets you write, import and
+- **Settings you can see through.** Settings opens in its own window (Esc, ✕ or a click beside it closes it, asking
+  first about unsaved changes), with a search over every setting. Each category is laid out for what it controls, with
+  Reset category to go back to the defaults. Storage shows what QuorX takes on this computer and clears it; Skills lets you write, import and
   edit your own skills, for every project or one.
 - **Backups of everything.** Export my QuorX saves your chats, projects, skills and memory to one file, and Import
   brings them back on this or another computer. Big backups stream to disk without slowing QuorX. API keys go in only
@@ -100,15 +113,15 @@ a real browser and your real toolchains, and shows how it got every answer.
 
 | | |
 |---|---|
-| ![The model picker, with prices and ratings](images/quorx-models.jpg) | ![The Running tab: servers and terminals with Stop](images/quorx-running.jpg) |
-| **Pick any model**, with its price and how it did in tests. | **See and stop everything** a project has running. |
-| ![Review changes: every file a reply touched, with Undo](images/quorx-review.jpg) | ![News: an article with an interactive flow](images/quorx-news.jpg) |
-| **Review and undo** every change, commands included. | **News** about each version, models and research. |
+| ![The model picker, with prices and ratings](images/quorx-models.jpg) | ![Settings → Providers & keys: OpenRouter, subscriptions and makers' APIs](images/quorx-providers.jpg) |
+| **Pick any model**, with its price and how it did in tests. | **Turn on the providers you use**: pay per use, a plan, or this PC. |
+| ![Two chats side by side, each with its Steps and costs](images/quorx-layouts.jpg) | ![Running: what runs in every project, beside two chats](images/quorx-running.jpg) |
+| **Two chats at once**, each with its own steps and costs. | **See and stop everything** that's running. |
+| ![Review changes and Undo under a reply](images/quorx-review.jpg) | ![Settings in its own window, open on Appearance](images/quorx-settings.jpg) |
+| **Review and undo** every change, commands included. | **Settings in one window**, with a search over every setting. |
 
 ## Deliberately narrow
 
-- **Models only through OpenRouter.** One key reaches every model, prices are shown before you pick, and there are
-  no direct provider keys to manage.
 - **Windows first.** macOS and Linux have the same safety layer (process groups, bash and zsh rules, their own
   off-limits folders), but they are newer and less tested.
 - **No OS sandbox yet.** The guards above work at the command level. They are not a container.
