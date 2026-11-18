@@ -29,7 +29,7 @@ was checked against the code or measured on 20 October 2026 (QuorX 0.1.5, Window
   - [Smaller guards](#smaller-guards)
   - [Logs that answer "who let this run?"](#logs-that-answer-who-let-this-run)
   - [Who can reach QuorX, and where keys go](#who-can-reach-quorx-and-where-keys-go)
-- [The Running tab and background jobs](#the-running-tab-and-background-jobs)
+- [Running and background jobs](#running-and-background-jobs)
 - [Beyond web pages: the agent's hands](#beyond-web-pages-the-agents-hands)
 - [Design systems, comments, exports and replay](#design-systems-comments-exports-and-replay)
 - [QuorX as an MCP server](#quorx-as-an-mcp-server)
@@ -37,7 +37,7 @@ was checked against the code or measured on 20 October 2026 (QuorX 0.1.5, Window
 - [Testing](#testing)
 - [Setup in detail](#setup-in-detail)
   - [Install and first start](#install-and-first-start)
-  - [OpenRouter keys](#openrouter-keys)
+  - [OpenRouter keys and other providers](#openrouter-keys-and-other-providers)
   - [Ports](#ports)
   - [Where data lives](#where-data-lives)
   - [The desktop app](#the-desktop-app)
@@ -52,7 +52,8 @@ was checked against the code or measured on 20 October 2026 (QuorX 0.1.5, Window
 
 QuorX is an AI coding agent you run on your own computer. You talk to it in a web page (or its desktop app); it
 works in a project folder you pick, with a real shell, a real browser and real toolchains, and it shows how it got
-every answer. Any model on OpenRouter can be the agent. Behind it sits a **quorum of deciders**: a few fast, cheap
+every answer. Any model can be the agent: every model on OpenRouter, makers' own APIs, coding-plan subscriptions,
+the coding CLIs signed in on this PC, or local model servers. Behind it sits a **quorum of deciders**: a few fast, cheap
 models it can ask yes/no and multiple-choice questions, which also vote on risky actions when you let them.
 
 QuorX started as an experiment: can a small, cheap model get stronger by writing its own questions for fast decision
@@ -63,8 +64,8 @@ guard what the agent runs.
 | Part | What it is | Where |
 |---|---|---|
 | Server | Node.js 20+, plain `http`, no framework. Runs replies, commands, servers, the browser and the deciders | `server.js`, `server/` |
-| Web page | Plain JavaScript, no framework | `public/` |
-| Desktop app | Electron window around the same page, with real browser tabs in the pane | `desktop/` |
+| Web page | Plain JavaScript, no framework. Laid out like a code editor: menu bar, project tabs, activity bar, chat tabs and layouts, a bottom panel, a status bar, Settings in its own window | `public/` |
+| Desktop app | Electron window around the same page, with real browser tabs in the Browser tab and tabs that pop out into windows of their own | `desktop/` |
 | Platform packs | One file per kind of app beyond the web | `server/packs/` |
 | Dependencies | `node-pty` and xterm.js for terminals; the desktop app adds Electron in `desktop/` only | `package.json` |
 
@@ -556,10 +557,10 @@ Anyone who reaches QuorX can make it run commands, so `server/access.js` limits 
 
 ---
 
-## The Running tab and background jobs
+## Running and background jobs
 
-The agent keeps working while long things run. The pane's **Running** tab is where you see all of it and end what
-you don't want (`server/running.js`):
+The agent keeps working while long things run. **Running** is where you see all of it and end what you don't want
+(`server/running.js`): a view in the activity bar for every project, and a tab in the bottom panel for this one.
 
 | Group | What it lists |
 |---|---|
@@ -839,9 +840,10 @@ Git, Python 3, Edge or Chrome, pdftotext, PowerShell 7, the toolchains the packs
 is an OS sandbox), each Ready, Optional or Missing, with one fix: Sign in for the key, a download link, or on Windows
 **Install with winget** in its own console window.
 
-### OpenRouter keys
+### OpenRouter keys and other providers
 
-With no key, ⚙ Settings → API keys opens and the message boxes stay locked until you add one.
+With no OpenRouter key, ⚙ Settings → Providers & keys opens, and only chats on another provider's model (or a model
+from an app on this PC) can send until you add one.
 
 - **Sign in with OpenRouter** (the easy way): openrouter.ai opens, you approve (and can set a spending limit for the
   new key there), and the key comes back by itself. It uses OAuth with PKCE; QuorX never sees your password.
@@ -850,6 +852,14 @@ With no key, ⚙ Settings → API keys opens and the message boxes stay locked u
 - You can keep several keys and choose the active one. Each shows its spend for the last 1 h, 3 h, 24 h, 3 days and 7
   days (QuorX samples each key's total every 10 minutes into `data/key-usage.json`), and its limit. Balances and
   totals are hidden until you click 👁.
+
+The same page turns on the other providers, each with its own key, plan or sign-in: makers' APIs (OpenAI, Anthropic,
+Google Gemini, Moonshot, Meta, xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq, Cerebras), coding-plan subscriptions
+(OpenCode Go, Command Code, and the Z.AI, Kimi, Alibaba and MiniMax plans), coding CLIs signed in on this PC over the
+Agent Client Protocol (Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code, Qwen Code, and Google Antigravity on a
+Gemini API key or Google Cloud), and local model servers (Ollama, LM Studio, Microsoft Foundry Local, llama.cpp).
+Budgets count every call at a price: a plan's calls at the same model's list price, and a provider that names no price
+at the same model's OpenRouter price.
 
 Model lists and prices are public, so the model picker works before you add a key. It searches, sorts by price, age
 or context, filters by what a model can do (sees images, uses tools, reasons, long context, free, new), and shows
@@ -867,8 +877,9 @@ Nothing uses 7860, a common port for Gradio and other Python apps.
 
 ### Narrow windows
 
-A window 900 px wide or less gets a compact layout: a bottom bar switches between Chats, Chat, Preview and
-Settings.
+From 720 to 1000 px wide, the sidebar becomes a drawer over the editor area, the menus fold into ≡ below 900 px, and
+the status bar drops its least needed items first. At 720 px or less (as when computer use shrinks the desktop app
+beside another app) a phone layout takes over: a bottom bar switches between Chats, Chat, Preview and Settings.
 
 ### Where data lives
 
@@ -998,7 +1009,6 @@ The choices below shaped the safety layer and the packs. Each one came from some
 | Limit | What it means | What exists instead |
 |---|---|---|
 | No OS sandbox | Commands run as you. A program the agent writes could read any file your account can | The rule engine, blocked paths, snapshots, the tripwire, jobs, caps. Windows Sandbox needs Windows Pro, and a low-integrity token would break toolchains that cache in your profile. WSL 2 is a possible future option. The Setup check shows this as its own row |
-| Models only through OpenRouter | No direct provider keys | One key reaches every model, with prices shown before you pick |
 | Windows first | macOS and Linux have the same safety layer, but they are newer and less tested; the macOS and Linux tests skip on Windows | [macos-and-linux.md](macos-and-linux.md) |
 | The tripwire reacts after the fact | It stops a mass delete once about 25 files are gone | Snapshots cover the project; the blocked paths stop the obvious cases before they run |
 | Not every script is read | `npx tsx file.ts` and `uv run file.py` at the top level aren't read yet | They are builds, so in YOLO the deciders vote on them |

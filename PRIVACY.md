@@ -18,7 +18,10 @@ QuorX runs on your computer. It has no account, no analytics and no telemetry, a
 | Where | What is sent | When |
 |---|---|---|
 | [OpenRouter](https://openrouter.ai) | Your messages and what the agent works with (file contents, command output, screenshots) go to the models you pick, as any AI app must send them | Every model call, under your own OpenRouter key and their [privacy policy](https://openrouter.ai/privacy) |
-| A model maker's own API (OpenAI, Anthropic, Google Gemini, Moonshot, Meta) | The same as for OpenRouter, for the calls that run there | Only when you add that provider's key in ⚙ Settings → API keys and a chat, helper or decider uses one of its models, under your own key and that provider's privacy policy |
+| A model maker's own API (OpenAI, Anthropic, Google Gemini, Moonshot, Meta, xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq, Cerebras) | The same as for OpenRouter, for the calls that run there | Only when you add that provider's key in ⚙ Settings → Providers & keys and a chat, helper or decider uses one of its models, under your own key and that provider's privacy policy |
+| A coding-plan subscription (OpenCode Go, Command Code, the Z.AI, Kimi, Alibaba and MiniMax plans) | The same as for OpenRouter, for the calls that run there | Only when you add your plan key in ⚙ Settings → Providers & keys and a chat uses one of its models, under that service's privacy policy |
+| A coding CLI you've signed in to on this PC (Claude Code, Grok Build, Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code, Qwen Code, Google Antigravity) | The same as for OpenRouter: QuorX hands the chat to that program, which sends it to its own service under your sign-in | Only when you turn that provider on and a chat uses one of its models, under that service's privacy policy |
+| A local model server (Ollama, LM Studio, Microsoft Foundry Local, llama.cpp) | Nothing leaves your computer: the calls go to the server on this PC | When a chat uses one of its models |
 | [models.dev](https://models.dev) | A request for its public model catalogue (names, limits, prices). Nothing about you | When a provider's model list loads, at most once an hour |
 | Package registries (npm, PyPI, crates.io, NuGet, Go, Maven) | The names of packages the agent wants to install | Before an install, to check that each package exists and isn't brand new |
 | GitHub | A request for the latest release | When the desktop app checks for updates |
@@ -32,4 +35,4 @@ the approval rules described in the [safety layer](docs/REPORT.md#the-safety-lay
 
 Your OpenRouter key is kept by the local QuorX server. The page only ever sees it masked, and it is never written to
 logs or sent anywhere except OpenRouter. The same goes for a key you add for a model maker's own API: it is sent only
-to that provider (or the address you set for it in ⚙ Settings → API keys).
+to that provider (or the address you set for it in ⚙ Settings → Providers & keys).

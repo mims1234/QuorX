@@ -6,13 +6,10 @@
 
 <p align="center">
   <b>An open-source AI agent that builds on your own computer, with a quorum of models checking its work.</b><br>
-  Any model on OpenRouter · Windows first · Apache 2.0
+  Any model: OpenRouter, makers' APIs, subscriptions or this PC · Windows first · Apache 2.0
 </p>
 
-<p align="center">
-  <a href="https://youtu.be/-A36aZuz0m0"><img src="docs/images/trailer.jpg" width="720" alt="Watch the QuorX trailer on YouTube"></a><br>
-  <a href="https://youtu.be/-A36aZuz0m0">▶ Watch the trailer</a>
-</p>
+![QuorX after a build: the project and its chats on the left, the reply with its checks in the middle, and the finished page in the Browser tab on the right](docs/images/quorx-build.jpg)
 
 ## What it is
 
@@ -20,13 +17,20 @@ You describe what you want: a game, a site, a desktop app, a fix. QuorX's agent 
 with a real terminal, a real browser and the tools already on your computer. It builds the thing, opens it, tests it
 the way a person would, and shows you every step it took.
 
-![QuorX building a game: the chat on the left, the reviewer's scores, and the game running in the Browser tab](docs/images/quorx-build.jpg)
-
-- **Any model, priced up front.** Pick from every model on OpenRouter, cheap or frontier, with its price shown.
+- **Any model, priced up front.** Every model on OpenRouter, plus makers' own APIs (OpenAI, Anthropic, Gemini, xAI,
+  DeepSeek, Mistral and more), coding-plan subscriptions, the coding CLIs you've signed in to on this PC, and local
+  models from LM Studio, Ollama, Foundry Local or llama.cpp. Each shows its price before you pick it.
 - **A quorum behind it.** Small, fast "decider" models answer the agent's questions and check its work, which helps
   cheaper models build better.
 - **Safe by default.** Risky commands wait for your OK, every change can be undone, and Stop ends everything.
 - **It checks before it says done.** Each build is opened, clicked through and scored by a separate reviewer model.
+- **A workspace laid out like an editor.** Projects as tabs, chats as tabs you can put side by side, one-click layouts,
+  a bottom panel for terminals and servers, and in the desktop app any tab popped out into its own window.
+
+| | |
+|---|---|
+| ![Two chats side by side, each with its Steps and costs below it](docs/images/quorx-layouts.jpg) | ![Settings in its own window, open on Appearance](docs/images/quorx-settings.jpg) |
+| **Work on two chats at once**, with a layout for each way of working. | **Settings in one window**, every option with its own page. |
 
 ## Get it
 
@@ -44,7 +48,8 @@ npm install
 npm start
 ```
 
-Then open the link it prints (QuorX opens at http://quorx.localhost:5188) and sign in with OpenRouter. The full setup is in [Getting started](docs/GETTING-STARTED.md).
+Then open the link it prints (QuorX opens at http://quorx.localhost:5188) and sign in with OpenRouter, or add another
+provider in ⚙ Settings → Providers & keys. The full setup is in [Getting started](docs/GETTING-STARTED.md).
 
 **Official downloads** come only from the Microsoft Store, this repository's
 [releases](https://github.com/mims1234/QuorX/releases) and [quorx.genxmims.org](https://quorx.genxmims.org).
@@ -63,6 +68,7 @@ Then open the link it prints (QuorX opens at http://quorx.localhost:5188) and si
 | [Contributing](CONTRIBUTING.md) | Setting up, running the tests, pull requests, and sending a pack test report |
 | [Model cards](models/README.md) | Each recommended model's limits, quirks and prompting tips, and how the cards are kept up to date |
 | [Releasing](docs/RELEASING.md) | How a version goes out: a pre-release first, then Promote release, and Pull release to take one back |
+| [Launch trailer](https://youtu.be/-A36aZuz0m0) | The one-minute film from QuorX's first release (it shows the earlier look) |
 
 ## A friendly reminder
 
