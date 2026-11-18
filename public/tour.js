@@ -88,10 +88,10 @@ function onKey(e) {
 }
 
 function draw() {
-  const s = STEPS[T.i], n = STEPS.length - 1; // the first build at the end is not a step
-  T.el.innerHTML = `<div class="tr-top"><span class="tr-step">${s.last ? 'Ready' : `${T.i + 1} of ${n}`}</span><button type="button" class="tr-skip" data-tr="skip">Skip tour</button></div>
+  const s = STEPS[T.i], n = STEPS.length; // the first build at the end counts too, so the count never says 5 of 5 and goes on
+  T.el.innerHTML = `<div class="tr-top"><span class="tr-step">${s.last ? `Ready · ${T.i + 1} of ${n}` : `${T.i + 1} of ${n}`}</span><button type="button" class="tr-skip" data-tr="skip">Skip tour</button></div>
     <h3 id="trTitle">${s.title}</h3><div class="tr-body">${s.html}</div>
-    ${s.last ? '' : `<div class="tr-dots" aria-hidden="true">${STEPS.slice(0, n).map((_, k) => `<i class="${k === T.i ? 'on' : ''}"></i>`).join('')}</div>`}
+    ${`<div class="tr-dots" aria-hidden="true">${STEPS.slice(0, n).map((_, k) => `<i class="${k === T.i ? 'on' : ''}"></i>`).join('')}</div>`}
     <div class="tr-foot">${T.i ? '<button type="button" class="tr-btn ghost" data-tr="back">Back</button>' : '<span></span>'}
       <span class="tr-right">${s.last ? `${T.fill ? '<button type="button" class="tr-btn ghost" data-tr="fill">Put it in the box</button>' : ''}<button type="button" class="tr-btn primary" data-tr="done">Done</button>` : '<button type="button" class="tr-btn primary" data-tr="next">Next</button>'}</span></div>`;
   for (const b of T.el.querySelectorAll('[data-tr]')) b.onclick = () => {

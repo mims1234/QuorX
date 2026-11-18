@@ -47,6 +47,10 @@
   .chatpane .composer.composer-v2 { padding: 6px 8px 8px; }
   .composer-v2 .composer-box { gap: 4px; padding: 6px 8px; }
   .cmp-textarea { min-height: 38px !important; }
+  /* the narrow window computer use shrinks QuorX to: no keyboard hints under the box (you watch it, you don't type
+     there), and the model shares its row with 🔒 ⚙ 👁 instead of taking a row of its own */
+  .mic-hint { display: none !important; }
+  .chatpane .cmp-model-slot .cmp-model-chip { flex: 1 1 0 !important; min-width: 110px !important; }
 }
 @media (max-width: 720px) {
   /* the Chats view always wins over the old drawer rules */

@@ -99,8 +99,9 @@ body.qf-on.ws-on .sidebar .av-chats-tools { margin: 0 !important; }
 .av-seg { margin-right: 4px; }
 .av-seg .st-seg-btn { padding: 0 7px; font-size: 11px; height: 22px; }
 /* The panel: one body per view, each scrolling on its own. */
-body.ws-on .shell.wr-run .ws-panel { width: clamp(280px, var(--side-w, 300px), 460px); }
-.ws-panel[data-v="spending"], .ws-panel[data-v="schedules"] { width: clamp(380px, var(--side-w, 380px), 560px) !important; }
+/* One width for every view (Chats, Spending, Extensions…), so switching views doesn't make the page jump sideways; wide
+   enough for Spending's and Schedules' tables. Dragging the edge sets it for all of them. */
+body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(360px, var(--side-w, 360px), 560px) !important; }
 .ws-panel .av-bodies { display: contents; }
 .ws-panel .av-view { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px; }
 .ws-panel .av-view[hidden] { display: none !important; }

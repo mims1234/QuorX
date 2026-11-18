@@ -7,9 +7,15 @@
 #settings.st-tab { width: 100%; height: 100%; min-height: 0; display: flex; container-type: inline-size; container-name: sttab; color: var(--text); }
 #settings.st-tab[hidden] { display: none; }
 #settings.st-tab .settings-modal { width: 100%; height: 100%; max-width: none; border-radius: 0; border: 0; box-shadow: none; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-/* No chat on screen (the start screen): it fills the middle of the window, still not a dialog. */
-#settings.st-tab.st-page { position: absolute; inset: 0; z-index: 30; background: var(--panel); }
-.work:has(> #settings.st-page) { position: relative; }
+/* Its own window over the app (a lightbox): a shade over everything, the window centred and large. Not a <dialog>,
+   so pickers, menus and confirms it opens still show above it. */
+.st-box { position: fixed; inset: 0; z-index: 395; display: grid; place-items: center; padding: 28px; background: color-mix(in srgb, #000 58%, transparent); backdrop-filter: blur(2px); animation: st-box-in .14s ease-out; }
+.st-box[hidden] { display: none; }
+.st-box > #settings.st-tab.st-page { width: min(1240px, 100%); height: min(900px, 100%); border-radius: 12px; overflow: hidden; border: 1px solid var(--line-strong); background: var(--panel); box-shadow: 0 24px 70px -12px rgba(0, 0, 0, .65); outline: none; }
+@keyframes st-box-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .st-box { animation: none; } }
+/* A small window (computer use shrinks QuorX to a phone's size): Settings fills it. */
+@media (max-width: 720px) { .st-box { padding: 0; } .st-box > #settings.st-tab.st-page { width: 100%; height: 100%; border-radius: 0; border: 0; } }
 
 /* ---------- head: title · scopes · search · actions ---------- */
 #settings.st-tab .st-head { height: auto; min-height: 50px; padding: 8px 10px 8px 16px; gap: 12px; }
