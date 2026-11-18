@@ -10598,6 +10598,14 @@ const AV_DEF = {
 };
 // Extensions: MCP servers (the same list as Settings → MCP servers, which saves at once), this project's hooks and
 // skills (each in the window it already has).
+// A row that opens a Settings page: its icon, its name and what it holds, and › (it opens in the Settings window).
+const AV_LINK_ICO = {
+  hooks: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></svg>',
+  perms: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5.5c0 4.3 3 7.9 7 9.5 4-1.6 7-5.2 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg>',
+  design: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.8 1.8-1.7 0-1.2-1-1.6-1-2.6 0-.9.7-1.6 1.6-1.6h2.1a4 4 0 0 0 4-4c0-4-3.8-7.1-8.5-7.1z"/><circle cx="7.8" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="7.8" r="1"/></svg>',
+  skills: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9a3 3 0 0 1 3 3V20H8a3 3 0 0 1-3-3z"/><path d="M17 20h2V7.5M9 9h5M9 12.5h5"/></svg>',
+};
+const avLink = (k, name, sub, attr) => `<button type="button" class="av-card av-link" ${attr} title="Open ${esc(name)} in Settings"><span class="av-link-ico">${AV_LINK_ICO[k] || ''}</span><span class="av-link-txt"><b>${esc(name)}</b><small>${esc(sub)}</small></span><span class="av-link-go" aria-hidden="true">›</span></button>`;
 function avExtensions(b) {
   if (AV.ext === 'mcp') {
     if (settingsOpen()) {
@@ -10609,11 +10617,11 @@ function avExtensions(b) {
   }
   const p = qfProject();
   if (AV.ext === 'hooks') {
-    b.innerHTML = `<div class="av-cards">${[['hooks', 'Hooks'], ['perms', 'Permissions'], ['design', 'Design system']].map(([k, l]) => `<button type="button" class="av-card" data-pjx="${k}"><b>${l}</b><small>${esc(PJX[k][1])}</small></button>`).join('')}<p class="av-note">For ${esc(p?.name || 'this project')}.</p></div>`;
+    b.innerHTML = `<div class="av-cards"><p class="av-for">Project <b>${esc(p?.name || 'this project')}</b></p>${[['hooks', 'Hooks'], ['perms', 'Permissions'], ['design', 'Design system']].map(([k, l]) => avLink(k, l, PJX[k][1], `data-pjx="${k}"`)).join('')}</div>`;
     for (const x of b.querySelectorAll('[data-pjx]')) x.onclick = () => p && openProjectSettings(p, x.dataset.pjx); // Settings › Project: its Hooks, Permissions and Design system pages
     return;
   }
-  b.innerHTML = '<div class="av-cards"><button type="button" class="av-card" data-sk><b>Skills</b><small>playbooks the agent can load: turn them on or off, write or import one (Settings → Skills)</small></button></div>';
+  b.innerHTML = `<div class="av-cards">${avLink('skills', 'Skills', 'playbooks the agent can load: turn them on or off, write or import one', 'data-sk')}</div>`;
   $('[data-sk]', b).onclick = () => openSettings('skills');
 }
 // ⤢ moved a view's body back into its window: when that window closes, the view takes it back (drawn afresh).
