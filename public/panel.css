@@ -117,3 +117,8 @@ body.qp-max .qp-resize { display: none; }
 .qx-notes .empty { padding: 22px 12px; text-align: center; color: var(--muted); font-size: 12.5px; }
 
 @media (max-width: 720px) { .qx-panel, .qx-notes { display: none !important; } }
+
+/* The panel's Terminal: one less layer. The panel tab already says Terminal (and the project is in the status bar),
+   and an empty Running row says nothing the Running section doesn't. */
+.qx-panel .term-title, .qx-panel .term-title + .dim { display: none; }
+.qx-panel .term-running.tr-empty { display: none; }

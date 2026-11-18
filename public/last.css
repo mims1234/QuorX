@@ -3444,3 +3444,10 @@ html.speak-set .msg-tools .mt-speak-pick { display: inline-grid; }
 .msg.usage .ctx-card .uc-head { padding-right: 30px; } /* room for ✕ */
 .trace-ctx .ctx-err { margin: 0; font-size: 11.5px; color: var(--bad); } /* under Compact, as the old meter had it */
 .trace-ctx .ctx-err.soft { color: var(--muted); }
+
+/* ---------- short chat (fitComposer marks .cp-short / .cp-tiny): the message box gives up height first ---------- */
+.chatpane.cp-short .cmp-input-row textarea.cmp-textarea { min-height: 24px !important; max-height: 132px; }
+.chatpane.cp-short .composer-v2 .cmp-input-row { padding-top: 6px; padding-bottom: 2px; }
+.chatpane.cp-tiny .cmp-input-row textarea.cmp-textarea { max-height: 72px; }
+.chatpane.cp-tiny .mic-hint { display: none; }
+.chatpane.cp-tiny form.composer.composer-v2 { padding-top: 4px; padding-bottom: 4px; }

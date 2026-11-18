@@ -108,6 +108,8 @@
 .composer-box.fold4 .cq-chip:not(.cq-sum):not(.cq-safety) { display: none !important; }
 .composer-box.fold4 .cq-chip.cq-sum { display: inline-flex; }
 .composer-box.fold4 .cmp-q-slot .qx-pick-l, .composer-box.fold4 .cmp-q-slot .qx-chg { display: none; }
+/* (its name folded away, the button keeps a short "Q" so it doesn't read as a bare ⌄) */
+.composer-box.fold4 .cmp-q-slot .qx-pick::before { content: 'Q'; font: 700 11px var(--mono); color: var(--text); }
 .composer-box.fold4 .cmp-foot { gap: 6px; padding: 0 6px 6px; }
 /* 5. Narrowest: the Quorium's squares stay (each opens its role's model picker) but get smaller; enhance hides */
 .composer-box.fold5 .cmp-q-slot .qx-strip { gap: 2px; }

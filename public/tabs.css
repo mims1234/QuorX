@@ -69,3 +69,12 @@ body.ws-single #pane .pane-tabs { display: none !important; }
 #pane .pane-tabs .pa-ctab .pp-x { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim, var(--muted)); font-size: 14px; cursor: pointer; }
 #pane .pane-tabs .pa-ctab .pp-x:hover { background: var(--panel-3, var(--line)); color: var(--text); }
 #chats > .chatpane.hosted { overflow: hidden; contain: paint; }
+
+/* Tabs out of sight (stripOverflow in app.js): the open-chats strip fades at that side; the chat's own strip shows +N */
+.ws-top .wt-strip.ovf-r { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.ws-top .wt-strip.ovf-l { mask-image: linear-gradient(to right, transparent, #000 28px); }
+.ws-top .wt-strip.ovf-l.ovf-r { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.ws-top .wt-ptabs .wt-pover { position: sticky; right: 52px; z-index: 1; flex: none; align-self: center; height: 22px; padding: 0 7px; margin-left: auto; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 11px var(--mono); cursor: pointer; box-shadow: -10px 0 10px -2px var(--panel); }
+.ws-top .wt-ptabs .wt-pover[hidden] { display: none; }
+.ws-top .wt-ptabs .wt-pover:hover { border-color: var(--accent); color: var(--accent); }
+.ws-top .wt-ptabs .wt-pover:not([hidden]) + .wt-padd { margin-left: 4px; }
