@@ -1,6 +1,15 @@
 {
   "versions": [
     {
+      "version": "0.2.21",
+      "date": "2026-11-18",
+      "title": "Servers & pages and Search fit the sidebar",
+      "items": [
+        { "kind": "fixed", "text": "Servers & pages in the sidebar shows each page on tidy rows again, and no longer gets stuck on Loading… with the Terminal open.", "pr": 364 },
+        { "kind": "improved", "text": "Search in the sidebar has a clear search box and filter rows that fit its width.", "pr": 364 }
+      ]
+    },
+    {
       "version": "0.2.20",
       "date": "2026-11-18",
       "title": "A new workspace: tabs, layouts and pop-out windows, plus many more providers",
