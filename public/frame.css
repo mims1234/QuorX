@@ -121,10 +121,21 @@ body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(
 /* Help shows a dot when News has something new. */
 .qf-mb.qf-new { position: relative; }
 .qf-mb.qf-new::after { content: ""; position: absolute; top: 4px; right: 3px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }
-.av-view .cs-filters { flex-wrap: wrap; row-gap: 6px; }
-.av-view .cs-seg, .av-view .st-segmented { flex-wrap: wrap; height: auto; }
+.av-view .st-segmented { flex-wrap: wrap; height: auto; }
+/* Search in the sidebar: the box is a framed field that lights up while you type in it, and each filter is one
+   full-width row of equal segments (no group wraps onto a second line); Archived too comes last. */
+.av-view .cs-box .pal-search { gap: 8px; height: 34px; margin: 2px 0 8px; padding: 0 10px; border: 1px solid var(--line-strong, var(--line)); border-radius: 6px; background: var(--surface-inset, var(--bg)); }
+.av-view .cs-box .pal-search:focus-within { border-color: var(--accent); }
+.av-view .cs-box .pal-search input { height: 32px; font-size: 13px; outline: none !important; }
+.av-view .cs-filters { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 0 0 10px; }
+.av-view .cs-seg { display: flex; width: 100%; min-width: 0; flex-wrap: nowrap; }
+.av-view .cs-seg-btn { flex: 1 1 0; min-width: 0; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-view .cs-arch { order: 9; justify-self: start; }
 .av-view .srv-sec.srv-kind { flex-wrap: wrap; gap: 4px 6px; }
 .av-view .srv-sec.srv-kind small { flex-basis: 100%; }
+/* Servers & pages in the sidebar: the popover's rows without the popover's own frame, and a footer that wraps. */
+.av-view .srv-pop.av-srv { border: 0; border-radius: 0; background: transparent; padding: 0; }
+.av-view .av-srv .srv-foot { white-space: normal; padding: 8px 2px 0 !important; }
 
 /* The dev-build marker (last.css, dev builds only) in the desktop app's frame: Windows draws − □ × over the top right
    corner, so the marker ends cleanly where those buttons start, with a rounded end, instead of running under them. */
