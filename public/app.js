@@ -931,7 +931,7 @@ function chatSearchDialog() {
   d.setAttribute('aria-label', 'Search chats');
   d.innerHTML = `<div class="pal-box cs-box">
       <label class="pal-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-        <input id="csInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search your messages and the agent’s replies…" aria-label="Search chats" role="combobox" aria-expanded="true" aria-controls="csList"></label>
+        <input id="csInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search messages and replies…" aria-label="Search chats" role="combobox" aria-expanded="true" aria-controls="csList"></label>
       <div class="cs-filters"></div>
       <div class="cs-narrow"></div>
       <div class="pal-list cs-list" id="csList" role="listbox" aria-label="Matches"></div>
@@ -10574,7 +10574,8 @@ const AV_DEF = {
     show: (b) => { const d = chatSearchDialog(); const box = $('.cs-box', d) || $('.cs-box'); if (box && box.parentElement !== b) b.append(box); $('#csInput').value = CS.q; drawChatSearchFilters(); runChatSearch(); },
   },
   servers: {
-    show: (b) => { const c = avChat(); if (!c) return avNeedChat(b, 'servers and pages'); closeServers(c); c.srvPop = { el: b, inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) }; b.innerHTML = '<div class="srv-empty">Loading…</div>'; renderServers(c); AV.srvChat = c; },
+    // In a box with the popover's classes (as the bottom panel's Servers tab has), so the rows get their layout.
+    show: (b) => { const c = avChat(); if (!c) return avNeedChat(b, 'servers and pages'); closeServers(c); b.innerHTML = '<div class="srv-pop srv-inline av-srv"><div class="srv-empty">Loading…</div></div>'; c.srvPop = { el: b.firstElementChild, inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) }; renderServers(c); AV.srvChat = c; },
     hide: () => { const c = AV.srvChat; if (c?.srvPop?.el?.closest?.('#avBodies')) closeServers(c); AV.srvChat = null; },
   },
   source: {
@@ -16081,13 +16082,15 @@ async function closeAllTerm(c) {
   if (items.length) await postJ('/api/running/stop-all', { projectId: spaceOf(c) }).catch(() => {});
   for (const u of t.terms) { postJ('/api/term/close', { projectId: t.projectId, tab: u.id }).catch(() => {}); dropXterm(t.projectId, u.id, true); }
   closeTermStream(); G.term = null;
-  G.view.term = false; if (c.srvPop?.inline) closeServers(c); syncLayout(); renderPane();
+  G.view.term = false; if (termSrvOwn(c)) closeServers(c); syncLayout(); renderPane();
 }
 const SVG_RUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>';
+// The bottom panel's own Servers list (not the sidebar's Servers & pages view, which shares c.srvPop).
+const termSrvOwn = (c) => !!c.srvPop?.inline && !c.srvPop.el?.closest?.('#avBodies');
 function renderTerm(c) {
   const body = $('#paneBody'), bar = $('#appBar');
   const p = projectOf(c), t = termState(spaceOf(c));
-  if (c.srvPop?.inline) closeServers(c);
+  if (termSrvOwn(c)) closeServers(c);
   bar.hidden = false;
   const sec = (k, ico, label, tip) => `<button type="button" class="tsec ${t.sec === k ? 'on' : ''}" data-sec="${k}" role="tab" aria-selected="${t.sec === k}" title="${tip}">${ico}<span class="tsec-l">${label}</span><span class="tsec-n" hidden></span></button>`;
   bar.innerHTML = `<span class="term-title">${SVG_TERM}<b>Terminal</b></span><span class="dim">${esc(p?.name || c.projectId)}</span>
@@ -16110,6 +16113,7 @@ function renderTerm(c) {
   }
   if (t.sec === 'srv') {
     body.innerHTML = '<div class="srv-pop srv-inline" id="termSrv"><div class="srv-empty">Loading…</div></div>';
+    if (c.srvPop) closeServers(c); // the sidebar's list, if it had one: one list refreshes at a time
     c.srvPop = { el: $('#termSrv', body), inline: true, editing: null, timer: setInterval(() => renderServers(c), 2000) };
     return renderServers(c);
   }
