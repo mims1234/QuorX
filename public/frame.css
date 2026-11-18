@@ -102,6 +102,12 @@ body.qf-on.ws-on .sidebar .av-chats-tools { margin: 0 !important; }
 /* One width for every view (Chats, Spending, Extensions…), so switching views doesn't make the page jump sideways; wide
    enough for Spending's and Schedules' tables. Dragging the edge sets it for all of them. */
 body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(360px, var(--side-w, 360px), 560px) !important; }
+/* Every view resizes like Chats: the drag handle (after the Chats sidebar in the page) stands to the right of the view
+   panel, which comes first after the activity bar. */
+body.ws-on .shell.wr-run > .ws-rail { order: -2; }
+body.ws-on .shell.wr-run > .ws-panel { order: -1; }
+body.ws-on .shell.wr-run > #sideResizer { display: block !important; }
+body.qx-narrow .shell.wr-run > #sideResizer, body.qx-pop .shell.wr-run > #sideResizer { display: none !important; }
 .ws-panel .av-bodies { display: contents; }
 .ws-panel .av-view { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px; }
 .ws-panel .av-view[hidden] { display: none !important; }
@@ -162,6 +168,14 @@ body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(
 .av-view .sc-runs { display: grid; justify-items: start; gap: 3px; }
 .av-view .sc-acts { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 6px; max-width: none; padding-top: 8px; border-top: 1px solid var(--line); }
 .av-view .sc-acts .sc-del { margin-left: auto; }
+/* The edit form in the sidebar: one column (the window's Name | Project and Model | Mode pairs ran off its edge). */
+.av-view .sc-form { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px 10px; }
+.av-view .sc-form > * { grid-column: 1 / -1; min-width: 0; }
+.av-view .sc-form :is(input:not([type=checkbox]), select, textarea) { max-width: 100%; box-sizing: border-box; }
+.av-view .sc-form .st-segmented, .av-view .sc-form .cs-seg { flex-wrap: wrap; height: auto; }
+.av-view .sc-form .sc-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.av-view .sc-form .sq-check, .av-view .sc-form .sq-check > span { white-space: normal; align-items: flex-start; }
+.av-view .sc-form-acts { position: sticky; bottom: -12px; margin: 0 -10px -12px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); }
 /* Servers & pages in the sidebar: the popover's rows without the popover's own frame, and a footer that wraps. */
 .av-view .srv-pop.av-srv { border: 0; border-radius: 0; background: transparent; padding: 0; }
 .av-view .av-srv .srv-foot { white-space: normal; padding: 8px 2px 0 !important; }

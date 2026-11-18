@@ -14894,12 +14894,14 @@ function applySizes() {
   if (G.sizes?.pane) r.setProperty('--pane-w', `${G.sizes.pane}px`); else r.removeProperty('--pane-w');
 }
 function makeResizer(el, key, { min, max, fromRight }) {
-  const clamp = (v) => Math.max(min, Math.min(max(), v));
+  const clamp = (v) => Math.max(typeof min === 'function' ? min() : min, Math.min(max(), v));
+  // The side handle sizes the panel on screen: the Chats sidebar, or another view's panel (they share one width).
+  const box = () => (key === 'side' ? ($('.shell')?.classList.contains('wr-run') ? $('#wsPanel') : $('#sidebar')) : $('#pane'));
   el.onpointerdown = (e) => {
     e.preventDefault();
     el.setPointerCapture(e.pointerId);
     el.classList.add('drag'); document.body.classList.add('resizing');
-    const target = key === 'side' ? $('#sidebar') : $('#pane');
+    const target = box();
     const startX = e.clientX, startW = target.getBoundingClientRect().width;
     el.onpointermove = (ev) => { G.sizes = { ...G.sizes, [key]: Math.round(clamp(startW + (fromRight ? startX - ev.clientX : ev.clientX - startX))) }; applySizes(); };
     el.onpointerup = () => { el.onpointermove = null; el.classList.remove('drag'); document.body.classList.remove('resizing'); savePrefs(); };
@@ -14907,7 +14909,7 @@ function makeResizer(el, key, { min, max, fromRight }) {
   el.ondblclick = () => { G.sizes = { ...G.sizes, [key]: undefined }; applySizes(); savePrefs(); };
   el.onkeydown = (e) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-    const cur = (key === 'side' ? $('#sidebar') : $('#pane')).getBoundingClientRect().width;
+    const cur = box().getBoundingClientRect().width;
     const d = (e.key === 'ArrowRight' ? 1 : -1) * (fromRight ? -1 : 1) * (e.shiftKey ? 60 : 20);
     G.sizes = { ...G.sizes, [key]: Math.round(clamp(cur + d)) }; applySizes(); savePrefs();
   };
@@ -15025,7 +15027,8 @@ async function boot() {
       d.dispatchEvent(new Event('cancel')); d.close();
     });
   }
-  makeResizer($('#sideResizer'), 'side', { min: 200, max: () => Math.min(520, window.innerWidth * 0.4) });
+  // In the IDE shell every view is 360–560px wide (frame.css), so the handle moves within that.
+  makeResizer($('#sideResizer'), 'side', { min: () => (document.body.classList.contains('ws-on') ? 360 : 200), max: () => (document.body.classList.contains('ws-on') ? Math.max(360, Math.min(560, window.innerWidth * 0.45)) : Math.min(520, window.innerWidth * 0.4)) });
   makeResizer($('#paneResizer'), 'pane', { min: 260, max: () => Math.max(300, $('.layout').getBoundingClientRect().width - 360), fromRight: true });
 
   paneAreasInit();
