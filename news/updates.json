@@ -3,8 +3,11 @@
     {
       "version": "0.2.21",
       "date": "2026-11-18",
-      "title": "Servers & pages and Search fit the sidebar",
+      "title": "Every sidebar view fits the sidebar, and every one resizes",
       "items": [
+        { "kind": "improved", "text": "Dragging the sidebar's edge works in every view, not only Chats, and the width you pick holds as you switch views.", "pr": 366 },
+        { "kind": "improved", "text": "Schedules in the sidebar show as tidy cards with their buttons on one row, and editing one fits the sidebar's width.", "pr": 366 },
+        { "kind": "improved", "text": "Extensions lists Hooks, Permissions, Design system and Skills as aligned rows that open their Settings page.", "pr": 366 },
         { "kind": "fixed", "text": "Servers & pages in the sidebar shows each page on tidy rows again, and no longer gets stuck on Loading… with the Terminal open.", "pr": 364 },
         { "kind": "improved", "text": "Search in the sidebar has a clear search box and filter rows that fit its width.", "pr": 364 }
       ]
