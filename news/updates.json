@@ -1,6 +1,41 @@
 {
   "versions": [
     {
+      "version": "0.2.20",
+      "date": "2026-11-18",
+      "title": "A new workspace: tabs, layouts and pop-out windows, plus many more providers",
+      "items": [
+        { "kind": "new", "text": "QuorX has a new IDE-style look: a menu bar, project tabs, an activity bar, a status bar and a bottom panel for terminals and servers.", "pr": 355 },
+        { "kind": "new", "text": "Chats open as tabs you can split side by side, arrange with one-click layouts, or pop out into their own window and dock back.", "pr": 355 },
+        { "kind": "new", "text": "Settings opens in its own large window over the app, closed with Esc, ✕ or a click beside it.", "pr": 362 },
+        { "kind": "new", "text": "Run chats, helpers and deciders on xAI, DeepSeek, Mistral, Z.AI, Alibaba Qwen, MiniMax, Groq and Cerebras APIs with your own key.", "pr": 349 },
+        { "kind": "new", "text": "Run chats on Z.AI, Kimi, Alibaba and MiniMax coding plan subscriptions with your plan key.", "pr": 349 },
+        { "kind": "new", "text": "Run chats through Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code and Qwen Code signed in on this PC, and Antigravity on a Gemini key.", "pr": 344 },
+        { "kind": "new", "text": "Run chats at no cost on local models served by LM Studio, Microsoft Foundry Local and llama.cpp on this PC.", "pr": 352 },
+        { "kind": "new", "text": "Each chat in a git project can work in its own worktree, with a Pull requests tab and Fix in chat for a failing check.", "pr": 355 },
+        { "kind": "new", "text": "Search inside every chat from Ctrl+K or the Search chats window.", "pr": 355 },
+        { "kind": "new", "text": "/btw asks a side question in a tab beside the chat, without interrupting the reply.", "pr": 355 },
+        { "kind": "new", "text": "Quote a reply, have it read aloud, and pick a suggested next step from buttons under a finished reply.", "pr": 355 },
+        { "kind": "new", "text": "A meter by the message box shows how full the context is, with Compact to make room.", "pr": 355 },
+        { "kind": "new", "text": "When a provider hits its usage limit, the chat can switch to another model and come back once the limit resets.", "pr": 355 },
+        { "kind": "new", "text": "A chip above the message box lists the files a reply changed, with Undo, Redo and Review.", "pr": 355 },
+        { "kind": "new", "text": "Pin chats, and idle chats fold into Older in the sidebar.", "pr": 355 },
+        { "kind": "new", "text": "The Browser tab can show a page at phone, tablet, laptop or your own size, upright or sideways.", "pr": 355 },
+        { "kind": "new", "text": "Report a problem saves a cleaned log bundle to a folder you pick.", "pr": 355 },
+        { "kind": "improved", "text": "Running work shows its CPU and memory, with Kill for what won't stop, and anything that needs you sits at the top.", "pr": 355 },
+        { "kind": "improved", "text": "Unsent drafts survive a restart, QuorX can keep the PC awake while it works, and quitting names the work still running.", "pr": 355 },
+        { "kind": "improved", "text": "Every shortcut is in one list you can change, and a system-wide key brings QuorX forward.", "pr": 355 },
+        { "kind": "improved", "text": "Budgets count every call at a price, including subscription models, unless the call is really free.", "pr": 339 },
+        { "kind": "improved", "text": "A ⟳ button above Settings restarts the harness, and turns amber when newer code is waiting.", "pr": 356 },
+        { "kind": "improved", "text": "The chat's tab row shows only tabs with something in them, and a short chat keeps room for its messages.", "pr": 362 },
+        { "kind": "improved", "text": "When a signed-in CLI reaches for its own web search, command or file read, QuorX runs its own tool instead of stopping.", "pr": 358 },
+        { "kind": "fixed", "text": "Scrolling the chat no longer jumps or pulls you back down while a reply is coming in.", "pr": 360 },
+        { "kind": "fixed", "text": "Websites in the browser pane show again while the bottom panel is open, instead of a black box.", "pr": 361 },
+        { "kind": "fixed", "text": "Costs show the same way everywhere, and your own terminal no longer counts as something running.", "pr": 362 },
+        { "kind": "safety", "text": "Edits to CI workflows and git hooks always ask first, in YOLO too, and YOLO keeps a log of what the deciders let through.", "pr": 355 }
+      ]
+    },
+    {
       "version": "0.2.19",
       "date": "2026-11-09",
       "title": "Fits every model: requests built to fit, recovery when a call slips, and a Continue button",
