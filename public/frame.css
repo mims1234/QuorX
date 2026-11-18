@@ -102,6 +102,12 @@ body.qf-on.ws-on .sidebar .av-chats-tools { margin: 0 !important; }
 /* One width for every view (Chats, Spending, Extensions…), so switching views doesn't make the page jump sideways; wide
    enough for Spending's and Schedules' tables. Dragging the edge sets it for all of them. */
 body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(360px, var(--side-w, 360px), 560px) !important; }
+/* Every view resizes like Chats: the drag handle (after the Chats sidebar in the page) stands to the right of the view
+   panel, which comes first after the activity bar. */
+body.ws-on .shell.wr-run > .ws-rail { order: -2; }
+body.ws-on .shell.wr-run > .ws-panel { order: -1; }
+body.ws-on .shell.wr-run > #sideResizer { display: block !important; }
+body.qx-narrow .shell.wr-run > #sideResizer, body.qx-pop .shell.wr-run > #sideResizer { display: none !important; }
 .ws-panel .av-bodies { display: contents; }
 .ws-panel .av-view { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px; }
 .ws-panel .av-view[hidden] { display: none !important; }
@@ -118,6 +124,18 @@ body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(
 .av-card small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 .av-card:hover { border-color: var(--line-strong); background: var(--panel-3); }
 .av-note { margin: 2px 2px 0; color: var(--muted); font-size: 11.5px; }
+/* Extensions: rows that open a Settings page (avLink): icon, name and what it holds, ›. The project they belong to
+   heads the list. */
+.av-for { margin: 0 2px 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.av-for b { color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600; font-size: 12px; margin-left: 4px; }
+.av-card.av-link { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; justify-content: stretch; align-items: center; gap: 10px; padding: 10px 10px 10px 10px; }
+.av-link-ico { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; background: var(--panel-3); color: var(--accent); }
+.av-link-ico svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.av-link-txt { display: grid; gap: 2px; min-width: 0; text-align: left; }
+.av-link-txt b { font: 600 13px var(--font-ui); color: var(--text); }
+.av-link-go { color: var(--muted); font-size: 18px; line-height: 1; }
+.av-card.av-link:hover .av-link-go { color: var(--text); }
+.av-card.av-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Help shows a dot when News has something new. */
 .qf-mb.qf-new { position: relative; }
 .qf-mb.qf-new::after { content: ""; position: absolute; top: 4px; right: 3px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }
@@ -133,6 +151,31 @@ body.ws-on .shell.wr-run .ws-panel, body.ws-on .shell > .sidebar { width: clamp(
 .av-view .cs-arch { order: 9; justify-self: start; }
 .av-view .srv-sec.srv-kind { flex-wrap: wrap; gap: 4px 6px; }
 .av-view .srv-sec.srv-kind small { flex-basis: 100%; }
+/* Schedules in the sidebar: each schedule is one card read top to bottom (what, how often, the prompt, its runs, then
+   its actions on one row), not the Schedules window's three columns; + in the toolbar replaces + New schedule. */
+.av-view .sc-head { display: block; margin-bottom: 8px; }
+.av-view .sc-head .pj-hint { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.av-view .sc-head .sc-new { display: none; }
+.av-view .sc-list { display: grid; gap: 8px; border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.av-view .sc-row { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.av-view .sc-row + .sc-row { border-top: 1px solid var(--line); }
+.av-view .sc-main { gap: 5px; }
+.av-view .sc-top { gap: 4px 6px; }
+.av-view .sc-top .sc-name { flex: 1 0 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.av-view .sc-when { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; font-size: 12px; }
+.av-view .sc-prompt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; color: var(--muted); }
+.av-view .sc-links { margin-top: 0; gap: 4px 10px; }
+.av-view .sc-runs { display: grid; justify-items: start; gap: 3px; }
+.av-view .sc-acts { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 6px; max-width: none; padding-top: 8px; border-top: 1px solid var(--line); }
+.av-view .sc-acts .sc-del { margin-left: auto; }
+/* The edit form in the sidebar: one column (the window's Name | Project and Model | Mode pairs ran off its edge). */
+.av-view .sc-form { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px 10px; }
+.av-view .sc-form > * { grid-column: 1 / -1; min-width: 0; }
+.av-view .sc-form :is(input:not([type=checkbox]), select, textarea) { max-width: 100%; box-sizing: border-box; }
+.av-view .sc-form .st-segmented, .av-view .sc-form .cs-seg { flex-wrap: wrap; height: auto; }
+.av-view .sc-form .sc-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.av-view .sc-form .sq-check, .av-view .sc-form .sq-check > span { white-space: normal; align-items: flex-start; }
+.av-view .sc-form-acts { position: sticky; bottom: -12px; margin: 0 -10px -12px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); }
 /* Servers & pages in the sidebar: the popover's rows without the popover's own frame, and a footer that wraps. */
 .av-view .srv-pop.av-srv { border: 0; border-radius: 0; background: transparent; padding: 0; }
 .av-view .av-srv .srv-foot { white-space: normal; padding: 8px 2px 0 !important; }
