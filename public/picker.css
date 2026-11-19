@@ -162,7 +162,7 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .src-logo-claude { background: #d97757; }
 /* Gemini and Meta keep their own colours (gradients): the picture itself, not a mask in the text colour. Anthropic's
    mark is its cream on dark and near-black on light; OpenAI and Kimi are black and white. */
-.src-logo-gemini, .src-logo-meta { background: var(--ico) center / contain no-repeat; -webkit-mask: none; mask: none; }
+.src-logo-gemini, .src-logo-meta, .src-logo-toapis { background: var(--ico) center / contain no-repeat; -webkit-mask: none; mask: none; }
 .src-logo-anthropic { background: #f0eee6; }
 .src-logo-refuseless { background: #c8102e; } /* Refuseless's red, the same on light and dark */
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .src-logo-anthropic { background: #191919; } }
