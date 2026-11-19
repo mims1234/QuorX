@@ -11,6 +11,7 @@ import { sentencePieces, pickVoice } from './speak.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { openRows, latestOnly } from './sidebar-rows.js';
 import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
 import { bulkGroups, bulkWords } from './approve-all.js';
 import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
@@ -333,7 +334,9 @@ function saveChat(c, now = false) {
   clearTimeout(timers.get(c.id));
   const go = () => {
     timers.delete(c.id);
-    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { unsaved.delete(c.id); if (sent !== false) refreshSidebar(); }, () => { unsaved.add(c.id); /* offline: retried on the next change */ });
+    // A failed save is tried again on the next change, or after a few seconds when nothing changes (a long reply that
+    // only streams text): otherwise a new chat whose first save failed stayed out of the server's list until it ended.
+    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { unsaved.delete(c.id); if (sent !== false) refreshSidebar(); }, () => { unsaved.add(c.id); if (!timers.has(c.id)) timers.set(c.id, setTimeout(go, 5000)); });
     saving.set(c.id, p);
     p.finally(() => { if (saving.get(c.id) === p) saving.delete(c.id); });
     return p;
@@ -457,6 +460,7 @@ async function contextText(list) {
 import { langOf, mountCode } from './code.js';
 import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
 import { mediaKind, writtenMedia, stepMedia, madeMedia } from './chat-media.js';
+import { scriptPaths } from './script-paths.js';
 
 // The message box's buttons: icons only, coloured by what they do.
 const CMP_ICO = {
@@ -1183,13 +1187,16 @@ addEventListener('pagehide', () => { for (const c of [...G.open.values(), G.home
 // project's older chats come with Show more (G.moreChats), and the search box asks the server, so it finds any chat.
 // After SB_PROJECTS projects, Show more projects (pinned, current and open ones always show).
 const SB_PER = 30, SB_PROJECTS = 25;
+const sbFetch = latestOnly(); // a refresh that comes back after a newer one started would draw an older list
 async function refreshSidebar() {
+  const turn = sbFetch.start();
   try {
     const ids = [...new Set([...G.panes, ...G.open.keys()])].join(',');
     const more = Object.entries(G.sbLimit || {}).filter(([, n]) => n > SB_PER);
     const [projects, side, ...pages] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch(`/api/chats?view=sidebar&per=${SB_PER}&ids=${encodeURIComponent(ids)}`).then((r) => r.json()),
       ...more.map(([pid, n]) => fetch(`/api/chats/page?project=${encodeURIComponent(pid)}&limit=${n}`).then((r) => r.json()).catch(() => null))]);
     if (!Array.isArray(projects) || !Array.isArray(side?.chats)) return; // refused (no app link) or an error: keep what's shown
+    if (!sbFetch.current(turn)) return; // a newer refresh is on its way: it draws
     G.projects = projects; G.chats = side.chats; G.chatStats = side.stats || {};
     G.moreChats = Object.fromEntries(more.map(([pid], i) => [pid, pages[i]?.chats || []]));
   } catch { return; }
@@ -1254,9 +1261,8 @@ function renderSidebar() {
   const known = new Map(G.chats.map((c) => [c.id, c]));
   for (const list of Object.values(G.moreChats || {})) for (const c of list) if (!known.has(c.id)) known.set(c.id, c);
   if (q && G.sbFound?.q === q) for (const c of G.sbFound.chats) if (!known.has(c.id)) known.set(c.id, c);
-  const unsaved = [...G.open.values()].filter((c) => !known.has(c.id) && G.panes.includes(c.id))
-    .map((c) => ({ id: c.id, title: c.title, projectId: c.projectId, messages: 0, cost: 0, lastAt: c.created, model: c.agent.setup.model, preview: '' }));
-  const all = [...unsaved, ...known.values()];
+  // A chat with a message sent stays listed here too, on screen or not, until the server's list has it (sidebar-rows.js).
+  const all = [...openRows(G.open.values(), known, G.panes), ...known.values()];
   const stats = G.chatStats || {};
   // Your order first (drag a project's header to move it); projects you haven't placed keep theirs after.
   const rank = (p) => { const i = (G.projectOrder || []).indexOf(p.id); return i < 0 ? 1e6 + G.projects.indexOf(p) : i; };
@@ -5730,7 +5736,7 @@ function timelineHTML(m) {
     const ap = x.approval && m.approvals?.[x.approval], apB = ap ? approvalBadge(ap, !!m.live) : null;
     // An MCP tool: the server's mark, "server › tool", and the first line of what it gave back.
     const mc = mcpOfTool(x.e.name), first = mc && x.res && !err ? String(x.res).split('\n').find((l) => l.trim()) : '';
-    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}${atOf(m, x.e) ? `<small class="tl-ct">${timeTag(atOf(m, x.e))}</small>` : ''}`,
+    return det(`${key}-${i}`, `tl-call${mc ? ' tl-mcp' : ''}`, `${mc ? `<span class="tl-ic">${mcpMark({ name: mc.server }, 'sm')}</span><b>${esc(mc.server)} › ${esc(mc.tool)}</b><span class="tl-arg">${first ? `<span class="tl-mcp-res">${esc(clip(first, 120))}</span>` : esc(clip(argSummary(x.e), 160))}</span>` : `<span class="tl-ic">${TOOL_NAME[x.e.name]?.split(' ')[0] || '🔧'}</span><b>${esc(x.e.name)}</b><span class="tl-arg">${cmdOf(x.e) != null ? cmdWithFiles(cmdOf(x.e), { max: 160, cwd: x.e.args?.cwd }) : esc(clip(argSummary(x.e), 160))}</span>`}${apB ? apB.badge : ''}${x.res == null && m.live ? '<span class="tl-spin" aria-label="running"></span>' : err ? '<span class="tl-err">error</span>' : ''}${atOf(m, x.e) ? `<small class="tl-ct">${timeTag(atOf(m, x.e))}</small>` : ''}`,
       (apB ? apB.detail : '') + (x.cmd && !apB ? whyLine(x.cmd) : '') + (x.res ? `<pre class="tl-out">${esc(clip(x.res, 4000))}</pre>` : '<div class="tl-out tl-none">No output.</div>')
       + (x.cmd?.log ? `<div class="tl-out-acts"><button type="button" class="pv-btn to-pane" data-open-pane="output" data-run="" data-ref="${esc(x.cmd.log)}" data-name="${esc(x.cmd.command || '')}" title="Show this command's whole output in the side pane">⧉ Full output in pane</button></div>` : ''));
   }).join('');
@@ -6928,6 +6934,35 @@ document.addEventListener('toggle', (ev) => {
   const text = m?.thinking?.[d.dataset.think] || '';
   if (body && body.dataset.len !== String(text.length)) { body.innerHTML = md(text); body.dataset.len = String(text.length); }
 }, true);
+// The command line a step runs (shell, run_command, a terminal's start, start_server), or null for any other step.
+function cmdOf(e) {
+  const a = e.args || {};
+  if (e.name === 'shell' || (e.name === 'terminal' && a.action === 'start')) return a.command != null ? String(a.command) : null;
+  if (e.name === 'run_command' || e.name === 'start_server') return [a.command, ...(a.args || [])].filter((x) => x != null).join(' ');
+  return null;
+}
+// A command line with the files it runs or reads as buttons (public/script-paths.js finds them): a click opens the file
+// read only in the side pane, as it is on disk then (GET /api/script-file). max: cut the line to this many characters.
+function cmdWithFiles(line, { max = Infinity, cwd = '' } = {}) {
+  const s = String(line ?? ''), cut = s.length > max ? max - 1 : s.length;
+  let out = '', at = 0;
+  for (const h of scriptPaths(s, { cwd })) {
+    if (h.end > cut) break;
+    const name = s.slice(h.start, h.end);
+    out += `${esc(s.slice(at, h.start))}<button type="button" class="cmd-file" data-script="${esc(h.path)}" title="Read ${esc(h.label || h.path)} (read only, as it is on disk now)">${esc(name)}</button>`;
+    at = h.end;
+  }
+  return out + esc(s.slice(at, cut)) + (cut < s.length ? '…' : '');
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('button.cmd-file[data-script]');
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation(); // a name in a step's summary doesn't fold the step
+  const c = chatOfEl(b);
+  if (!c) return;
+  const rel = b.dataset.script, name = rel.split('/').pop() || rel;
+  openFileInPane(c, { key: `script:${rel}`, name, label: `${name} · read only`, raw: true, src: `/api/script-file?project=${encodeURIComponent(spaceOf(c))}&chat=${encodeURIComponent(c.id)}&path=${encodeURIComponent(rel)}`, kind: previewKind(name) === 'binary' ? 'binary' : 'text' });
+});
 function argSummary(e) {
   const a = e.args || {};
   if (e.name === 'write_artifact') return `${a.id ? `replace ${a.id}` : 'new'} · "${a.title}" · ${a.markdown && !/^\(0 /.test(String(a.html)) ? `${a.markdown} of Markdown` : a.html}`;
@@ -7073,7 +7108,7 @@ document.addEventListener('focusin', (e) => {
 const cmdRuleMatches = (rule, text) => new RegExp(`^${String(rule).trim().replace(/\s+/g, ' ').replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/ \*$/, '\0').replace(/\*/g, '.*').replace('\0', '(?: .*)?')}$`, 'i').test(String(text || '').replace(/\s+/g, ' ').trim());
 function shellCardHTML(a) {
   const c = a.card, p = c.policy || {};
-  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${esc(clip(s.text, 200))}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}${s.wrap ? ` · inside ${esc(s.wrap)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
+  const segs = (p.segments || []).map((s) => `<div class="sc-seg"><code>${cmdWithFiles(s.text, { max: 200, cwd: c.cwd })}</code><span class="sc-cls" data-cls="${esc(s.cls)}">${esc(CMD_CLASS[s.cls] || s.cls)}${s.global ? ' · whole computer' : ''}${s.via ? ` · run by ${esc(s.via)}` : ''}${s.wrap ? ` · inside ${esc(s.wrap)}` : ''}</span>${(s.paths || []).map((x) => `<span class="sc-path" data-zone="${esc(x.zone)}">${esc(CMD_ZONE[x.zone] || x.zone)} · ${esc(clip(x.path, 90))}</span>`).join('')}</div>`).join('');
   const sug = (p.segments || []).find((s) => s.verdict !== 'allow')?.suggest || p.segments?.[0]?.suggest || { exact: c.what, prefix: c.what, program: c.what };
   // Allowing a program covers every command that starts with it (ffmpeg -i a.mp4 b.mp3, ffmpeg -y …), but not a
   // program that runs any code it is handed (node, python, powershell…): those stay one at a time.
@@ -7091,7 +7126,8 @@ function shellCardHTML(a) {
   const longCmd = String(c.what || '').split('\n').length > 6 || String(c.what || '').length > 400;
   return `<div class="approval shell-card" data-id="${esc(c.id)}" data-tool="shell" data-mode="${esc(c.mode || '')}"${c.noAlways ? ' data-no-always="1"' : ''}${c.risk ? ` data-risk="${esc(c.risk)}"` : ''}>
     <h4>⌨️ Run a command <small>(free${p.shell ? ` · ${esc(p.shell)}` : ''})</small></h4>${risk}
-    <pre class="sc-line${longCmd ? ' clipped' : ''}">${esc(c.what)}</pre>${longCmd ? '<button type="button" class="sc-full" aria-expanded="false">Full command ▾</button>' : ''}
+    <pre class="sc-line${longCmd ? ' clipped' : ''}">${cmdWithFiles(c.what, { cwd: c.cwd })}</pre>${longCmd ? '<button type="button" class="sc-full" aria-expanded="false">Full command ▾</button>' : ''}
+    ${scriptPaths(c.what, { cwd: c.cwd }).length ? '<div class="sc-files-hint">📄 Underlined names are files this command runs or reads: click one to read it before you answer.</div>' : ''}
     ${segs ? `<div class="sc-segs">${segs}</div>` : ''}
     ${(p.packages || []).length ? `<div class="sc-segs">${p.packages.map((k) => `<span class="sc-path" data-zone="${k.verdict === 'ok' ? 'inside' : k.verdict === 'missing' ? 'blocked' : 'unknown'}">📦 ${esc(k.name)} · ${esc(k.eco)} · ${k.verdict === 'ok' ? `${k.ageDays != null ? `${Math.round(k.ageDays / 365 * 10) / 10} years old` : 'exists'}${k.weekly != null ? ` · ${k.weekly.toLocaleString()}/week` : ''}` : esc(k.note)}</span>`).join('')}</div>` : ''}
     ${c.why ? `<div class="what">Why it asks: ${esc(c.why)}</div>` : ''}
@@ -8174,7 +8210,7 @@ function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.
 function openFileInPane(c, f, opts = {}) {
   if (!c || !(f?.src || f?.kind in PANE_CARDS)) return;
   const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
-  list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
+  list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), ...(f.raw ? { raw: true } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
   c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
   wsSeen('file', id, { chat: c.id });
   if (G.paneHidden) setPaneHidden(false);
@@ -9659,7 +9695,7 @@ function renderPaneNow() {
   if (G.view.ftab && !ft?.st.f) G.view = paneView(c, 'art'); // closed meanwhile
   if (ft?.st.f) {
     const file = ft.st.f, fc = G.open.get(ft.st.chat) || c, tid = G.view.ftab;
-    setUrlBar(file.kind in PANE_CARDS ? null : file.src);
+    setUrlBar(file.kind in PANE_CARDS || file.raw ? null : file.src); // a script read through QuorX has no address of its own
     bar.hidden = false;
     bar.innerHTML = `${ft.st.preview ? '<button type="button" class="pv-btn pf-keep" title="A preview: the next file you open takes its place. Keep it as a tab of its own (or double-click its tab)">📌 Keep open</button>' : ''}<button type="button" class="pv-btn pf-close" title="Close this tab (the file stays where it is)">✕ Close</button>`;
     const kb = $('.pf-keep', bar); if (kb) kb.onclick = () => wsKeepFileTab(tid);
@@ -9667,7 +9703,7 @@ function renderPaneNow() {
     if (file.kind in PANE_CARDS) return drawPaneCard(fc, file, body);
     body.innerHTML = '<div class="fview pane-file"></div>';
     G.filesProject = spaceOf(fc);
-    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
+    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind, raw: file.raw });
     return;
   }
   const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
@@ -11682,7 +11718,8 @@ function parseDelimited(text, sep) {
  * Show one file or artifact in the Files view. `src` is where the browser can load it; `text` (when known) is its
  * source; `full` is the path on disk (for Copy path). Pages and Markdown get Preview / Source.
  */
-async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true }) {
+// raw: a script a command runs, read before you allow it: exactly as written (never reformatted), with no size to show.
+async function previewFile(view, { name, src, size, full, text, kind = previewKind(name), live = true, raw = false }) {
   const onDisk = onDiskPath(full); // a full path on disk (some callers pass only a name)
   // Open ↗ only for a page hosted elsewhere: a file QuorX serves would just open the same view again (📂 Show in folder
   // is how to get to the file itself).
@@ -11696,7 +11733,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   };
   const label = { image: fileExt(name) === 'svg' ? 'SVG picture' : 'Picture', video: 'Video', audio: 'Audio', pdf: 'PDF', table: 'Table', font: 'Font', md: 'Markdown', html: 'HTML page', binary: 'Binary file' }[kind]
     || (fileExt(name).toUpperCase() || 'Text');
-  const meta = [label, sizeText(size)].filter(Boolean).join(' · ');
+  const meta = [label, raw ? 'read only · as it is on disk now' : sizeText(size)].filter(Boolean).join(' · ');
   // Preview / Source for pages, Markdown and SVG.
   const twoWay = async (drawPreview) => {
     const mode = (G.pvMode ||= {})[kind] || 'preview';
@@ -11749,10 +11786,18 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   if (kind === 'md') return twoWay(async (body) => { const t = text ?? await fetch(src).then((r) => r.text()); body.innerHTML = `<div class="pv-md msg-md">${md(t)}</div>`; enhance(body); });
   if (kind === 'html') return twoWay((body) => { const u = pageUrl(src); body.innerHTML = `<iframe class="pv-frame" sandbox="${pageSandbox(u)}" src="${esc(u)}" title="${esc(name)}"></iframe>`; });
   if (kind === 'binary') { view.innerHTML = head(meta) + `<div class="fx-empty big">${esc(name)}<br><small>A binary file: no preview.${elsewhere ? ` ${elsewhere} to use it.` : ''}</small></div>`; wire(); return; }
+  // A script that can't be shown (missing, too big, binary, outside the folders): its reason as a note, never as if
+  // it were the file's text.
+  if (raw && text == null) {
+    const r = await fetch(src, { cache: 'no-store' }).catch((e) => ({ ok: false, text: async () => e.message }));
+    const body = await r.text();
+    if (!r.ok) { view.innerHTML = head(label) + `<div class="fx-empty big">${esc(name)}<br><small>${esc(body.replace(/^QuorX can’t show this file: /, ''))}</small></div>`; wire(); return; }
+    text = body;
+  }
   // Text and code: the code viewer.
   const t = text ?? await fetch(src).then((r) => r.text());
   view.innerHTML = head(meta) + '<div class="pv-body"></div>'; wire();
-  mountCode($('.pv-body', view), t.length > 600000 ? t.slice(0, 600000) : t, langOf(name), { name });
+  mountCode($('.pv-body', view), t.length > 600000 ? t.slice(0, 600000) : t, langOf(name), { name, ...(raw ? { formatted: false } : {}) });
 }
 async function renderFiles(c) {
   const body = $('#paneBody'), bar = $('#appBar'), area = AREA;
