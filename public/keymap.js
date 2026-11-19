@@ -56,7 +56,7 @@ export const SHORTCUTS = [
   { id: 'view.chats', group: 'view', keys: 'Ctrl+Shift+E', label: 'Chats view' },
   { id: 'view.running', group: 'view', keys: 'Ctrl+Shift+U', label: 'Running view', help: 'Everything running, in every project; what needs you on top.' },
   { id: 'view.servers', group: 'view', keys: '', label: 'Servers & pages view' },
-  { id: 'view.source', group: 'view', keys: 'Ctrl+Shift+G', label: 'Source control view', help: 'This project\'s pull requests and this chat\'s branch.' },
+  { id: 'view.source', group: 'view', keys: 'Ctrl+Shift+G', label: 'Source control view', help: 'This chat\'s folder in git: its changes, its history and its pull requests.' },
   { id: 'view.extensions', group: 'view', keys: 'Ctrl+Shift+X', label: 'Extensions view', help: 'MCP servers, hooks and skills.' },
   { id: 'view.schedules', group: 'view', keys: '', label: 'Schedules view' },
   { id: 'view.spending', group: 'view', keys: '', label: 'Spending view' },
