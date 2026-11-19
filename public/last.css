@@ -1982,6 +1982,8 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .trace-cost .tc-table td:nth-child(2) { width: 9%; }
 .trace-cost .tc-table td i { font-style: normal; color: var(--muted); }
 .trace-cost .tc-table .tc-c { text-align: right; color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+/* A plan call counted at OpenRouter's price: money like the rest, dashed so its note is one hover away. */
+.tc-ref { border-bottom: 1px dashed currentColor; cursor: help; }
 .trace-cost .tc-chat { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-strong, var(--line)); color: var(--muted); }
 .trace-cost .tc-chat b { font: 700 13px var(--mono); color: var(--amber, #f59e0b); }
 
@@ -3453,3 +3455,9 @@ html.speak-set .msg-tools .mt-speak-pick { display: inline-grid; }
 .chatpane.cp-tiny .cmp-input-row textarea.cmp-textarea { max-height: 72px; }
 .chatpane.cp-tiny .mic-hint { display: none; }
 .chatpane.cp-tiny form.composer.composer-v2 { padding-top: 4px; padding-bottom: 4px; }
+/* ▶ Resume / ⏱ Keep going on a reply a newer one carried on from: grey and switched off (the title says why), so it
+   no longer reads as the next thing to press. theme-v4 paints .approval .primary green with !important, hence these (and .msg, to outrank its :hover). */
+.msg .foot .resume-btn[aria-disabled="true"], .msg .oos-card .oos-acts button[aria-disabled="true"] { background: var(--panel) !important; color: var(--muted) !important; border-color: var(--line) !important; box-shadow: none !important; transform: none !important; opacity: .7; cursor: not-allowed; }
+.oos-card .oos-acts button[aria-disabled="true"] .oos-rec { background: none; color: inherit; }
+/* …and its ⏱ card reads like an answered one (theme-v4 .approval.done), not one waiting on you. */
+.oos-card:has(.oos-acts button[aria-disabled="true"]) { border-color: var(--line-strong) !important; box-shadow: none !important; opacity: .85; }

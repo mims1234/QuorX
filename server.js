@@ -314,7 +314,7 @@ const server = http.createServer(async (req, res) => {
     // ---- projects (a folder shared by many chats) ----
     // Each project with what all its chats have spent so far (budgets are per chat).
     // With its GitHub repo when its folder has one (from the folder's git settings: no network).
-    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null, git = false; try { const wd = workspaceDir(p.id); github = gitHubRemote(wd); git = fs.existsSync(path.join(wd, '.git')); } catch { /* folder missing */ } const sp = projectSpend(p.id), { budget: _old, ...q } = p; return { ...q, spent: sp.spent, runningCost: sp.running, unsavedCost: sp.unsaved, ...(github ? { github } : {}), ...(git ? { git } : {}) }; }));
+    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null, git = false; try { const wd = workspaceDir(p.id); github = gitHubRemote(wd); git = fs.existsSync(path.join(wd, '.git')); } catch { /* folder missing */ } const sp = projectSpend(p.id), { budget: _old, ...q } = p; return { ...q, spent: sp.spent, runningCost: sp.running, unsavedCost: sp.unsaved, planValue: sp.plan, ...(github ? { github } : {}), ...(git ? { git } : {}) }; }));
     // Whether that repo is public or private, and a person's or an organization's (asked of GitHub, cached for an hour).
     const ghm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/github$/i);
     if (ghm && req.method === 'GET') {
