@@ -37,8 +37,9 @@ import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, s
 import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget } from './server/budget.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose, ptyList } from './server/pty.js';
-import { gitInfo, createWorktree, worktreeOf, worktreeStatus, removeWorktree, staleWorktrees, listWorktrees, spaceInfo } from './server/worktrees.js';
+import { gitInfo, createWorktree, worktreeOf, folderIdFor, worktreeStatus, removeWorktree, staleWorktrees, listWorktrees, spaceInfo } from './server/worktrees.js';
 import { ghStatus, listPulls, checkLog } from './server/pulls.js';
+import { gitStatus, gitLog, gitCommit, gitDiff } from './server/gitview.js';
 // Pages the agent wrote, served from this app's own address, get their own opaque origin: their requests to /api are refused.
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage, knownFolder } from './server/store.js';
@@ -313,7 +314,7 @@ const server = http.createServer(async (req, res) => {
     // ---- projects (a folder shared by many chats) ----
     // Each project with what all its chats have spent so far (budgets are per chat).
     // With its GitHub repo when its folder has one (from the folder's git settings: no network).
-    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null; try { github = gitHubRemote(workspaceDir(p.id)); } catch { /* folder missing */ } const sp = projectSpend(p.id), { budget: _old, ...q } = p; return { ...q, spent: sp.spent, runningCost: sp.running, unsavedCost: sp.unsaved, planValue: sp.plan, ...(github ? { github } : {}) }; }));
+    if (url.pathname === '/api/projects' && req.method === 'GET') return json(res, 200, listProjects().map((p) => { let github = null, git = false; try { const wd = workspaceDir(p.id); github = gitHubRemote(wd); git = fs.existsSync(path.join(wd, '.git')); } catch { /* folder missing */ } const sp = projectSpend(p.id), { budget: _old, ...q } = p; return { ...q, spent: sp.spent, runningCost: sp.running, unsavedCost: sp.unsaved, planValue: sp.plan, ...(github ? { github } : {}), ...(git ? { git } : {}) }; }));
     // Whether that repo is public or private, and a person's or an organization's (asked of GitHub, cached for an hour).
     const ghm = url.pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/github$/i);
     if (ghm && req.method === 'GET') {
@@ -788,6 +789,23 @@ const server = http.createServer(async (req, res) => {
       if (!repo) return json(res, 200, { repo: null, branch, gh: await ghStatus(), prs: [] });
       try { return json(res, 200, { repo, branch, ...(await listPulls({ cwd: dir, repo, state: q.get('state') || 'open', branch })) }); }
       catch (e) { return json(res, 200, { repo, branch, gh: await ghStatus(), prs: [], error: e.message }); }
+    }
+
+    // ---- the Source control pane (server/gitview.js): the chat's folder (its worktree, else the project folder) through git, read only ----
+    // GET ?project=&chat=&what=status | log (&scope=branch|all&skip=&q=) | commit (&sha=) | diff (&where=commit|staged|unstaged|new&sha=&path=&orig=)
+    if (url.pathname === '/api/git' && req.method === 'GET') {
+      const q = url.searchParams, pid = q.get('project');
+      if (!validId(pid) || !listProjects().some((p) => p.id === pid)) return json(res, 400, { error: 'unknown project' });
+      let dir; try { dir = workspaceDir(q.get('chat') ? folderIdFor(pid, q.get('chat')) : pid); } catch (e) { return json(res, 200, { error: e.message }); }
+      if (!dir || !fs.existsSync(dir)) return json(res, 200, { git: false, why: 'The project folder is missing.' });
+      const what = q.get('what') || 'status';
+      try {
+        if (what === 'status') return json(res, 200, await gitStatus(dir));
+        if (what === 'log') return json(res, 200, await gitLog(dir, { scope: q.get('scope'), skip: q.get('skip'), limit: q.get('limit'), q: q.get('q') || '' }));
+        if (what === 'commit') return json(res, 200, await gitCommit(dir, q.get('sha')));
+        if (what === 'diff') return json(res, 200, await gitDiff(dir, { where: q.get('where'), sha: q.get('sha'), path: q.get('path'), orig: q.get('orig') }));
+        return json(res, 400, { error: 'bad request' });
+      } catch (e) { return json(res, 200, { error: e.message }); }
     }
 
     // ---- command permissions: the rules the rule engine applies, per project and everywhere ----
