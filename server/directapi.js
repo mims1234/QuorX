@@ -1,6 +1,6 @@
 // Copyright 2026 The QuorX authors. SPDX-License-Identifier: Apache-2.0
 // Model makers' own APIs, with the user's own key (⚙ Settings → Providers): OpenAI, Anthropic, Google Gemini,
-// Moonshot (Kimi) and Meta, and Refuseless (open-weight models without refusals). Each runs as a source next to OpenRouter (sources.js), so a model id names where a call goes:
+// Moonshot (Kimi) and Meta, Refuseless (open-weight models without refusals) and ToAPIs (many makers on one key). Each runs as a source next to OpenRouter (sources.js), so a model id names where a call goes:
 // openai-api/gpt-5-mini, anthropic-api/claude-sonnet-5-5, gemini-api/gemini-3.5-flash.
 //   - Which models a key can use comes from the provider's own list (it needs the key, so listing them is the free key
 //     check too). Names, limits and prices come from models.dev's entry for that provider; a model models.dev doesn't
@@ -96,6 +96,14 @@ export const DIRECT = {
     env: ['REFUSELESS_API_KEY'], site: 'https://refuseless.com', keyUrl: 'https://refuseless.com', docs: 'https://docs.refuseless.com/introduction',
     keyHint: 'An API key from the Refuseless console.', credits: true,
   },
+  // Not a maker: one key for many makers' models (Claude, GPT, Gemini, GLM, Kimi, Qwen, Grok…) on the OpenAI chat
+  // format, plus pictures, videos and Suno music (toapis.js). Its list names each model's owner but no prices, so
+  // a model is counted at the same model's price on OpenRouter. Mainland China uses https://toapis.cn/v1.
+  'toapis-api': {
+    name: 'ToAPIs', short: 'ToAPIs', wire: 'chat', base: 'https://toapis.com/v1', dev: 'toapis', maker: 'toapis', or: [], owners: true,
+    env: ['TOAPIS_API_KEY'], site: 'https://toapis.com', keyUrl: 'https://toapis.com/dashboard/tokens', docs: 'https://docs.toapis.com/docs/en/quickstart',
+    keyHint: 'An API key from ToAPIs (toapis.com → Dashboard → API keys). In mainland China, set the address to https://toapis.cn/v1.',
+  },
 };
 export const DIRECT_IDS = Object.keys(DIRECT);
 export const isDirect = (id) => Object.hasOwn(DIRECT, String(id));
@@ -149,7 +157,7 @@ const undated = (id) => String(id).replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').re
 // What a provider's list has that answers no chat call: pictures, voices, embeddings, classifiers, moderation, the Responses-only models.
 const NOT_CHAT = /embed|tts|whisper|dall-e|image|realtime|audio|transcribe|moderation|davinci|babbage|sora|computer-use|search|deep-research|live|lyria|veo|imagen|aqa|cogview|cogvideo|asr|ocr|rerank|prompt-guard|safeguard|orpheus|multi-agent/i;
 const RESPONSES_ONLY = /(^|-)pro($|-)|codex/i; // OpenAI's that answer only on its Responses API
-const MAKER_NORM = { zhipuai: 'z-ai', alibaba: 'qwen', xai: 'x-ai', mistral: 'mistralai' };
+const MAKER_NORM = { zhipuai: 'z-ai', alibaba: 'qwen', xai: 'x-ai', mistral: 'mistralai', zai: 'z-ai', moonshot: 'moonshotai', gemini: 'google', claude: 'anthropic' };
 export function wireOf(src, base) {
   const def = DIRECT[src], b = String(base || def?.base || '');
   if (/\/anthropic(\/|$)/i.test(b)) return 'messages';
@@ -171,13 +179,15 @@ export function directEntry(src, live = {}, md = null, base = '') {
   const opts = Array.isArray(md?.reasoning_options) ? md.reasoning_options : [];
   const effort = opts.find((o) => o?.type === 'effort' && Array.isArray(o.values));
   const canon = String(md?.canonical_model_id || '');
-  const rawMaker = canon.includes('/') ? canon.split('/')[0] : !def.or.length && id.includes('/') ? id.split('/')[0] : def.maker;
+  const owner = def.owners && typeof live.owned_by === 'string' && /^[\w.-]{1,40}$/.test(live.owned_by) ? live.owned_by.toLowerCase() : '';
+  const rawMaker = canon.includes('/') ? canon.split('/')[0] : !def.or.length && id.includes('/') ? id.split('/')[0] : owner || def.maker;
   const maker = MAKER_NORM[rawMaker] || rawMaker;
   const wire = wireOf(src, base);
   const created = Number(live.created) > 1e9 ? Number(live.created) : Date.parse(live.created_at || md?.release_date || '') / 1000 || 0;
   return {
     id: `${src}/${id}`, realId: id, modelID: id, providerID: src, source: src, maker,
-    wire, name: md?.name || live.display_name || live.displayName || nice(id), kind: 'chat',
+    // A many-maker API's bare ids spell versions with dashes (claude-sonnet-5-5): shown as Claude Sonnet 5.5.
+    wire, name: md?.name || live.display_name || live.displayName || nice(def.owners ? id.replace(/(\d)-(?=\d)/g, '$1.') : id), kind: 'chat',
     ctx: md?.limit?.context || Number(live.inputTokenLimit) || Number(live.context_length) || Number(live.max_input_tokens) || null,
     maxOut: md?.limit?.output || Number(live.outputTokenLimit) || Number(live.max_tokens) || null, created: Math.floor(created) || 0,
     in: (md?.modalities?.input || ['text']).filter((x) => x === 'text' || x === 'image'), out: ['text'],
@@ -235,6 +245,8 @@ export async function directModels(src, { key, base, fetchFn = fetch, fetchJSON 
     if (!/^[\w.:@+/-]{1,120}$/.test(id) || seen.has(id)) continue;
     seen.add(id);
     const md = Object.hasOwn(info, id) ? info[id] : Object.hasOwn(info, undated(id)) ? info[undated(id)] : null;
+    // A many-maker API (ToAPIs) names what each model answers on: only chat ones here (its pictures and videos: toapis.js).
+    if (DIRECT[src].owners && Array.isArray(m.supported_endpoint_types) && m.supported_endpoint_types.length && !m.supported_endpoint_types.some((t) => /chat|^openai$/i.test(String(t)))) continue;
     if (md && Array.isArray(md.modalities?.output) && !md.modalities.output.includes('text')) continue;
     if (md && md.tool_call === false && src !== 'anthropic-api') continue;
     if (!md?.tool_call && NOT_CHAT.test(id) && src !== 'anthropic-api') continue;

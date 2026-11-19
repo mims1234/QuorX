@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { chat, chatStream, routeLimits, generationCost, chatModels, imageModels, generateImage, speechModels, synthesize, composeMusic, musicModels, videoModels, generateVideo, HOME } from './openrouter.js';
+import { chat, chatStream, routeLimits, generationCost, chatModels, speechModels, synthesize, HOME } from './openrouter.js';
+import { imageModels, generateImage, composeMusic, musicModels, videoModels, generateVideo } from './mediacat.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
 import { sourceOf, sourceStream, sourceModels, sourceOffWhy, blockedLocal, movedModel, routeModel, sourceSkip, sourceLimit, forgetSourceHealth, noteSourceResult, failureKind, kindWords, sameOnOpenRouter, stripPass, chatAny, sessionFor } from './sources.js';

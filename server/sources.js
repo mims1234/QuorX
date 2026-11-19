@@ -440,8 +440,8 @@ export function orTwin(m, orList = []) {
   const hit = sameOnOpenRouter(m.id, chat.map((x) => ({ ...x, tools: true })), m);
   if (hit) return byId.get(hit) || null;
   // Names with a size tag, a variant or a date on the end: gpt-oss:120b-cloud (Ollama), glm-5.3-abliterated
-  // (Refuseless), claude-haiku-4-5-20251001 (Command Code).
-  const bare = name.split('/').pop().replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').replace(/-(abliterated|fast|cloud)$/i, '');
+  // (Refuseless), claude-haiku-4-5-20251001 (Command Code), claude-opus-5-5-official (ToAPIs).
+  const bare = name.split('/').pop().replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, '').replace(/-(official|vip)$/i, '').replace(/-(abliterated|fast|cloud)$/i, '');
   const sized = bare.replace(/:(\d+(?:\.\d+)?[bkmt])(?:-cloud)?$/i, '-$1').replace(/:.*$/, ''), plain = bare.replace(/:.*$/, '');
   for (const want of [...new Set([sized, plain])]) {
     const hits = chat.filter((x) => norm(x.id.split('/').pop()) === norm(want));

@@ -14,7 +14,9 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { openDetached } from './server/userenv.js';
-import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, imageModels, speechModels, musicModels, videoModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
+import { currentKey, PORT, runtime, ROOT, HOME, chat, chatModels, decisionModels, speechModels, transcribe, clearCatalogues, providerList, knownProviders } from './server/openrouter.js';
+import { imageModels, musicModels, videoModels } from './server/mediacat.js';
+import { clearToapisLists } from './server/toapis.js';
 import { listKeys, addKey, removeKey, setActive, renameKey, keyUsage, activeUsage, accountCredits, startSampling, lockDown, SECRET_FILES } from './server/keys.js';
 import { sourceStatus, sourceModels, setSourceOn, setSourceKey, removeSourceKey, setSourceOptions, testSource, sourceAccount, sourceDecisionModels, failureKind, sourceOf, sameOnOpenRouter, chatAny, providerOfModel } from './server/sources.js';
 import { setupCheck, runFix } from './server/setup-check.js';
@@ -1238,7 +1240,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/models') {
       const refresh = !!url.searchParams.get('refresh');
-      if (refresh) clearCatalogues();
+      if (refresh) { clearCatalogues(); clearToapisLists(); }
       providerList().catch(() => {}); // replies map blocked provider names with it
       // Each catalogue loads on its own, so one failing list doesn't hide the others. The lists are
       // public (no key needed); if none of them load, the page shows why and offers a retry.
