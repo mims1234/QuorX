@@ -11,6 +11,7 @@ import { sentencePieces, pickVoice } from './speak.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { patchList } from './list-patch.js';
 import { openRows, latestOnly } from './sidebar-rows.js';
 import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
 import { bulkGroups, bulkWords } from './approve-all.js';
@@ -1187,6 +1188,10 @@ addEventListener('pagehide', () => { for (const c of [...G.open.values(), G.home
 // project's older chats come with Show more (G.moreChats), and the search box asks the server, so it finds any chat.
 // After SB_PROJECTS projects, Show more projects (pinned, current and open ones always show).
 const SB_PER = 30, SB_PROJECTS = 25;
+// What the sidebar drew last (its handlers look chats up here when used), and one date format for the rows' tips:
+// toLocaleString with options builds a new formatter on every call, which cost more than the rest of a row.
+let SB_ALL = [];
+const SB_WHEN = new Intl.DateTimeFormat([], { dateStyle: 'medium', timeStyle: 'short' });
 const sbFetch = latestOnly(); // a refresh that comes back after a newer one started would draw an older list
 async function refreshSidebar() {
   const turn = sbFetch.start();
@@ -1279,7 +1284,10 @@ function renderSidebar() {
   const projLimit = G.sbProjLimit || SB_PROJECTS;
   const listed = q ? ordered : ordered.filter((p, i) => i < projLimit || p.pinned || p.id === curProject || openProjects.has(p.id));
   const hiddenProjects = ordered.length - listed.length;
-  $('#projectList').innerHTML = listed.map((p) => {
+  SB_ALL = all;
+  // Each project is one block; only the blocks whose HTML changed are drawn again (list-patch.js), so a chat working in
+  // one project doesn't make the page lay out every project's chats again.
+  const blocks = listed.map((p) => {
     // Newest first: the chat you used last is at the top of its project.
     // 📌 Pinned chats first, in the order they were pinned; then newest first.
     const chats = all.filter((c) => (c.projectId || 'scratch') === p.id && (c.messages > 0 || G.panes.includes(c.id))).sort((a, b) => ((a.pinned || Infinity) - (b.pinned || Infinity)) || ((b.lastAt || b.updated || 0) - (a.lastAt || a.updated || 0)));
@@ -1313,7 +1321,7 @@ function renderSidebar() {
         // ⏰ A schedule chat: its runs start fresh, with only the schedule's prompt; what you type in it has the whole chat.
         const sch = schedsOf(c.id), schOn = sch.some((s) => !s.paused && s.nextAt != null);
         const schTag = sch.length ? `<span class="sb-sched ${schOn ? 'on' : 'off'}" title="Schedule chat: ${esc(sch.map((s) => `${s.name} (${s.paused ? 'paused' : s.whenText})`).join(', '))}. Each run starts fresh and sees only the schedule's prompt; what you type here sees the whole chat, every run included.">⏰${schOn ? '' : ' paused'}</span>` : '';
-        const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t${spend(spent)}`, ...(chatSub(c) >= 0.00005 ? [`Sub value\t${spend(chatSub(c))} of it (plan calls at list price, not billed)`] : [])].join('\n');
+        const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${SB_WHEN.format(new Date(c.lastAt || c.updated || Date.now()))}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t${spend(spent)}`, ...(chatSub(c) >= 0.00005 ? [`Sub value\t${spend(chatSub(c))} of it (plan calls at list price, not billed)`] : [])].join('\n');
         // Driving your Chrome or your desktop: the chat glows in that kind's colour (last.css, .drv-chrome / .drv-desktop).
         const drv = running && live.driving ? `drv-${live.driving}` : '';
         // Each state has its own fixed colour, apart from the project colours (last.css, "chat row status"): one at a time,
@@ -1337,11 +1345,15 @@ function renderSidebar() {
       ${older.length && !olderOpen ? olderBtn(p.id, older.length, false) : ''}
       ${moreN > 0 ? `<button type="button" class="sb-more" data-more="${esc(p.id)}">Show more chats <small>${moreN.toLocaleString()} more</small></button>` : ''}
     </div>`;
-  }).join('') + (hiddenProjects > 0 ? `<button type="button" class="sb-more sb-more-proj">Show more projects <small>${hiddenProjects.toLocaleString()} more</small></button>` : '')
+  });
+  const shownIdx = listed.map((p, i) => i).filter((i) => blocks[i]);
+  const tail = (hiddenProjects > 0 ? `<button type="button" class="sb-more sb-more-proj">Show more projects <small>${hiddenProjects.toLocaleString()} more</small></button>` : '')
     + (q && G.sbFound?.q === q && G.sbFound.total > G.sbFound.chats.length ? `<div class="sb-empty">Showing the newest ${G.sbFound.chats.length} of ${G.sbFound.total.toLocaleString()} matches: type more to narrow it.</div>` : '');
-  for (const b of document.querySelectorAll('#projectList [data-older]')) b.onclick = () => toggleOlder(b.dataset.older);
-  for (const b of document.querySelectorAll('#projectList [data-more]')) b.onclick = () => { b.disabled = true; b.textContent = 'Loading…'; showMoreChats(b.dataset.more); };
-  const mp = $('#projectList .sb-more-proj'); if (mp) mp.onclick = () => { G.sbProjLimit = projLimit + SB_PROJECTS; renderSidebar(); };
+  const { fresh } = patchList(pl, { keys: shownIdx.map((i) => listed[i].id), html: shownIdx.map((i) => blocks[i]), tail });
+  const inFresh = (sel) => fresh.flatMap((el) => [...el.querySelectorAll(sel)]);
+  for (const b of inFresh('[data-older]')) b.onclick = () => toggleOlder(b.dataset.older);
+  for (const b of inFresh('[data-more]')) b.onclick = () => { b.disabled = true; b.textContent = 'Loading…'; showMoreChats(b.dataset.more); };
+  const mp = $('#projectList .sb-more-proj'); if (mp) mp.onclick = () => { G.sbProjLimit = (G.sbProjLimit || SB_PROJECTS) + SB_PROJECTS; renderSidebar(); };
   renderArchive(all);
   // The collapsed rail lists only the chats working right now (to jump back to them); the rest is in the full sidebar.
   const rail = [...all].filter((c) => G.open.get(c.id)?.running).slice(0, 8);
@@ -1353,22 +1365,24 @@ function renderSidebar() {
   // Every project's chats, plan calls counted at list price like any other call (the server's stats include them).
   const total = Object.values(G.chatStats || {}).reduce((n, s) => n + (s.cost || 0), 0) || G.chats.reduce((n, c) => n + (c.cost || 0) + (c.plan || 0), 0);
   $('#costsPill').textContent = `$${total.toFixed(total < 1 ? 3 : 2)}`; // everything spent so far, all projects
-  for (const el of document.querySelectorAll('#projectList .sb-chat')) {
+  // Handlers go on the blocks just drawn; the others keep theirs, so each looks up the chat or project when used.
+  for (const el of inFresh('.sb-chat')) {
     const id = el.dataset.c;
     el.onclick = (e) => { if (!e.target.closest('button')) { showChat(id, G.focus); closeDrawer(); if (isPhone()) setMView('chat'); } };
     // Rename, duplicate and delete: from ⋯, or by right-clicking the chat.
-    const pinned = !!all.find((x) => x.id === id)?.pinned;
-    const menu = (e) => popMenu(e, [...besideItems(id), [pinned ? '📌 Unpin' : '📌 Pin to the top', () => pinChat(id, !pinned)], ['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]);
+    const menu = (e) => { const pinned = !!SB_ALL.find((x) => x.id === id)?.pinned; return popMenu(e, [...besideItems(id), [pinned ? '📌 Unpin' : '📌 Pin to the top', () => pinChat(id, !pinned)], ['✏️ Rename', () => renameChat(id)], ['⧉ Duplicate', () => duplicateChat(id)], null, ['🗑 Delete…', () => deleteChat(id)]]); };
     el.oncontextmenu = menu;
     $('.sb-chat-menu', el).onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); menu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: r.left, clientY: r.bottom + 4 }); };
   }
-  for (const el of document.querySelectorAll('#projectList .sb-project')) {
-    const p = G.projects.find((x) => x.id === el.dataset.p);
-    $('.sb-new', el).onclick = (e) => { e.stopPropagation(); newChat(p.id); };
-    $('.sb-edit', el).onclick = (e) => { e.stopPropagation(); openProjectSettings(p); };
-    $('.sb-pin', el).onclick = (e) => { e.stopPropagation(); setProjectFlag(p, { pinned: !p.pinned }); };
-    const miss = $('.sb-missing', el); if (miss) miss.onclick = () => editProject(p, { reselect: true });
-    const del = $('.sb-delp', el); if (del) del.onclick = () => deleteProject(p);
+  for (const el of fresh) {
+    const pid = el.dataset.p;
+    // The project as it is when used: a block can stay drawn across refreshes that bring new project data.
+    const proj = () => G.projects.find((x) => x.id === pid) || { id: pid, name: pid };
+    $('.sb-new', el).onclick = (e) => { e.stopPropagation(); newChat(pid); };
+    $('.sb-edit', el).onclick = (e) => { e.stopPropagation(); openProjectSettings(proj()); };
+    $('.sb-pin', el).onclick = (e) => { e.stopPropagation(); setProjectFlag(proj(), { pinned: !proj().pinned }); };
+    const miss = $('.sb-missing', el); if (miss) miss.onclick = () => editProject(proj(), { reselect: true });
+    const del = $('.sb-delp', el); if (del) del.onclick = () => deleteProject(proj());
 
     // Drag and drop to reorder projects: only the ⠿ grip drags, so the header's buttons stay easy to click.
     const ph = $('.sb-ph', el), grip = $('.sb-grip', el);
@@ -1376,20 +1390,20 @@ function renderSidebar() {
     // Click the header (not its buttons) to fold the project's chats away and get the space back.
     ph.onclick = (e) => {
       if (e.target.closest('button:not(.sb-fold), .bud-pop, .sb-pstrip, .sb-grip')) return;
-      toggleProjectFold(p.id);
+      toggleProjectFold(pid);
     };
     // Right-click, or the menu key / Shift+F10 on the header or one of its buttons: the project's quick actions.
-    ph.oncontextmenu = (e) => { if (e.target.closest('.bud-pop, .sb-pstrip')) return; projectMenu(e, p, el); };
+    ph.oncontextmenu = (e) => { if (e.target.closest('.bud-pop, .sb-pstrip')) return; projectMenu(e, proj(), el); };
     ph.onkeydown = (e) => {
-      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); projectMenu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: 0, clientY: 0, anchor: ph }, p, el); return; }
-      if (e.target === ph && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleProjectFold(p.id); }
+      if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) { e.preventDefault(); projectMenu({ preventDefault() {}, stopPropagation() { e.stopPropagation(); }, clientX: 0, clientY: 0, anchor: ph }, proj(), el); return; }
+      if (e.target === ph && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleProjectFold(pid); }
     };
     // Dragging shows a small pill with the project's name under the pointer (not a faded copy of the whole card);
     // the project stays in place as an outline, and a bright line marks where it will land.
     grip.ondragstart = (e) => {
-      e.dataTransfer.setData('text/x-project', p.id); e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/x-project', pid); e.dataTransfer.effectAllowed = 'move';
       const ghost = document.createElement('div');
-      ghost.className = 'sb-drag-ghost'; ghost.style.setProperty('--ph', hue(p.name)); if (p.color) ghost.style.setProperty('--pcx', p.color); ghost.textContent = p.name;
+      ghost.className = 'sb-drag-ghost'; ghost.style.setProperty('--ph', hue(proj().name)); if (proj().color) ghost.style.setProperty('--pcx', proj().color); ghost.textContent = proj().name;
       document.body.appendChild(ghost);
       e.dataTransfer.setDragImage(ghost, 14, 16);
       setTimeout(() => ghost.remove(), 0);
@@ -1399,11 +1413,11 @@ function renderSidebar() {
     grip.onkeydown = (e) => {
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       e.preventDefault();
-      const order = [...document.querySelectorAll('#projectList .sb-project')].map((x) => x.dataset.p), i = order.indexOf(p.id), j = i + (e.key === 'ArrowUp' ? -1 : 1);
+      const order = [...document.querySelectorAll('#projectList .sb-project')].map((x) => x.dataset.p), i = order.indexOf(pid), j = i + (e.key === 'ArrowUp' ? -1 : 1);
       if (j < 0 || j >= order.length) return;
       [order[i], order[j]] = [order[j], order[i]];
       G.projectOrder = order; savePrefs(); renderSidebar();
-      requestAnimationFrame(() => $(`#projectList .sb-project[data-p="${CSS.escape(p.id)}"] .sb-grip`)?.focus());
+      requestAnimationFrame(() => $(`#projectList .sb-project[data-p="${CSS.escape(pid)}"] .sb-grip`)?.focus());
     };
     grip.ondragend = () => {
       $('#projectList').classList.remove('drag-on'); el.classList.remove('dragging'); for (const x of document.querySelectorAll('.sb-project')) x.classList.remove('drop-before', 'drop-after'); };
@@ -1418,10 +1432,10 @@ function renderSidebar() {
       const id = e.dataTransfer.getData('text/x-project');
       const before = el.classList.contains('drop-before');
       el.classList.remove('drop-before', 'drop-after');
-      if (!id || id === p.id) return;
+      if (!id || id === pid) return;
       e.preventDefault();
       const order = [...document.querySelectorAll('#projectList .sb-project')].map((x) => x.dataset.p).filter((x) => x !== id);
-      order.splice(order.indexOf(p.id) + (before ? 0 : 1), 0, id);
+      order.splice(order.indexOf(pid) + (before ? 0 : 1), 0, id);
       G.projectOrder = order; savePrefs(); renderSidebar();
     };
   }
