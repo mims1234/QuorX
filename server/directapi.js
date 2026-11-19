@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { readChatStream } from './openrouter.js';
 import { goBody } from './opencodego.js';
 import { messagesBody, readMessagesStream } from './commandcode.js';
+import { toapisPrices, chatCost, createdOf } from './toapis.js';
 
 const MODELS_DEV = process.env.QX_MODELS_DEV || 'https://models.dev/api.json';
 
@@ -97,8 +98,9 @@ export const DIRECT = {
     keyHint: 'An API key from the Refuseless console.', credits: true,
   },
   // Not a maker: one key for many makers' models (Claude, GPT, Gemini, GLM, Kimi, Qwen, Grok…) on the OpenAI chat
-  // format, plus pictures, videos and Suno music (toapis.js). Its list names each model's owner but no prices, so
-  // a model is counted at the same model's price on OpenRouter. Mainland China uses https://toapis.cn/v1.
+  // format, plus pictures, videos and Suno music (toapis.js). Its list names each model's owner; prices come from its
+  // public price list (toapis.js toapisPrices), and a model missing there is counted at the same model's price on
+  // OpenRouter. Mainland China uses https://toapis.cn/v1.
   'toapis-api': {
     name: 'ToAPIs', short: 'ToAPIs', wire: 'chat', base: 'https://toapis.com/v1', dev: 'toapis', maker: 'toapis', or: [], owners: true,
     env: ['TOAPIS_API_KEY'], site: 'https://toapis.com', keyUrl: 'https://toapis.com/dashboard/tokens', docs: 'https://docs.toapis.com/docs/en/quickstart',
@@ -238,20 +240,28 @@ export async function directModels(src, { key, base, fetchFn = fetch, fetchJSON 
   if (!key) throw Object.assign(new Error(`Add your ${DIRECT[src].name} key first.`), { kind: 'auth' });
   const dev = await modelsDev(fetchJSON);
   const live = await liveList(src, { key, base, fetchFn, dev });
+  // ToAPIs publishes its prices apart from its model list (toapis.js): each model's own price, not OpenRouter's.
+  const own = DIRECT[src].owners ? await toapisPrices(base || DIRECT[src].base, fetchFn) : null;
   const info = dev?.[devOf(src, base)]?.models || dev?.[DIRECT[src].dev]?.models || {};
   const out = [], seen = new Set();
   for (const m of live) {
     const id = String(m?.id || '').replace(/^models\//, '');
     if (!/^[\w.:@+/-]{1,120}$/.test(id) || seen.has(id)) continue;
     seen.add(id);
-    const md = Object.hasOwn(info, id) ? info[id] : Object.hasOwn(info, undated(id)) ? info[undated(id)] : null;
+    let md = Object.hasOwn(info, id) ? info[id] : Object.hasOwn(info, undated(id)) ? info[undated(id)] : null;
+    let entry = m;
+    if (own) {
+      const rec = own.get(id), cost = chatCost(rec);
+      if (cost) md = { ...(md || {}), cost };
+      entry = { ...m, created: createdOf(m, rec) };
+    }
     // A many-maker API (ToAPIs) names what each model answers on: only chat ones here (its pictures and videos: toapis.js).
     if (DIRECT[src].owners && Array.isArray(m.supported_endpoint_types) && m.supported_endpoint_types.length && !m.supported_endpoint_types.some((t) => /chat|^openai$/i.test(String(t)))) continue;
     if (md && Array.isArray(md.modalities?.output) && !md.modalities.output.includes('text')) continue;
     if (md && md.tool_call === false && src !== 'anthropic-api') continue;
     if (!md?.tool_call && NOT_CHAT.test(id) && src !== 'anthropic-api') continue;
     if (src === 'openai-api' && (NOT_CHAT.test(id) || RESPONSES_ONLY.test(id))) continue; // even with a record
-    try { out.push(directEntry(src, m, md, base)); } catch { /* one odd entry */ }
+    try { out.push(directEntry(src, entry, md, base)); } catch { /* one odd entry */ }
   }
   return out;
 }

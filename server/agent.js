@@ -384,6 +384,8 @@ function videoPrice(spec, res, secs) {
     if (k.minimum_cents_per_generation) c = Math.max(c, Number(k.minimum_cents_per_generation) / 100);
     return { est: c, basis: 'catalogue price' };
   }
+  // A flat price per clip, whatever its length (some of ToAPIs' models).
+  if (k.per_clip != null) return { est: Number(k.per_clip), basis: 'catalogue price' };
   // Token-priced models (e.g. Seedance): roughly one token per 1,024 pixels per frame at 24 fps.
   if (k.video_tokens) return { est: (Number(k.video_tokens) * (VIDEO_PX[res] || VIDEO_PX['480p']) * 24 * secs) / 1024, basis: 'rough' };
   return { est: 0.5, basis: 'price unknown' };
