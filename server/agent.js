@@ -4046,7 +4046,7 @@ ${text}]` : '[The user dropped the harness reading of their request: go by their
         yolo: yoloOf(SF) });
       // An install runs in the open so its end is seen: said before any card, so a yes is never wasted.
       if (args.background && d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) return 'Error: installs can’t run in the background, so their end is seen. Run it again without background.';
-      const g = await gateCommand(d, line, shell);
+      const g = await gateCommand(d, line, shell, { cwd: cwd !== root ? path.relative(root, cwd).split(path.sep).join('/') : '' });
       if (!g.ok) return g.text;
       // Whatever else passed the gate (on its own, by the deciders or by you) may run in the background: a tunnel, a server,
       // a watcher. It stays a job you can stop in the Running tab, with its tripwire.
@@ -4508,7 +4508,7 @@ ${r.text || '(no text found)'}`;
   // Before a command runs: the rule engine's verdict, then the user or (YOLO) the deciders when it asks.
   // Returns { ok, by } to run it, or { ok: false, text } for the agent.
   // ownCard: the tool's own card (Strict's ask before every tool, YOLO's tool groups) decides whether an allowed line asks.
-  async function gateCommand(d, line, shell, { hook, fileFromAgent, ownCard } = {}) {
+  async function gateCommand(d, line, shell, { hook, fileFromAgent, ownCard, cwd = '' } = {}) {
     // Installs: each package it names must exist on its registry; a very new or barely used one asks the user.
     if (d.verdict !== 'deny' && d.segments.some((s) => s.cls === 'install')) {
       const pk = await checkPackages(d.segments.filter((s) => s.cls === 'install').flatMap((s) => packagesOf(s.text))).catch(() => []);
@@ -4558,7 +4558,7 @@ ${r.text || '(no text found)'}`;
       return { ok: true, by: 'earlier' };
     }
     let who = d.verdict === 'allow' || S.approval !== 'yolo' || yoloAsksCommands || run.cmdEscalated ? 'user' : d.who;
-    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}) };
+    const card = { id: newApprovalId(), tool: 'shell', free: true, est: 0, what: line, why: hook ? `your hook (${hook}) runs this${fileFromAgent ? ', with a file name the agent chose' : ', not the agent'}; ${d.why}` : d.why, policy, ...(d.risk ? { risk: d.risk } : {}), ...(cwd ? { cwd } : {}) };
     // Rules made by a button can't lift these (reading keys; deleting or moving outside the project, or where QuorX
     // can't tell), so the card doesn't offer "Always allow" for them. Everything else that asks can be allowed always.
     card.noAlways = d.segments.some((s) => s.risk === 'danger' || (s.paths || []).some((p) => p.kind === 'delete' && p.zone !== 'inside'));

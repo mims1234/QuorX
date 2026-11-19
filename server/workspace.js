@@ -58,6 +58,8 @@ const CHAT_FOLDERS = new Map();
 export const registerFolders = (chatId, folders) => { if (chatId) CHAT_FOLDERS.set(String(chatId), (folders || []).map((f) => f.path)); };
 /** The chat's added folder number `i`, or null. */
 export const chatFolder = (chatId, i) => CHAT_FOLDERS.get(String(chatId))?.[Number(i)] ?? null;
+/** Every folder the chat added that a reply has registered (empty when none ran since QuorX started). */
+export const chatFolderList = (chatId) => [...(CHAT_FOLDERS.get(String(chatId)) || [])];
 /** { i, rel } of the added folder `abs` is in, or null. */
 export function folderIndex(chatId, abs) {
   const list = CHAT_FOLDERS.get(String(chatId)) || [];
