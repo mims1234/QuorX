@@ -322,5 +322,6 @@ test('news local: views explain themselves without logs; models, costs, deciders
 import './test-markdown.mjs';
 // Which opened chats the page lets go of (kept in its own file).
 import './test-chat-cache.mjs';
+import './test-sidebar-rows.mjs';
 // The workspace layout and back / forward history (kept in their own file).
 import './test-workspace.mjs';
