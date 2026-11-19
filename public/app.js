@@ -8122,8 +8122,8 @@ function serverUp(c, e) {
   if (a) { const was = WP.agent; WP.agent = true; try { inArea(a, () => openInBrowser(c, u)); } finally { WP.agent = was; } }
 }
 // Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) open as tabs of their own (see
-// "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it, to open
-// again. Kept per chat on this computer, the newest PANE_FILES_MAX.
+// "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it: picked
+// there, a file shows in that same pane (⧉ Open as tab gives it a tab again). Kept per chat on this computer, the newest PANE_FILES_MAX.
 const PANE_FILES_MAX = 100;
 const paneFilesKey = (id) => `oh-pane-files:${id}`;
 function paneFiles(c) {
@@ -9357,8 +9357,8 @@ function wsTabMenu(e, a, src) {
 }
 
 // ---------- files as tabs ----------
-// A file, picture, video, PDF or document clicked anywhere (a card in the chat, the Files tab, the Artifact list's
-// "Files from the chat") opens in its usual viewer as a tab of its own. It opens as a preview tab (its name in italics)
+// A file, picture, video, PDF or document clicked anywhere (a card in the chat, the Files tab) opens in its usual
+// viewer as a tab of its own (picked from the Artifact tab's "From the chat" list, it shows in that pane instead). It opens as a preview tab (its name in italics)
 // that the next file opened reuses, so tabs don't pile up; a double-click on the tab, or Keep open, makes it stay.
 // It opens in the group nearest you that isn't showing the chat. A file tab saves what its viewer needs and the chat it
 // came from, so it survives a reload with the layout.
@@ -9627,11 +9627,7 @@ function renderPaneNow() {
     bar.innerHTML = `${ft.st.preview ? '<button type="button" class="pv-btn pf-keep" title="A preview: the next file you open takes its place. Keep it as a tab of its own (or double-click its tab)">📌 Keep open</button>' : ''}<button type="button" class="pv-btn pf-close" title="Close this tab (the file stays where it is)">✕ Close</button>`;
     const kb = $('.pf-keep', bar); if (kb) kb.onclick = () => wsKeepFileTab(tid);
     $('.pf-close', bar).onclick = () => wsCloseFileTab(tid);
-    if (file.kind in PANE_CARDS) return drawPaneCard(fc, file, body);
-    body.innerHTML = '<div class="fview pane-file"></div>';
-    G.filesProject = spaceOf(fc);
-    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
-    return;
+    return drawPaneFile(fc, file, body);
   }
   const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
   const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
@@ -9639,11 +9635,21 @@ function renderPaneNow() {
     + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
     || '<option>No plans yet</option>';
   sel.disabled = !all.length && !files.length;
+  // A file picked from "From the chat" shows right here, in place of the plan; ⧉ Open as tab gives it a tab of its own.
+  const pf = files.find((x) => x.id === G.view.id);
+  if (pf) {
+    sel.value = pf.id;
+    setUrlBar(pf.kind in PANE_CARDS ? null : pf.src, { art: true }); // the dropdown stays, to pick another
+    bar.hidden = false;
+    bar.innerHTML = '<button type="button" class="pv-btn pf-tab" title="Open this file as a tab of its own">⧉ Open as tab</button>';
+    $('.pf-tab', bar).onclick = () => openFileInPane(c, pf, { into: AREA.gid, keep: true });
+    return drawPaneFile(c, pf, body);
+  }
   const a = all.find((x) => x.id === G.view.id) || all.at(-1);
   if (!a) {
     setUrlBar(null, { art: true });
     body.innerHTML = `<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).${files.length ? `<div class="pf-list"><b>Files from the chat</b>${files.slice().reverse().map((f) => `<button type="button" class="pv-btn" data-pf="${esc(f.id)}">${PV_ICON[f.kind] || '📄'} ${esc(f.label || (f.kind in PANE_CARDS ? f.name : baseName(f.name)))}</button>`).join('')}</div>` : ''}</div>`;
-    for (const b of body.querySelectorAll('[data-pf]')) b.onclick = () => { const f = files.find((x) => x.id === b.dataset.pf); if (f) openFileInPane(c, f, { into: AREA.gid }); };
+    for (const b of body.querySelectorAll('[data-pf]')) b.onclick = () => { G.view = { id: b.dataset.pf, src: false, files: false, trace: null }; renderPane(); };
     return;
   }
   sel.value = a.id;
@@ -9679,6 +9685,13 @@ function renderPaneNow() {
       : `<audio controls src="${u}"></audio><a href="${u}" download="${esc(a.id)}">Download</a>`;
     body.innerHTML = `<div class="media">${player}${cap}</div>`;
   }
+}
+// A file from the chat in the pane's body: a piece of a reply as its card, anything else in the Files tab's viewer.
+function drawPaneFile(c, file, body) {
+  if (file.kind in PANE_CARDS) return drawPaneCard(c, file, body);
+  body.innerHTML = '<div class="fview pane-file"></div>';
+  G.filesProject = spaceOf(c);
+  previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind });
 }
 // Sites and apps: check the project folder every 2.5 s while shown; reload the preview when it changed.
 function watchFolder(c) {
@@ -16433,9 +16446,8 @@ function wireAreaChrome() {
     files.ondragend = wsDropHide;
   }
   $('#artSelect').onchange = (e) => {
-    const v = e.target.value, c = focused(), f = c && paneFiles(c).find((x) => x.id === v);
-    // A file from the chat opens as a tab (in this group); a plan shows here.
-    if (f) { openFileInPane(c, f, { into: area.gid }); return; }
+    const v = e.target.value;
+    // A plan or a file from the chat shows here, below the dropdown (⧉ Open as tab gives a file a tab of its own).
     G.view = { id: v, src: false, files: false, trace: null };
     renderPane(); refreshTraceButtons();
   };

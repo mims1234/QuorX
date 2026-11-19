@@ -829,3 +829,22 @@ test('a chat inside a pane group: hosts are checked, saved, and sizes on the sma
   for (const fn of ['function wsHosted(', 'function wsHostChat(', 'function wsUnhost(', 'function drawHostTab(', 'async function wsHostChatById(']) assert.ok(app.includes(fn), fn);
   assert.match(app, /hosts: WK\.hosts/, 'hosts are saved with the project layout');
 });
+
+test('Artifact dropdown: a file picked under "From the chat" shows in that pane, with Open as tab for its own tab', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const at = app.indexOf("$('#artSelect').onchange");
+  const onchange = app.slice(at, app.indexOf('\n  };', at));
+  assert.doesNotMatch(onchange, /openFileInPane|wsOpenFile/, 'picking a file no longer opens a tab');
+  assert.match(onchange, /G\.view = \{ id: v,/, 'the pick becomes what the pane shows');
+  const rp = app.slice(app.indexOf('function renderPaneNow() {'), app.indexOf('\n}\n', app.indexOf('function renderPaneNow() {')));
+  const pf = rp.slice(rp.indexOf('const pf = files.find((x) => x.id === G.view.id)'));
+  assert.ok(pf.length < rp.length, 'renderPane looks for a picked chat file');
+  assert.ok(rp.indexOf('const pf = files.find') < rp.indexOf('const a = all.find'), 'a picked file wins over the newest plan');
+  assert.match(pf, /sel\.value = pf\.id/, 'the dropdown shows the picked file');
+  assert.match(pf, /setUrlBar\([^\n]*\{ art: true \}\)/, 'the dropdown stays in view, to pick another file');
+  assert.match(pf, /return drawPaneFile\(c, pf, body\)/, 'drawn in this pane\'s body');
+  assert.match(pf, /⧉ Open as tab[\s\S]*openFileInPane\(c, pf, \{ into: AREA\.gid, keep: true \}\)/, 'Open as tab still gives it a tab of its own');
+  const empty = rp.slice(rp.indexOf("querySelectorAll('[data-pf]')"));
+  assert.doesNotMatch(empty.slice(0, empty.indexOf('\n')), /openFileInPane/, 'the empty pane\'s file list shows in place too');
+  assert.ok(app.includes('function drawPaneFile(c, file, body) {'), 'one viewer for a file tab and a picked file');
+});
