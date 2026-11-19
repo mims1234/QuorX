@@ -94,7 +94,8 @@
 .scc-det .scc-files { background: var(--panel-1, var(--bg)); }
 .scc-more { display: block; margin: 10px auto 0; }
 /* Narrow (the sidebar view): the message keeps its room; the author shows in the row's tooltip and the details. */
-.scc { container-type: inline-size; }
+/* Size containment stops a flex child (the pane's #paneBody is a flex box) taking its width from its content: stretch it. */
+.scc { container-type: inline-size; flex: 1 1 auto; width: 100%; min-width: 0; }
 .scc-msg { min-width: 72px; }
 .scc-ref { flex-shrink: 1; min-width: 28px; }
 @container (max-width: 400px) { .scc-who { display: none; } .scc-ref { max-width: 84px; } }
