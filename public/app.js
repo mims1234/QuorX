@@ -9636,7 +9636,8 @@ function renderPaneNow() {
     || '<option>No plans yet</option>';
   sel.disabled = !all.length && !files.length;
   // A file picked from "From the chat" shows right here, in place of the plan; ⧉ Open as tab gives it a tab of its own.
-  const pf = files.find((x) => x.id === G.view.id);
+  // With no plans and nothing picked yet, the newest file shows (what the dropdown has selected).
+  const pf = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
   if (pf) {
     sel.value = pf.id;
     setUrlBar(pf.kind in PANE_CARDS ? null : pf.src, { art: true }); // the dropdown stays, to pick another
@@ -9648,8 +9649,7 @@ function renderPaneNow() {
   const a = all.find((x) => x.id === G.view.id) || all.at(-1);
   if (!a) {
     setUrlBar(null, { art: true });
-    body.innerHTML = `<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).${files.length ? `<div class="pf-list"><b>Files from the chat</b>${files.slice().reverse().map((f) => `<button type="button" class="pv-btn" data-pf="${esc(f.id)}">${PV_ICON[f.kind] || '📄'} ${esc(f.label || (f.kind in PANE_CARDS ? f.name : baseName(f.name)))}</button>`).join('')}</div>` : ''}</div>`;
-    for (const b of body.querySelectorAll('[data-pf]')) b.onclick = () => { G.view = { id: b.dataset.pf, src: false, files: false, trace: null }; renderPane(); };
+    body.innerHTML = `<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).</div>`;
     return;
   }
   sel.value = a.id;

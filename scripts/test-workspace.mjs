@@ -844,7 +844,7 @@ test('Artifact dropdown: a file picked under "From the chat" shows in that pane,
   assert.match(pf, /setUrlBar\([^\n]*\{ art: true \}\)/, 'the dropdown stays in view, to pick another file');
   assert.match(pf, /return drawPaneFile\(c, pf, body\)/, 'drawn in this pane\'s body');
   assert.match(pf, /⧉ Open as tab[\s\S]*openFileInPane\(c, pf, \{ into: AREA\.gid, keep: true \}\)/, 'Open as tab still gives it a tab of its own');
-  const empty = rp.slice(rp.indexOf("querySelectorAll('[data-pf]')"));
-  assert.doesNotMatch(empty.slice(0, empty.indexOf('\n')), /openFileInPane/, 'the empty pane\'s file list shows in place too');
+  assert.match(rp, /const pf = files\.find\(\(x\) => x\.id === G\.view\.id\) \|\| \(!all\.length \? files\.at\(-1\) : null\)/, 'with no plans and nothing picked, the newest file shows (the dropdown never names a file the pane isn\'t showing)');
+  assert.doesNotMatch(rp, /data-pf=/, 'no second list of the same files in an empty pane');
   assert.ok(app.includes('function drawPaneFile(c, file, body) {'), 'one viewer for a file tab and a picked file');
 });
