@@ -43,11 +43,11 @@ import { ghStatus, listPulls, checkLog } from './server/pulls.js';
 const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 import { listChats, chatPerms, sidebarChats, setChatPin, chatPage, chatPictureRefs, pictureRefCounts, getTrace, getChatForPage, getChat, saveChat, patchChat, settleReply, trashChat, duplicateChat, validId, listProjects, saveProject, forgetProject, setProjectColor, setProjectAlias, setProjectFlags, costSummary, costChats, providerUsage, knownFolder } from './server/store.js';
 import { searchChats } from './server/chatsearch.js';
-import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace, redoFile } from './server/workspace.js';
+import { runLine, ALLOWED, copyTemplate, workspaceDir, safePath, fullLocalPath, isCommandLog, chatFolder, chatFolderList, listFiles, listDir, listServers, stopServerWait, restartServer, serverLog, startServer, restoreCheckpoint, listCheckpoints, pruneCheckpoints, undoConflicts, changedFiles, reviewFiles, reviewDiff, undoFile, serverOverview, launchConfigs, saveLaunchConfig, removeLaunchConfig, forgetServer, serverFor, ensureAgentDir, agentSpace, redoFile } from './server/workspace.js';
 import { listPages, addPage, removePage, undoMove, dismissMove, keepAsServer, migrateProject, isPreviewEntry, ensureServeScript } from './server/pages.js';
 import { followTerm, runningJobs, stopJob } from './server/terminal.js';
 import { runningIn, runningAll, stopRunning, stopAllIn, busyNow, addUsage, killRunning } from './server/running.js';
-import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule } from './server/cmdpolicy.js';
+import { decide as decideCommand, loadRules, saveRules, suggestedRules, ruleProblem, updateRule, removeRule, zoneOf } from './server/cmdpolicy.js';
 import { jobHostStatus, jobsAvailable } from './server/jobhost.js';
 import { glowOn, glowOff, glowRuns, onGlowStop, onGlowScreen, stopNow as glowStopNow } from './server/glow.js';
 import { startWork, endWork } from './server/workscreen.js';
@@ -71,6 +71,7 @@ import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffP
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile, sendRanged } from './server/blobs.js';
 import { mediaFile, serveMedia } from './server/media.js';
+import { readScript } from './server/scriptfile.js';
 import { measureStorage, clearStorage, clearProjectParts, previewProjectParts, clearProjectAll, previewProjectAll, recentClears, startStorageRules } from './server/storage.js';
 import { storageRules, saveStorageRules, rotateLog, RULE_DEFAULTS } from './server/storagerules.js';
 import { listDesignSystems, readDesignSystem, projectDesign, applyDesignSystem, saveProjectDesign, saveCustomSystem, deleteCustomSystem, specMarkdown, specTokens, contrastChecks, cleanSpec, FONTS as DESIGN_FONTS, FAMILIES as DESIGN_FAMILIES } from './server/design.js';
@@ -497,6 +498,21 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
         return res.end(from ? `[… the first ${Math.round(from / 1e6)} MB are cut]\n${buf.toString('utf8')}` : buf);
       } catch { return json(res, 404, { error: 'not found' }); }
+    }
+    // A script a command runs, read only, as it is on disk now (the command card's file names open it in the side pane):
+    // ?project=<id>&path=<as the command names it>[&chat=<id>]. Plain text; a file that can't be shown gets its reason.
+    if (url.pathname === '/api/script-file' && req.method === 'GET') {
+      const pid = url.searchParams.get('project'), cid = url.searchParams.get('chat') || '';
+      const head = (status) => res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      if (!knownFolder(pid)) { head(404); return res.end('QuorX can’t show this file: the chat’s project folder is not known.'); }
+      const root = workspaceDir(pid);
+      // The chat's added folders: those a reply registered, else the ones saved with the chat that are outside the project.
+      let folders = validId(cid) ? chatFolderList(cid) : [];
+      if (!folders.length && validId(cid)) folders = (getChat(cid)?.agent?.folders || []).map((f) => f?.path && path.isAbsolute(String(f.path)) ? path.resolve(String(f.path)) : null).filter((d) => d && zoneOf(d, root).zone === 'outside');
+      try {
+        const r = readScript(root, folders, url.searchParams.get('path'));
+        head(200); return res.end(r.text);
+      } catch (e) { head(e.status || 400); return res.end(`QuorX can’t show this file: ${e.message}`); }
     }
     if (url.pathname === '/api/files/text' && req.method === 'GET') {
       const pid = url.searchParams.get('project');
