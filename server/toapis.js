@@ -69,7 +69,7 @@ const billed = (st) => {
 
 // ---------- model lists ----------
 const lists = new Map(); // `${type}|${base}|${key tail}` → { at, p }
-export function clearToapisLists() { lists.clear(); }
+export function clearToapisLists() { lists.clear(); priceLists.clear(); }
 async function listOf(type, { key, base }) {
   const k = `${type}|${base}|${String(key).slice(-6)}`;
   const c = lists.get(k);
@@ -79,34 +79,110 @@ async function listOf(type, { key, base }) {
   p.catch(() => lists.delete(k));
   return p;
 }
+// ---------- prices ----------
+// Its public price list (GET <site>/api/pricing, the feed its pricing page reads; no key) names every model's billing:
+//   quota_type 0: per token. model_ratio 1 = $2 per M input tokens; output = input × completion_ratio; cache reads
+//                 × cache_ratio, cache writes × create_cache_ratio. Seedance's video tokens are priced the same way.
+//   quota_type 1: model_price dollars per call (a picture, a clip, a song).
+//   quota_type 2: model_price dollars per second of video.
+// Every figure is multiplied by the default group's ratio (1 today). A missing or absurd figure stays unknown.
+const priceLists = new Map(); // site → { at, p }
+export function priceSite(base) { try { return new URL(base).origin; } catch { return 'https://toapis.com'; } }
+/** model id → its price record, from the public list (an empty map when it can't be read). Kept an hour. */
+export function toapisPrices(base, fetchFn = fetch) {
+  const site = priceSite(base);
+  const c = priceLists.get(site);
+  if (c && Date.now() - c.at < 3600e3) return c.p;
+  const p = fetchFn(`${site}/api/pricing`, { headers: { 'User-Agent': 'QuorX' }, signal: AbortSignal.timeout(20000) })
+    .then((r) => (r.ok ? r.json() : null)).then((j) => readPrices(j)).catch(() => new Map());
+  priceLists.set(site, { at: Date.now(), p });
+  p.then((m) => { if (!m.size) priceLists.delete(site); });
+  return p;
+}
+const num = (x, max) => (x !== null && x !== undefined && x !== '' && Number.isFinite(Number(x)) && Number(x) >= 0 && Number(x) <= max ? Number(x) : null);
+/** The public list as model id → { kind, per: 'token'|'call'|'second', in, out, cacheRead, cacheWrite, usd, created }. */
+export function readPrices(j) {
+  const out = new Map();
+  const group = num(j?.group_ratio?.[j?.auto_groups?.[0] || 'default'], 100) ?? 1;
+  for (const m of Array.isArray(j?.data) ? j.data : []) {
+    const id = String(m?.model_name || '');
+    if (!/^[\w.:@+-]{1,120}$/.test(id)) continue;
+    const created = Number(m.created_time) > 1e9 ? Number(m.created_time) : 0;
+    const rec = { kind: { 1: 'chat', 2: 'image', 3: 'video', 4: 'music' }[m.model_type] || '', created };
+    if (m.quota_type === 0) {
+      const input = num(m.model_ratio, 500) === null ? null : m.model_ratio * 2 * group;
+      if (input === null || input > 1000) continue;
+      const times = (r) => (num(r, 100) === null ? null : input * Number(r));
+      Object.assign(rec, { per: 'token', in: input, out: times(m.completion_ratio ?? 1) ?? input, cacheRead: times(m.cache_ratio), cacheWrite: times(m.create_cache_ratio) });
+    } else if (m.quota_type === 1 || m.quota_type === 2) {
+      const usd = num(m.model_price, m.quota_type === 1 ? 50 : 10);
+      if (!usd) continue;
+      Object.assign(rec, { per: m.quota_type === 1 ? 'call' : 'second', usd: usd * group });
+    } else continue;
+    out.set(id, rec);
+  }
+  return out;
+}
+/** A chat model's cost in models.dev's shape (directapi.js saneCost reads it), or null when the list has none. */
+export function chatCost(rec) {
+  if (rec?.per !== 'token') return null;
+  return { input: rec.in, output: rec.out, ...(rec.cacheRead != null ? { cache_read: rec.cacheRead } : {}), ...(rec.cacheWrite != null ? { cache_write: rec.cacheWrite } : {}) };
+}
+// The date its model list gives a model it has no date for (2021-07-20), which would show as years old.
+const DEFAULT_CREATED = 1626777600;
+export const createdOf = (live, rec) => rec?.created || (Number(live?.created) > 1e9 && Number(live.created) !== DEFAULT_CREATED ? Number(live.created) : 0);
+
 // seedream-5-0-pro → Seedream 5.0 Pro (a version's parts joined by a dot, not a space).
 const nice = (id) => String(id).replace(/(\d)-(?=\d)/g, '$1.').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 const owner = (m) => (typeof m.owned_by === 'string' && m.owned_by ? ` · ${m.owned_by}` : '');
-const fromToapis = { source: TOAPIS_ID, created: 0, ctx: null, price: [0, 0], priceUnknown: true };
+const fromToapis = { source: TOAPIS_ID, created: 0, ctx: null, price: [0, 0] };
+const known = (ok) => (ok ? {} : { priceUnknown: true });
 
-/** Its picture models, in the shape of OpenRouter's image catalogue (openrouter.js imageModels). */
+/** Its picture models, in the shape of OpenRouter's image catalogue (openrouter.js imageModels), with its prices. */
 export async function toapisImageModels(opts) {
-  return (await listOf('image', opts)).map((m) => ({
-    ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'image', created: Number(m.created) || 0,
-    in: ['text', 'image'], out: ['image'], perImage: null, params: {}, desc: `Pictures on ToAPIs${owner(m)}. Billed by ToAPIs per picture.`,
-  }));
+  const [list, prices] = await Promise.all([listOf('image', opts), toapisPrices(opts.base)]);
+  return list.map((m) => {
+    const p = prices.get(m.id);
+    // Per picture, or per token (the -official GPT and Gemini ones): price[1] is $ per M output tokens, as on OpenRouter.
+    const perImage = p?.per === 'call' ? p.usd : null, price = p?.per === 'token' ? [p.in, p.out] : [0, 0];
+    return {
+      ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'image', created: createdOf(m, p), price, perImage, ...known(perImage || price[1]),
+      in: ['text', 'image'], out: ['image'], params: {}, desc: `Pictures on ToAPIs${owner(m)}. Billed by ToAPIs ${perImage ? 'per picture' : 'per token'}.`,
+    };
+  });
 }
 // Families whose clips start from a picture, and how they take it. The -ext Seedance models take reference pictures only.
 const NO_FRAME = /^seedance-2(-fast)?-ext$|^seedance-2[.-]5-ext$/i;
-/** Its video models, in the shape of OpenRouter's video catalogue (openrouter.js videoModels). */
-export async function toapisVideoModels(opts) {
-  return (await listOf('video', opts)).map((m) => ({
-    ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'video', created: Number(m.created) || 0,
-    in: ['text', 'image'], out: ['video'], skus: {}, resolutions: [], durations: [], aspects: [],
-    frames: NO_FRAME.test(m.id) ? [] : ['first_frame'], audio: false, seed: false, desc: `Videos on ToAPIs${owner(m)}. Billed by ToAPIs per clip.`,
-  }));
+/** Its price as the video catalogue's skus (agent.js videoPrice, the picker's videoRate read them), or {}. */
+function videoSkus(p) {
+  if (p?.per === 'second') return { duration_seconds: String(p.usd) };
+  if (p?.per === 'call') return { per_clip: String(p.usd) };
+  if (p?.per === 'token') return { video_tokens: String(p.in / 1e6) };
+  return {};
 }
-/** Its music models (Suno), in the shape of openrouter.js musicModels. */
+/** Its video models, in the shape of OpenRouter's video catalogue (openrouter.js videoModels), with its prices. */
+export async function toapisVideoModels(opts) {
+  const [list, prices] = await Promise.all([listOf('video', opts), toapisPrices(opts.base)]);
+  return list.map((m) => {
+    const p = prices.get(m.id), skus = videoSkus(p);
+    return {
+      ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'video', created: createdOf(m, p), ...known(Object.keys(skus).length),
+      in: ['text', 'image'], out: ['video'], skus, resolutions: [], durations: [], aspects: [],
+      frames: NO_FRAME.test(m.id) ? [] : ['first_frame'], audio: false, seed: false,
+      desc: `Videos on ToAPIs${owner(m)}. Billed by ToAPIs ${p?.per === 'second' ? 'per second' : p?.per === 'call' ? 'per clip' : p?.per === 'token' ? 'per video token' : 'per clip'}.`,
+    };
+  });
+}
+/** Its music models (Suno), in the shape of openrouter.js musicModels, with its price per call. */
 export async function toapisMusicModels(opts) {
-  return (await listOf('audio', opts)).filter((m) => /^suno/i.test(m.id)).map((m) => ({
-    ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'music', in: ['text'], out: ['audio'],
-    perUse: 0.05, length: 'full song', desc: 'Suno songs on ToAPIs: $0.05 a song (two versions per call; QuorX keeps the first).',
-  }));
+  const [list, prices] = await Promise.all([listOf('audio', opts), toapisPrices(opts.base)]);
+  return list.filter((m) => /^suno/i.test(m.id)).map((m) => {
+    const p = prices.get(m.id), perUse = p?.per === 'call' ? p.usd : null;
+    return {
+      ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'music', created: createdOf(m, p), in: ['text'], out: ['audio'], perUse, ...known(perUse),
+      length: 'full song', desc: `Suno songs on ToAPIs${perUse ? `: $${perUse} a call` : ''} (two versions per call; QuorX keeps the first).`,
+    };
+  });
 }
 
 // ---------- pictures ----------

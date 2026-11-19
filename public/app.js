@@ -2525,8 +2525,12 @@ function videoRate(m, res = '480p') {
   const k = m.skus || {};
   const hit = Object.keys(k).find((x) => x.includes(res) && /second/.test(x)) || Object.keys(k).find((x) => /second/.test(x) && !/\d+p|[0-9]k/i.test(x));
   if (hit) return `$${(/cents/.test(hit) ? Number(k[hit]) / 100 : Number(k[hit])).toFixed(3)}/s${hit.includes(res) ? ` at ${res}` : ''}`;
-  return k.video_tokens ? 'priced per video token (rough estimate)' : 'price unknown';
+  if (k.per_clip != null) return `$${Number(k.per_clip).toFixed(3)} a clip`;
+  return k.video_tokens ? `≈ $${videoTokenRate(k, res).toFixed(3)}/s at ${VIDEO_PX[res] ? res : '480p'} (priced per video token, rough estimate)` : 'price unknown';
 }
+// A token-priced clip (Seedance) per second: about one token per 1,024 pixels of each frame, 24 frames a second.
+const VIDEO_PX = { '480p': 854 * 480, '720p': 1280 * 720, '768p': 1366 * 768, '1080p': 1920 * 1080 };
+const videoTokenRate = (k, res = '480p') => (Number(k.video_tokens) * (VIDEO_PX[res] || VIDEO_PX['480p']) * 24) / 1024;
 function priceOf(id, extra = {}) {
   const m = G.byId.get(id);
   if (!m) return id ? (G.byId.size ? 'not in the catalogue' : 'loading prices…') : '';
@@ -2633,7 +2637,10 @@ function priceText(m, extra = {}) {
 function videoNum(m, res = '480p') {
   const k = m.skus || {};
   const hit = Object.keys(k).find((x) => x.includes(res) && /second/.test(x)) || Object.keys(k).find((x) => /second/.test(x));
-  return hit ? (/cents/.test(hit) ? Number(k[hit]) / 100 : Number(k[hit])) : 1e9;
+  if (hit) return /cents/.test(hit) ? Number(k[hit]) / 100 : Number(k[hit]);
+  // A flat price per clip compares as a 5-second clip; a token price as its rough rate per second.
+  if (k.per_clip != null) return Number(k.per_clip) / 5;
+  return k.video_tokens ? videoTokenRate(k, res) : 1e9;
 }
 // One comparable number per model, for "cheapest first".
 function priceNum(m) {
@@ -2698,7 +2705,7 @@ function priceCell(m) {
   if (m.kind === 'decision' && m.chatDecider) return `<span class="mp-money">${usd(m.price[0])}</span><small>in</small><span class="mp-money">${usd(m.price[1])}</span><small>out /M</small>`;
   if (m.kind === 'decision') return `<span class="mp-money">${usd(m.price[0], 3)}</span><small>/M in</small>`;
   if (m.kind === 'image') return m.perImage ? `<span class="mp-money">${usd(m.perImage, 3)}</span><small>/picture</small>` : m.price[1] ? `<span class="mp-money">≈${usd(m.price[1] * 15000 / 1e6, 3)}</span><small>/picture</small>` : '<small>price unknown</small>';
-  if (m.kind === 'video') return n < 1e8 ? `<span class="mp-money">${usd(n)}</span><small>/second</small>` : '<small>price unknown</small>';
+  if (m.kind === 'video') return m.skus?.per_clip != null ? `<span class="mp-money">${usd(Number(m.skus.per_clip))}</span><small>/clip</small>` : n < 1e8 ? `<span class="mp-money">${!Object.keys(m.skus || {}).some((x) => /second/.test(x)) ? '≈' : ''}${usd(n, 3)}</span><small>/second</small>` : '<small>price unknown</small>';
   if (m.kind === 'music') return m.perUse ? `<span class="mp-money">${usd(m.perUse)}</span><small>/${esc(m.length || 'clip')}</small>` : '<small>price unknown</small>';
   if (m.kind === 'speech') return `<span class="mp-money">${usd(m.price[0])}</span><small>/M chars</small>`;
   return esc(priceText(m));
@@ -13039,7 +13046,7 @@ const SRC_GUIDE = {
   'groq-api': { what: 'Runs open-weight models on Groq’s fast LPU inference cloud with your key, billed per call (free developer tier keys work too, within Groq’s limits).' },
   'cerebras-api': { what: 'Runs open-weight models on Cerebras’s fast wafer-scale inference cloud with your key, billed per call at Cerebras’s prices.' },
   'refuseless-api': { what: 'Runs open-weight models with their refusals removed (GLM and others) on Refuseless’s API with your key, paid from your Refuseless credits. Its API publishes no prices, so its models show “price unknown” and count as $0 here; the balance below is what is left.' },
-  'toapis-api': { what: 'Runs chats, helpers and deciders on ToAPIs with your key: Claude, GPT, Gemini, Grok, GLM, Kimi, Qwen, DeepSeek and MiniMax models on one key, billed by ToAPIs per call. Its API publishes no prices, so each model is counted at the same model’s price on OpenRouter. With it switched on, its picture, video and Suno music models join the paid tools’ model lists (🖼 pictures, 🎬 video, 🎵 music) too. For mainland China, set the address to https://toapis.cn/v1.' },
+  'toapis-api': { what: 'Runs chats, helpers and deciders on ToAPIs with your key: Claude, GPT, Gemini, Grok, GLM, Kimi, Qwen, DeepSeek and MiniMax models on one key, billed by ToAPIs per call at the prices on its public price list (a model missing there is counted at the same model’s price on OpenRouter). Models ending in -official are the makers’ own APIs at about list price; the others are much cheaper channels ToAPIs doesn’t explain. With it switched on, its picture, video and Suno music models join the paid tools’ model lists (🖼 pictures, 🎬 video, 🎵 music) too. For mainland China, set the address to https://toapis.cn/v1.' },
   commandcode: { what: 'Runs a chat on your Command Code plan over its Provider API: GPT, DeepSeek, Kimi, GLM, Qwen and the other open models, and Claude. Every plan but Go has API access; prices shown are what a call takes from your credits.' },
   'zai-coding': { what: 'Runs a chat on your Z.AI GLM Coding Plan (Lite, Pro or Max) over Z.AI’s dedicated coding endpoint: GLM-5.3, GLM-5.3-Flash and GLM-5-Turbo within your 5-hour and weekly credit windows. Set Address for Zhipu BigModel (China).' },
   'kimi-coding': { what: 'Runs a chat on your Kimi For Coding subscription: Kimi K3, K3.1 Pro and kimi-for-coding within your rolling 5-hour and weekly plan limits, with reasoning passed back on each step. Set Address if your key is on kimi.com.' },
