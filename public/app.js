@@ -8172,8 +8172,8 @@ function serverUp(c, e) {
   if (a) { const was = WP.agent; WP.agent = true; try { inArea(a, () => openInBrowser(c, u)); } finally { WP.agent = was; } }
 }
 // Files opened from the chat (a card's Open, a picture, a card dragged onto the pane) open as tabs of their own (see
-// "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it, to open
-// again. Kept per chat on this computer, the newest PANE_FILES_MAX.
+// "files as tabs"), and are listed in the Artifact tab's dropdown under "From the chat" until taken off it: picked
+// there, a file shows in that same pane (⧉ Open as tab gives it a tab again). Kept per chat on this computer, the newest PANE_FILES_MAX.
 const PANE_FILES_MAX = 100;
 const paneFilesKey = (id) => `oh-pane-files:${id}`;
 function paneFiles(c) {
@@ -9407,8 +9407,8 @@ function wsTabMenu(e, a, src) {
 }
 
 // ---------- files as tabs ----------
-// A file, picture, video, PDF or document clicked anywhere (a card in the chat, the Files tab, the Artifact list's
-// "Files from the chat") opens in its usual viewer as a tab of its own. It opens as a preview tab (its name in italics)
+// A file, picture, video, PDF or document clicked anywhere (a card in the chat, the Files tab) opens in its usual
+// viewer as a tab of its own (picked from the Artifact tab's "From the chat" list, it shows in that pane instead). It opens as a preview tab (its name in italics)
 // that the next file opened reuses, so tabs don't pile up; a double-click on the tab, or Keep open, makes it stay.
 // It opens in the group nearest you that isn't showing the chat. A file tab saves what its viewer needs and the chat it
 // came from, so it survives a reload with the layout.
@@ -9657,7 +9657,7 @@ function renderPaneNow() {
   if (G.view.term) { setUrlBar(null); return renderTerm(c); }
   if (!PA.list.some((a) => a.st.view?.term)) closeTermStream();
   if (G.view.files) { setUrlBar(null); return renderFiles(c); }
-  if (G.view.pulls) { setUrlBar(null); return renderPulls(c); }
+  if (G.view.pulls) { setUrlBar(null); return renderSource(c); }
   if (G.view.browser) return renderBrowser(c);
   if (G.view.trace) {
     setUrlBar(null);
@@ -9677,11 +9677,7 @@ function renderPaneNow() {
     bar.innerHTML = `${ft.st.preview ? '<button type="button" class="pv-btn pf-keep" title="A preview: the next file you open takes its place. Keep it as a tab of its own (or double-click its tab)">📌 Keep open</button>' : ''}<button type="button" class="pv-btn pf-close" title="Close this tab (the file stays where it is)">✕ Close</button>`;
     const kb = $('.pf-keep', bar); if (kb) kb.onclick = () => wsKeepFileTab(tid);
     $('.pf-close', bar).onclick = () => wsCloseFileTab(tid);
-    if (file.kind in PANE_CARDS) return drawPaneCard(fc, file, body);
-    body.innerHTML = '<div class="fview pane-file"></div>';
-    G.filesProject = spaceOf(fc);
-    previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind, raw: file.raw });
-    return;
+    return drawPaneFile(fc, file, body);
   }
   const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
   const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
@@ -9689,11 +9685,21 @@ function renderPaneNow() {
     + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
     || '<option>No plans yet</option>';
   sel.disabled = !all.length && !files.length;
+  // A file picked from "From the chat" shows right here, in place of the plan; ⧉ Open as tab gives it a tab of its own.
+  // With no plans and nothing picked yet, the newest file shows (what the dropdown has selected).
+  const pf = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
+  if (pf) {
+    sel.value = pf.id;
+    setUrlBar(pf.kind in PANE_CARDS || pf.raw ? null : pf.src, { art: true }); // the dropdown stays, to pick another
+    bar.hidden = false;
+    bar.innerHTML = '<button type="button" class="pv-btn pf-tab" title="Open this file as a tab of its own">⧉ Open as tab</button>';
+    $('.pf-tab', bar).onclick = () => openFileInPane(c, pf, { into: AREA.gid, keep: true });
+    return drawPaneFile(c, pf, body);
+  }
   const a = all.find((x) => x.id === G.view.id) || all.at(-1);
   if (!a) {
     setUrlBar(null, { art: true });
-    body.innerHTML = `<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).${files.length ? `<div class="pf-list"><b>Files from the chat</b>${files.slice().reverse().map((f) => `<button type="button" class="pv-btn" data-pf="${esc(f.id)}">${PV_ICON[f.kind] || '📄'} ${esc(f.label || (f.kind in PANE_CARDS ? f.name : baseName(f.name)))}</button>`).join('')}</div>` : ''}</div>`;
-    for (const b of body.querySelectorAll('[data-pf]')) b.onclick = () => { const f = files.find((x) => x.id === b.dataset.pf); if (f) openFileInPane(c, f, { into: AREA.gid }); };
+    body.innerHTML = `<div class="empty">No plans in this chat yet. Plans, specs and reports the agent writes show here; what it builds runs in the Browser tab (and under 🖥 servers).</div>`;
     return;
   }
   sel.value = a.id;
@@ -9729,6 +9735,13 @@ function renderPaneNow() {
       : `<audio controls src="${u}"></audio><a href="${u}" download="${esc(a.id)}">Download</a>`;
     body.innerHTML = `<div class="media">${player}${cap}</div>`;
   }
+}
+// A file from the chat in the pane's body: a piece of a reply as its card, anything else in the Files tab's viewer.
+function drawPaneFile(c, file, body) {
+  if (file.kind in PANE_CARDS) return drawPaneCard(c, file, body);
+  body.innerHTML = '<div class="fview pane-file"></div>';
+  G.filesProject = spaceOf(c);
+  previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind, raw: file.raw });
 }
 // Sites and apps: check the project folder every 2.5 s while shown; reload the preview when it changed.
 function watchFolder(c) {
@@ -10509,7 +10522,7 @@ function wsSingleWire() {
 }
 // ---------- the activity bar: the sidebar's views ----------
 // Like VS Code's: the bar on the far left picks WHAT the sidebar shows (public/frame-model.js VIEWS): Chats (the
-// sidebar as it always was), Search (search inside chats), Running, Servers & pages, Source control (pull requests),
+// sidebar as it always was), Search (search inside chats), Running, Servers & pages, Source control (git history, changes and pull requests),
 // Extensions (MCP servers, hooks, skills), Schedules, and Spending at the bottom with ⚙ Settings. Clicking the view
 // that is open hides the sidebar (Ctrl+B). Each view's top row is its own toolbar: its title, its actions, and ⤢ to
 // open it in the window it had before, where it has one. The views show QuorX's existing lists, moved in as they are:
@@ -10636,7 +10649,9 @@ const AV_DEF = {
     hide: () => { const c = AV.srvChat; if (c?.srvPop?.el?.closest?.('#avBodies')) closeServers(c); AV.srvChat = null; },
   },
   source: {
-    show: (b) => { const c = avChat(); if (!c) return avNeedChat(b, 'pull requests'); b.innerHTML = ''; renderPulls(c, b); },
+    key: () => `${qfPid()}|${avChat()?.id || ''}`,
+    // Without a chat open in the project, the project's own folder (a stand-in with no chat id).
+    show: (b) => { const p = qfProject(), c = avChat() || (p && { projectId: p.id, id: '', title: p.name }); if (!c) return avNeedChat(b, 'source control'); b.innerHTML = ''; renderSource(c, b); },
   },
   extensions: {
     tools: () => `<span class="st-segmented av-seg" role="radiogroup" aria-label="Which extensions">${[['mcp', 'MCP'], ['hooks', 'Hooks'], ['skills', 'Skills']].map(([k, l]) => `<button type="button" class="st-seg-btn ${AV.ext === k ? 'active' : ''}" role="radio" aria-checked="${AV.ext === k}" data-av="ext:${k}">${l}</button>`).join('')}</span>`,
@@ -10698,7 +10713,9 @@ function avDraw() {
   if (tools.dataset.sig !== bar) { tools.dataset.sig = bar; tools.innerHTML = bar; }
   const body = avBody(v);
   for (const el of wp.querySelectorAll('.av-view')) el.hidden = el !== body;
-  if (AV.shown !== v) { if (AV.shown) AV_DEF[AV.shown]?.hide?.(); AV.shown = v; def.show?.(body); }
+  // A view with a key (the project and chat it shows) draws again when that changes.
+  const key = def.key?.() ?? '';
+  if (AV.shown !== v || AV.shownKey !== key) { if (AV.shown) AV_DEF[AV.shown]?.hide?.(); AV.shown = v; AV.shownKey = key; def.show?.(body); }
 }
 function avWireTools() {
   $('#avTools')?.addEventListener('click', (e) => {
@@ -11155,6 +11172,7 @@ function wsChrome() {
   if (nb) nb.disabled = !WK.history.canGo(-1, wsCanShow);
   if (nf) nf.disabled = !WK.history.canGo(1, wsCanShow);
   const pb = $('#wtPanels .wt-pn'); if (pb) { const n = needsYou().length; pb.hidden = !n; pb.textContent = n; }
+  if (AV.shown && AV_DEF[AV.shown]?.key) avDraw(); // a view that follows the project or chat on screen (Source control)
 }
 function wsChromeInit() {
   if (!$('#wsTop')) return;
@@ -16359,12 +16377,180 @@ function renderPaneTabs(c) {
   const ag = c && G.agentTab?.[c.id];
   const dot = $('[data-tab="browser"] .pt-dot', box); dot.className = `pt-dot ${ag?.locked ? 'live' : ag || (c && projTabs(c.projectId).length) ? 'has' : ''}`;
   const fa = $('#followAgent'); if (fa) fa.checked = G.followAgent !== false;
-  // Pull requests: only for a project whose folder has a GitHub repo (its remote).
-  const pt = $('[data-tab="pulls"]', box); if (pt) pt.hidden = !(c && G.projects.find((p) => p.id === c.projectId)?.github) && t !== 'pulls';
-  // With the activity bar, pull requests have one home: the Source control view (the tab stays only while it is open).
+  // Source control: for a project whose folder is a git repository (or has a GitHub remote).
+  const pp = c && G.projects.find((p) => p.id === c.projectId);
+  const pt = $('[data-tab="pulls"]', box); if (pt) pt.hidden = !(pp?.github || pp?.git || c?.wt) && t !== 'pulls';
+  // With the activity bar, source control has one home: the Source control view (the tab stays only while it is open).
   if (pt && avOn()) pt.hidden = t !== 'pulls';
   // Every tab says whose it is: this group's chat (files and the terminal belong to the project).
   if (c) for (const b of box.querySelectorAll('[data-tab]')) { const base = b.dataset.baseTitle ??= b.title || ''; b.title = `${base}\n· ${['files', 'term'].includes(b.dataset.tab) ? 'Project' : clip(c.title || 'this chat', 40)}`; }
+}
+// ---------- the Source control tab ----------
+// The chat's folder (its worktree, else the project folder) as git sees it (server/gitview.js), read only:
+// Changes (staged, not staged, new files, each opening to its diff), History (commits with a lane graph, branch and
+// tag labels, search, and a commit opening to its files and diffs) and Pull requests (renderPulls, when the project
+// has a GitHub repo). Committing and pushing stay with the agent or your terminal.
+const SCC_SEGS = [['changes', 'Changes'], ['history', 'History'], ['pulls', 'Pull requests']];
+const SCC = { seg: (() => { try { return localStorage.getItem('oh-scc-seg') || 'changes'; } catch { return 'changes'; } })(), scope: 'branch', q: '', open: new Set(), files: new Set(), log: null, commit: new Map() };
+const SCC_ST = { modified: ['mod', 'M', 'Changed'], added: ['add', 'A', 'Added'], deleted: ['rem', 'D', 'Deleted'], renamed: ['mod', 'R', 'Renamed'], copied: ['add', 'C', 'Copied'], 'type changed': ['mod', 'T', 'Type changed'], conflict: ['rem', '!', 'Conflict: both sides changed it'], new: ['add', 'U', 'New, not tracked by git yet'] };
+const SCC_LANE = ['var(--accent)', '#22a06b', '#e5a00d', '#c4478f', '#2f9fd0', '#8f6bd8', '#d9622b', '#5c9e3a'];
+const sccQ = (c, extra) => `/api/git?project=${encodeURIComponent(c.projectId)}&chat=${encodeURIComponent(c.id)}&${extra}`;
+const shortSha = (s) => String(s || '').slice(0, 7);
+const sccWhen = (t) => (t ? ago(t) : '');
+// Lanes for the commits on screen (newest first): where each one's dot goes and which lines pass, join and fork.
+function gitLanes(commits) {
+  const lanes = [];
+  return commits.map((c) => {
+    let col = lanes.indexOf(c.sha), fresh = false;
+    if (col < 0) { col = lanes.indexOf(null); if (col < 0) col = lanes.length; lanes[col] = c.sha; fresh = true; }
+    const before = lanes.slice(), joins = [];
+    before.forEach((s, i) => { if (s === c.sha && i !== col) { joins.push(i); lanes[i] = null; } });
+    lanes[col] = c.parents[0] || null;
+    const forks = [];
+    for (const p of c.parents.slice(1)) { let i = lanes.indexOf(p); if (i < 0) { i = lanes.indexOf(null); if (i < 0) i = lanes.length; lanes[i] = p; } forks.push(i); }
+    while (lanes.length && lanes.at(-1) == null) lanes.pop();
+    return { col, fresh, before, after: lanes.slice(), joins, forks };
+  });
+}
+const LANE_W = 12, ROW_H = 26, MAX_LANES = 8;
+const laneX = (i) => 7 + Math.min(i, MAX_LANES - 1) * LANE_W;
+function laneSvg(g, merge) {
+  const mid = ROW_H / 2, w = laneX(Math.max(g.before.length, g.after.length, g.col + 1) - 1) + 7;
+  const col = (i) => SCC_LANE[i % SCC_LANE.length];
+  const ln = (x1, y1, x2, y2, i) => `<path d="M${x1} ${y1} ${y1 === 0 && x1 !== x2 ? `C${x1} ${mid * 0.6} ${x2} ${mid * 0.4} ` : y2 === ROW_H && x1 !== x2 ? `C${x1} ${mid + mid * 0.6} ${x2} ${mid + mid * 0.4} ` : 'L'}${x2} ${y2}" stroke="${col(i)}"/>`;
+  let s = '';
+  g.before.forEach((sha, i) => { if (sha && i !== g.col && !g.joins.includes(i)) s += ln(laneX(i), 0, laneX(i), ROW_H, i); });
+  if (!g.fresh) s += ln(laneX(g.col), 0, laneX(g.col), mid, g.col);
+  for (const j of g.joins) s += ln(laneX(j), 0, laneX(g.col), mid, j);
+  if (g.after[g.col]) s += ln(laneX(g.col), mid, laneX(g.col), ROW_H, g.col);
+  for (const f of g.forks) s += ln(laneX(g.col), mid, laneX(f), ROW_H, f);
+  s += `<circle cx="${laneX(g.col)}" cy="${mid}" r="${merge ? 3 : 4}" fill="${merge ? 'var(--panel-2)' : col(g.col)}" stroke="${col(g.col)}"/>`;
+  return `<svg class="scc-g" width="${w}" height="${ROW_H}" viewBox="0 0 ${w} ${ROW_H}" aria-hidden="true">${s}</svg>`;
+}
+// The lines that keep going past an opened commit's details.
+function laneGutter(g) {
+  const w = laneX(Math.max(g.after.length, 1) - 1) + 7;
+  return `<svg class="scc-gut" width="${w}" preserveAspectRatio="none" viewBox="0 0 ${w} 10" aria-hidden="true">${g.after.map((sha, i) => (sha ? `<path d="M${laneX(i)} 0L${laneX(i)} 10" stroke="${SCC_LANE[i % SCC_LANE.length]}" vector-effect="non-scaling-stroke"/>` : '')).join('')}</svg>`;
+}
+const refTag = (r) => `<span class="scc-ref ${r.kind}" title="${r.kind === 'head' ? 'Where the folder is now' : r.kind === 'tag' ? 'Tag' : r.kind === 'remote' ? 'Branch on the remote' : 'Branch'}">${r.kind === 'tag' ? '🏷 ' : ''}${esc(r.name)}</span>`;
+// A file row that opens to its diff. key: where:sha:path (what SCC.files remembers as open).
+function sccFileRow(f, where, sha = '') {
+  const [cls, letter, word] = SCC_ST[f.status] || SCC_ST.modified, key = `${where}:${sha}:${f.path}`, open = SCC.files.has(key);
+  const n = f.binary ? 'binary' : f.status === 'new' ? 'new' : f.added == null ? '' : !f.added && !f.removed ? 'no line changes' : `<b class="rv-add">+${f.added}</b><b class="rv-rem">−${f.removed}</b>`;
+  return `<div class="rv-file scc-file" data-lf-text="${esc(f.path.toLowerCase())}" data-lf-seg="${where === 'staged' ? 'Staged' : where === 'new' ? 'New' : 'Not staged'}">
+    <button type="button" class="rv-row" aria-expanded="${open}" data-key="${esc(key)}" data-where="${where}" data-sha="${esc(sha)}" data-path="${esc(f.path)}" data-orig="${esc(f.orig || '')}" title="${esc(word)}: ${esc(f.orig ? `${f.orig} → ${f.path}` : f.path)}"><span class="rv-st ${cls}">${letter}</span><code class="rv-path">${f.orig ? `<small>${esc(f.orig)} → </small>` : ''}${esc(f.path)}</code><span class="rv-n">${n}</span></button>
+    ${open ? '<div class="rv-diff"><div class="rv-wait">Loading…</div></div>' : ''}</div>`;
+}
+async function sccLoadDiffs(c, box) {
+  for (const b of box.querySelectorAll('.scc-file .rv-row[aria-expanded="true"]')) {
+    const d = b.parentElement.querySelector('.rv-diff'); if (!d || d.dataset.done) continue;
+    d.dataset.done = '1';
+    const r = await getJ(sccQ(c, `what=diff&where=${b.dataset.where}&sha=${encodeURIComponent(b.dataset.sha)}&path=${encodeURIComponent(b.dataset.path)}&orig=${encodeURIComponent(b.dataset.orig)}`));
+    if (!d.isConnected) return;
+    d.innerHTML = !r.error && !r.binary && !r.hunks?.length ? `<div class="rv-wait">${b.dataset.orig ? 'Renamed, with no line changes.' : 'No line changes.'}</div>` : rvDiffHTML(r);
+  }
+}
+function sccWireFiles(c, box, redraw) {
+  for (const b of box.querySelectorAll('.scc-file .rv-row')) b.onclick = () => { const k = b.dataset.key; SCC.files.has(k) ? SCC.files.delete(k) : SCC.files.add(k); redraw(); };
+  sccLoadDiffs(c, box);
+}
+// host: another place to draw it (the activity bar's Source control view); without it, the pane's tab.
+async function renderSource(c, host = null) {
+  const body = host || $('#paneBody'); if (!body) return;
+  const seq = (renderSource.seq = (renderSource.seq || 0) + 1);
+  const stale = () => seq !== renderSource.seq || (!host && (!G.view.pulls || focused() !== c)) || (host && !host.isConnected);
+  if (!body.querySelector('.prp.scc')) body.innerHTML = '<div class="prp scc"><div class="prp-wait" role="status">Reading git…</div></div>';
+  const st = await getJ(sccQ(c, 'what=status'));
+  if (stale()) return;
+  const box = $('.prp.scc', body);
+  const proj = G.projects.find((p) => p.id === c.projectId), gh = proj?.github;
+  const segs = SCC_SEGS.filter(([k]) => k !== 'pulls' || gh);
+  if (!segs.some(([k]) => k === SCC.seg)) SCC.seg = 'changes';
+  const changed = (st.staged?.length || 0) + (st.unstaged?.length || 0) + (st.untracked?.length || 0);
+  const name = gh ? `${gh.owner}/${gh.repo}` : (st.top || '').split(/[\\/]/).filter(Boolean).pop() || 'Source control';
+  const track = st.upstream ? `<span class="scc-ab" title="Against ${esc(st.upstream)}: ${st.ahead} commit${st.ahead === 1 ? '' : 's'} to push, ${st.behind} to pull">${st.ahead ? `↑${st.ahead}` : ''}${st.behind ? ` ↓${st.behind}` : ''}${!st.ahead && !st.behind ? '✓ up to date' : ''}</span>` : st.git && st.branch ? '<span class="scc-ab dim" title="This branch is not on a remote yet">not pushed</span>' : '';
+  const head = `<div class="prp-head scc-head"><b class="prp-repo">${gh ? GH_ICO : AV_ICO.source}${esc(name)}</b>${st.git ? `<span class="wt-branch-tag" title="${c.wt ? 'This chat\'s own branch (its worktree)' : 'The project folder\'s current branch'}">⎇ ${esc(st.branch || (st.head ? `detached at ${shortSha(st.head)}` : 'no commits yet'))}</span>${track}` : ''}<span class="prp-sp"></span><button type="button" class="prp-btn prp-refresh scc-refresh" title="Read git again">↻</button></div>`;
+  if (!st.git || st.error) {
+    box.innerHTML = `${head}<p class="prp-note ${st.error ? 'bad' : ''}">${esc(st.error || st.why || 'Not a git repository.')}</p>`;
+    $('.scc-refresh', box).onclick = () => renderSource(c, host);
+    return;
+  }
+  const seg = `<div class="st-segmented prp-seg scc-seg" role="tablist" aria-label="Source control">${segs.map(([k, l]) => `<button type="button" class="st-seg-btn ${k === SCC.seg ? 'active' : ''}" role="tab" aria-selected="${k === SCC.seg}" data-scc="${k}">${l}${k === 'changes' && changed ? ` <small>${changed}</small>` : ''}</button>`).join('')}</div>`;
+  box.innerHTML = `${head}${seg}<div class="scc-body"></div>`;
+  const inner = $('.scc-body', box);
+  $('.scc-refresh', box).onclick = () => { SCC.log = null; SCC.commit.clear(); renderSource(c, host); };
+  for (const b of box.querySelectorAll('[data-scc]')) b.onclick = () => { SCC.seg = b.dataset.scc; try { localStorage.setItem('oh-scc-seg', SCC.seg); } catch { /* storage off */ } renderSource(c, host); };
+  if (SCC.seg === 'pulls') return renderPulls(c, inner, { inSource: true });
+  if (SCC.seg === 'changes') return sccChanges(c, inner, st);
+  return sccHistory(c, inner, st, stale);
+}
+// Opening a file's diff redraws from the status already read (↻ reads git again).
+function sccChanges(c, box, st) {
+  const redraw = () => box.isConnected && sccChanges(c, box, st);
+  const n = st.staged.length + st.unstaged.length + st.untracked.length;
+  if (!n) { box.innerHTML = `<p class="prp-note">No changes: the folder matches the last commit${st.branch ? ` on ${esc(st.branch)}` : ''}.</p>`; return; }
+  const sec = (title, list, where, tip) => (list.length ? `<h4 class="prp-h" title="${tip}">${title} <small>${list.length}</small></h4><div class="scc-files">${list.map((f) => sccFileRow(f, where)).join('')}</div>` : '');
+  box.innerHTML = `${n > 8 ? '<div class="prp-filter scc-filter"></div>' : ''}
+    ${sec('Staged', st.staged, 'staged', 'In the next commit')}${sec('Not staged', st.unstaged, 'unstaged', 'Changed, not added to the next commit yet')}${sec('New files', st.untracked, 'new', 'Not tracked by git yet')}
+    <p class="scc-foot">Read only: commits and pushes stay with the agent or your terminal.</p>`;
+  sccWireFiles(c, box, redraw);
+  const ff = $('.scc-filter', box); if (ff) listFilter(ff, { key: 'scc-changes', rows: () => box.querySelectorAll('.scc-file'), placeholder: 'Find a changed file', label: 'Which', segOrder: ['Staged', 'Not staged', 'New'] });
+}
+async function sccHistory(c, box, st, stale) {
+  if (st.empty) { box.innerHTML = '<p class="prp-note">No commits yet. The first commit shows here.</p>'; return; }
+  const key = `${c.id}|${SCC.scope}|${SCC.q}`;
+  const tools = `<div class="scc-tools"><input type="search" class="lf-q scc-q" placeholder="Find a commit: message, author, hash or label" aria-label="Find a commit" value="${esc(SCC.q)}" spellcheck="false" autocomplete="off">
+    <span class="st-segmented prp-seg" role="radiogroup" aria-label="Which commits">${[['branch', 'This branch'], ['all', 'All branches']].map(([k, l]) => `<button type="button" class="st-seg-btn ${SCC.scope === k ? 'active' : ''}" role="radio" aria-checked="${SCC.scope === k}" data-scope="${k}">${l}</button>`).join('')}</span></div>`;
+  if (!SCC.log || SCC.log.key !== key) {
+    box.innerHTML = `${tools}<div class="prp-wait" role="status">Reading history…</div>`;
+    wireTools();
+    const r = await getJ(sccQ(c, `what=log&scope=${SCC.scope}&q=${encodeURIComponent(SCC.q)}`));
+    if (stale()) return;
+    SCC.log = { key, commits: r.commits || [], more: !!r.more, error: r.error, capped: r.capped, searched: r.searched };
+  }
+  draw();
+  function wireTools() {
+    const q = $('.scc-q', box); let t;
+    q.oninput = () => { clearTimeout(t); t = setTimeout(() => { SCC.q = q.value.trim(); sccHistory(c, box, st, stale).then(() => { const n = $('.scc-q', box); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }); }, 300); };
+    for (const b of box.querySelectorAll('[data-scope]')) b.onclick = () => { SCC.scope = b.dataset.scope; sccHistory(c, box, st, stale); };
+  }
+  function draw() {
+    const L = SCC.log, graph = !SCC.q, lanes = graph ? gitLanes(L.commits) : [];
+    const rows = L.commits.map((m, i) => {
+      const open = SCC.open.has(m.sha), g = lanes[i], d = open && SCC.commit.get(m.sha);
+      return `<div class="scc-c ${open ? 'open' : ''}" data-sha="${m.sha}">
+        <button type="button" class="scc-row" aria-expanded="${open}" title="${esc(m.subject)}\n${esc(m.author)} · ${new Date(m.at).toLocaleString()} · ${shortSha(m.sha)}">${graph ? laneSvg(g, m.parents.length > 1) : '<span class="scc-dot" aria-hidden="true"></span>'}<span class="scc-msg">${esc(m.subject || '(no message)')}</span>${m.refs.map(refTag).join('')}<span class="scc-who">${esc(m.author)}</span><span class="scc-when">${sccWhen(m.at)}</span></button>
+        ${open ? `<div class="scc-det">${graph ? laneGutter(g) : ''}<div class="scc-det-in">${!d ? '<div class="rv-wait">Loading…</div>' : d.error ? `<div class="rv-wait bad">⚠ ${esc(d.error)}</div>` : sccCommitHTML(d)}</div></div>` : ''}
+      </div>`;
+    }).join('');
+    box.innerHTML = `${tools}${L.error ? `<p class="prp-note bad">${esc(L.error)}</p>` : ''}${SCC.q && L.capped ? `<p class="prp-note">Searched the newest ${L.searched} commits.</p>` : ''}
+      ${L.commits.length ? `<div class="scc-log">${rows}</div>` : `<p class="prp-note">${SCC.q ? 'No commit matches.' : 'No commits.'}</p>`}
+      ${L.more ? '<button type="button" class="prp-btn scc-more">Show 50 more</button>' : ''}`;
+    wireTools();
+    for (const b of box.querySelectorAll('.scc-row')) b.onclick = async () => {
+      const sha = b.parentElement.dataset.sha;
+      if (SCC.open.has(sha)) { SCC.open.delete(sha); return draw(); }
+      SCC.open.add(sha); draw();
+      if (!SCC.commit.has(sha)) { const d = await getJ(sccQ(c, `what=commit&sha=${sha}`)); SCC.commit.set(sha, d); if (box.isConnected && SCC.open.has(sha)) draw(); }
+    };
+    for (const b of box.querySelectorAll('.scc-copy')) b.onclick = () => { navigator.clipboard?.writeText(b.dataset.sha).then(() => flashTip(b, 'Copied'), () => {}); };
+    const more = $('.scc-more', box);
+    if (more) more.onclick = async () => {
+      more.disabled = true; more.textContent = 'Reading…';
+      const r = await getJ(sccQ(c, `what=log&scope=${SCC.scope}&q=${encodeURIComponent(SCC.q)}&skip=${L.commits.length}`));
+      if (!box.isConnected || SCC.log !== L) return;
+      L.commits.push(...(r.commits || [])); L.more = !!r.more; draw();
+    };
+    sccWireFiles(c, box, draw);
+  }
+}
+function sccCommitHTML(d) {
+  const [subject, ...rest] = d.message.split('\n');
+  const bodyText = rest.join('\n').trim();
+  return `<div class="scc-meta"><b>${esc(subject)}</b>${bodyText ? `<pre class="scc-body-text">${esc(bodyText)}</pre>` : ''}
+      <div class="scc-facts"><span>${esc(d.author)}${d.committer && d.committer !== d.author ? ` <small>(committed by ${esc(d.committer)})</small>` : ''}</span><span>${new Date(d.at).toLocaleString()}</span><button type="button" class="scc-copy" data-sha="${d.sha}" title="Copy the full commit id">${shortSha(d.sha)} ⧉</button>${d.parents.length ? `<span class="scc-parents" title="Parent commit${d.parents.length === 1 ? '' : 's'}">← ${d.parents.map(shortSha).join(', ')}</span>` : '<span>first commit</span>'}</div>
+      ${d.merge ? '<p class="scc-note">A merge: the files below are what it changed against its first parent.</p>' : ''}</div>
+    ${d.files.length ? `<div class="scc-files">${d.files.map((f) => sccFileRow(f, 'commit', d.sha)).join('')}</div>` : '<div class="rv-wait">No file changes.</div>'}`;
 }
 // ---------- the Pull requests tab ----------
 // The project's GitHub pull requests, read through the GitHub command line (server/pulls.js): this chat's branch
@@ -16375,7 +16561,7 @@ const PR_STATES = [['open', 'Open'], ['merged', 'Merged'], ['closed', 'Closed'],
 const prState = () => { try { const v = localStorage.getItem('oh-pr-state'); return PR_STATES.some(([k]) => k === v) ? v : 'open'; } catch { return 'open'; } };
 const PR_ICO = { failing: '✕', pending: '◌', passed: '✓', skipped: '–' };
 // host: another place to draw them (the Source control view); without it, the pane's Pull requests tab.
-async function renderPulls(c, host = null) {
+async function renderPulls(c, host = null, { inSource = false } = {}) {
   const body = host || $('#paneBody'); if (!body) return;
   const seq = (renderPulls.seq = (renderPulls.seq || 0) + 1);
   const st = prState();
@@ -16383,8 +16569,8 @@ async function renderPulls(c, host = null) {
   const r = await getJ(`/api/pulls?project=${encodeURIComponent(c.projectId)}&chat=${encodeURIComponent(c.id)}&state=${st}`);
   if (seq !== renderPulls.seq || (!host && (!G.view.pulls || focused() !== c)) || (host && !host.isConnected)) return;
   const box = $('.prp', body) || body;
-  const head = (extra = '') => `<div class="prp-head"><b class="prp-repo">${r.repo ? `${GH_ICO} ${esc(r.repo)}` : 'Pull requests'}</b>${r.branch ? `<span class="wt-branch-tag" title="${c.wt ? 'This chat\'s own branch' : 'The project folder\'s current branch'}">⎇ ${esc(r.branch)}</span>` : ''}<span class="prp-sp"></span>${extra}<button type="button" class="prp-btn prp-refresh" title="Read them again">↻</button></div>`;
-  const wireHead = () => { const b = $('.prp-refresh', box); if (b) b.onclick = () => renderPulls(c, host); };
+  const head = (extra = '') => inSource ? `<div class="prp-head">${extra}</div>` : `<div class="prp-head"><b class="prp-repo">${r.repo ? `${GH_ICO} ${esc(r.repo)}` : 'Pull requests'}</b>${r.branch ? `<span class="wt-branch-tag" title="${c.wt ? 'This chat\'s own branch' : 'The project folder\'s current branch'}">⎇ ${esc(r.branch)}</span>` : ''}<span class="prp-sp"></span>${extra}<button type="button" class="prp-btn prp-refresh" title="Read them again">↻</button></div>`;
+  const wireHead = () => { const b = $('.prp-refresh', box); if (b) b.onclick = () => renderPulls(c, host, { inSource }); };
   if (r.error && !r.gh) { box.innerHTML = `${head()}<p class="prp-note">${esc(r.error)}</p>`; return wireHead(); }
   if (!r.repo) { box.innerHTML = `${head()}<p class="prp-note">This project has no GitHub repository (no remote on github.com), so there are no pull requests to show.</p>`; return wireHead(); }
   if (!r.gh?.installed || !r.gh?.signedIn) {
@@ -16410,8 +16596,8 @@ async function renderPulls(c, host = null) {
   box.innerHTML = `${head(seg)}${r.error ? `<p class="prp-note bad">${esc(r.error)}</p>` : ''}${r.prs.length > 6 ? '<div class="prp-filter"></div>' : ''}
     ${r.prs.length ? section('This chat\'s branch', mine) + section(mine.length ? 'Other pull requests' : 'Pull requests', rest) : `<p class="prp-note">No ${st === 'all' ? '' : `${st} `}pull requests${r.branch ? `. When one is opened from ${esc(r.branch)}, it shows here first` : ''}.</p>`}`;
   wireHead();
-  for (const b of box.querySelectorAll('[data-prs]')) b.onclick = () => { try { localStorage.setItem('oh-pr-state', b.dataset.prs); } catch { /* storage off */ } renderPulls(c, host); };
-  for (const b of box.querySelectorAll('.prp-sum')) b.onclick = () => { (G.prOpen ||= new Map()).set(Number(b.closest('[data-pr]').dataset.pr), b.getAttribute('aria-expanded') !== 'true'); renderPulls(c, host); };
+  for (const b of box.querySelectorAll('[data-prs]')) b.onclick = () => { try { localStorage.setItem('oh-pr-state', b.dataset.prs); } catch { /* storage off */ } renderPulls(c, host, { inSource }); };
+  for (const b of box.querySelectorAll('.prp-sum')) b.onclick = () => { (G.prOpen ||= new Map()).set(Number(b.closest('[data-pr]').dataset.pr), b.getAttribute('aria-expanded') !== 'true'); renderPulls(c, host, { inSource }); };
   for (const b of box.querySelectorAll('.prp-fix')) b.onclick = () => { const [n, i] = b.dataset.fix.split(':').map(Number); const p = r.prs.find((x) => x.number === n); if (p) fixCheckInChat(c, r, p, p.checks[i], b); };
   const ff = $('.prp-filter', box); if (ff) listFilter(ff, { key: 'pulls', rows: () => box.querySelectorAll('.prp-card'), placeholder: 'Find a pull request, branch or author', label: 'Whose' });
 }
@@ -16423,7 +16609,8 @@ async function fixCheckInChat(c, r, p, k, btn) {
   btn.disabled = true; btn.textContent = 'Reading the log…';
   const lg = await getJ(`/api/pulls/log?project=${encodeURIComponent(c.projectId)}&run=${encodeURIComponent(k.runId || '')}&job=${encodeURIComponent(k.jobId || '')}`);
   btn.disabled = false; btn.textContent = label;
-  const to = chatOfBranch(p.head) || c;
+  const to = chatOfBranch(p.head) || (c.ctx ? c : null);
+  if (!to) return flashTip(btn, 'Open a chat in this project first');
   const name = k.workflow ? `${k.workflow} / ${k.name}` : k.name;
   const text = `Pull request #${p.number} "${p.title}" (${p.base} ← ${p.head}): the check "${name}" is failing.\n${k.url ? `Details: ${k.url}\n` : ''}${lg.tail ? `\nThe end of its log:\n${lg.tail}` : `\n(The log could not be read: ${lg.error || 'no log'}.)`}`;
   // Through the composer's context chips (the same path as sending terminal output to the chat).
@@ -16492,9 +16679,8 @@ function wireAreaChrome() {
     files.ondragend = wsDropHide;
   }
   $('#artSelect').onchange = (e) => {
-    const v = e.target.value, c = focused(), f = c && paneFiles(c).find((x) => x.id === v);
-    // A file from the chat opens as a tab (in this group); a plan shows here.
-    if (f) { openFileInPane(c, f, { into: area.gid }); return; }
+    const v = e.target.value;
+    // A plan or a file from the chat shows here, below the dropdown (⧉ Open as tab gives a file a tab of its own).
     G.view = { id: v, src: false, files: false, trace: null };
     renderPane(); refreshTraceButtons();
   };

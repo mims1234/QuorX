@@ -196,9 +196,6 @@ main.layout.ws-free > aside#pane > .pane-area.maxed { border-left: 0; }
 #pane .pane-tabs .pa-follow[hidden] { display: none; }
 #pane .pane-tabs .pt-spacer { cursor: default; }
 #pane .pane-tabs [data-pa="max"][aria-pressed="true"] { color: var(--accent); }
-/* The Artifact tab's list of files from the chat, when there are no plans. */
-.pf-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
-.pf-list b { font-size: 12px; color: var(--muted); }
 .chat-head .ch-btn.ch-move { cursor: grab; }
 @media (max-width: 720px) { .chat-head .ch-btn.desk-only { display: none !important; } }
 
