@@ -91,7 +91,9 @@ export function finishChat(chatId, runId, deps) {
   // job, even with a reply: it counts towards the pause after failures, and its chat says why.
   // A model that stopped answering part-way failed too (the work so far is kept, but the job wasn't done).
   const cut = done?.stats?.stop === 'model_error' ? `The model stopped answering: ${done.stats.modelError || 'see the chat'}` : done?.stats?.stop === 'steps' ? (done.stats.loopEnd ? 'It went in circles (the same failing call again), so it was stopped.' : `It ran out of steps (${done.stats.steps}).`) : '';
-  const out = { reply: done?.reply || '', error: done ? cut : err?.msg || 'The reply ended without an answer.', stopped: !!err?.stopped, cost: done?.stats?.cost ?? err?.stats?.cost ?? 0 };
+  // A run's cost counts plan calls (OpenCode Go…) at their list price like any other call, as budgets and Spending do.
+  const st = done?.stats || err?.stats || {}, planOk = (x) => (Number.isFinite(Number(x)) && Number(x) > 0 && Number(x) < 1e6 ? Number(x) : 0);
+  const out = { reply: done?.reply || '', error: done ? cut : err?.msg || 'The reply ended without an answer.', stopped: !!err?.stopped, cost: (Number(st.cost) || 0) + planOk(st.planCost) };
   const doc = deps.getChat(chatId), m = doc?.agent?.messages?.find((x) => x.runId === runId);
   if (!m || !m.runActive) return out;
   const trace = [], approvals = {}, questions = {}, arts = [];

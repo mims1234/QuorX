@@ -767,7 +767,9 @@ test('a chat reports what it has spent, and while a reply runs how much is that 
       assert.equal(st.runningPlan, 2);
       assert.equal(st.planValue, 3.5);
       assert.throws(() => setBudget(id, 3), /already spent \$3\.7500/);
-      assert.equal(projectSpend('p3').spent, 0.25, "a project's spend stays money paid");
+      // A project counts what its chats' budgets count: money paid and sub value, with the sub value named.
+      assert.equal(projectSpend('p3').spent, 3.75, "a project's spend counts sub value too");
+      assert.equal(projectSpend('p3').plan, 3.5);
     } finally { ledger.delete(`seed-${id}`); liveRuns.delete(`live-${id}`); }
   }
 });

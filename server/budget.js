@@ -16,12 +16,13 @@ import { renameSoon } from './fsretry.js';
 
 export const live = new Map(); // runId → { project, chat, cost } for replies running now
 
+// A project's spend counts what its chats' budgets count: money paid and sub value (`plan` says how much is sub value).
 export function projectSpend(projectId) {
-  const { cost, runIds } = projectChatsSpend(projectId);
-  let unsaved = 0, running = 0;
-  for (const [id, r] of ledger) if (r.project === projectId && !runIds.has(id) && !live.has(id)) unsaved += r.cost;
-  for (const r of live.values()) if (r.project === projectId) running += r.cost;
-  return { spent: cost + unsaved + running, saved: cost, unsaved, running };
+  const { cost, plan: savedPlan, runIds } = projectChatsSpend(projectId);
+  let unsaved = 0, running = 0, plan = savedPlan || 0;
+  for (const [id, r] of ledger) if (r.project === projectId && !runIds.has(id) && !live.has(id)) { unsaved += r.cost + (r.plan || 0); plan += r.plan || 0; }
+  for (const r of live.values()) if (r.project === projectId) { running += r.cost + (r.plan || 0); plan += r.plan || 0; }
+  return { spent: cost + (savedPlan || 0) + unsaved + running, saved: cost + (savedPlan || 0), unsaved, running, plan };
 }
 
 // A chat's spend for its budget counts every call at a price: money paid, and the sub value of calls on a plan
