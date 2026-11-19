@@ -11,6 +11,7 @@ import { sentencePieces, pickVoice } from './speak.js';
 import { backupCard, drawBackup } from './backup.js';
 import { storageCard, drawStorage, setRulesText, refreshStorageBadge, projectSizes, focusProject, fmtBytes } from './storage.js';
 import { chatsToRelease } from './chat-cache.js';
+import { openRows, latestOnly } from './sidebar-rows.js';
 import { DRAFTS_KEY, putDraft, liveDrafts, sameDraft, draftLine } from './drafts.js';
 import { bulkGroups, bulkWords } from './approve-all.js';
 import { DEVICES, preset, parseSize, custom, rotate, fitBox, deviceLabel, deviceMetrics } from './devices.js';
@@ -333,7 +334,9 @@ function saveChat(c, now = false) {
   clearTimeout(timers.get(c.id));
   const go = () => {
     timers.delete(c.id);
-    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { unsaved.delete(c.id); if (sent !== false) refreshSidebar(); }, () => { unsaved.add(c.id); /* offline: retried on the next change */ });
+    // A failed save is tried again on the next change, or after a few seconds when nothing changes (a long reply that
+    // only streams text): otherwise a new chat whose first save failed stayed out of the server's list until it ended.
+    const p = (saving.get(c.id) || Promise.resolve()).then(() => sendChat(c)).then((sent) => { unsaved.delete(c.id); if (sent !== false) refreshSidebar(); }, () => { unsaved.add(c.id); if (!timers.has(c.id)) timers.set(c.id, setTimeout(go, 5000)); });
     saving.set(c.id, p);
     p.finally(() => { if (saving.get(c.id) === p) saving.delete(c.id); });
     return p;
@@ -1183,13 +1186,16 @@ addEventListener('pagehide', () => { for (const c of [...G.open.values(), G.home
 // project's older chats come with Show more (G.moreChats), and the search box asks the server, so it finds any chat.
 // After SB_PROJECTS projects, Show more projects (pinned, current and open ones always show).
 const SB_PER = 30, SB_PROJECTS = 25;
+const sbFetch = latestOnly(); // a refresh that comes back after a newer one started would draw an older list
 async function refreshSidebar() {
+  const turn = sbFetch.start();
   try {
     const ids = [...new Set([...G.panes, ...G.open.keys()])].join(',');
     const more = Object.entries(G.sbLimit || {}).filter(([, n]) => n > SB_PER);
     const [projects, side, ...pages] = await Promise.all([fetch('/api/projects').then((r) => r.json()), fetch(`/api/chats?view=sidebar&per=${SB_PER}&ids=${encodeURIComponent(ids)}`).then((r) => r.json()),
       ...more.map(([pid, n]) => fetch(`/api/chats/page?project=${encodeURIComponent(pid)}&limit=${n}`).then((r) => r.json()).catch(() => null))]);
     if (!Array.isArray(projects) || !Array.isArray(side?.chats)) return; // refused (no app link) or an error: keep what's shown
+    if (!sbFetch.current(turn)) return; // a newer refresh is on its way: it draws
     G.projects = projects; G.chats = side.chats; G.chatStats = side.stats || {};
     G.moreChats = Object.fromEntries(more.map(([pid], i) => [pid, pages[i]?.chats || []]));
   } catch { return; }
@@ -1254,9 +1260,8 @@ function renderSidebar() {
   const known = new Map(G.chats.map((c) => [c.id, c]));
   for (const list of Object.values(G.moreChats || {})) for (const c of list) if (!known.has(c.id)) known.set(c.id, c);
   if (q && G.sbFound?.q === q) for (const c of G.sbFound.chats) if (!known.has(c.id)) known.set(c.id, c);
-  const unsaved = [...G.open.values()].filter((c) => !known.has(c.id) && G.panes.includes(c.id))
-    .map((c) => ({ id: c.id, title: c.title, projectId: c.projectId, messages: 0, cost: 0, lastAt: c.created, model: c.agent.setup.model, preview: '' }));
-  const all = [...unsaved, ...known.values()];
+  // A chat with a message sent stays listed here too, on screen or not, until the server's list has it (sidebar-rows.js).
+  const all = [...openRows(G.open.values(), known, G.panes), ...known.values()];
   const stats = G.chatStats || {};
   // Your order first (drag a project's header to move it); projects you haven't placed keep theirs after.
   const rank = (p) => { const i = (G.projectOrder || []).indexOf(p.id); return i < 0 ? 1e6 + G.projects.indexOf(p) : i; };
