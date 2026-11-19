@@ -2638,7 +2638,9 @@ html body .trace.trace-pane .step .when { width: auto !important; white-space: n
 .msg .qbox .q-head { flex-wrap: wrap !important; row-gap: 6px; }
 .msg .qbox .q-head .q-text { flex: 1 1 180px !important; min-width: 0; }
 /* a narrow pane: the address gets the first row to itself (with back, forward, reload, copy, open); the page actions (Comment, Export, devtools…) move to a second row, right-aligned */
-:has(> #paneTool) { container: panebox / inline-size; }
+/* Only the pane and its areas can hold #paneTool: a :has() with no element before it makes the browser restyle the
+   whole page whenever anything changes (the sidebar redrawing while chats work took a tenth of a second each time). */
+:is(#pane, .pane-area):has(> #paneTool) { container: panebox / inline-size; }
 @container panebox (max-width: 640px) {
   .pane-tool:has(> #appBar:not([hidden]):not(:empty)) { flex-wrap: wrap; row-gap: 4px; }
   .pane-tool:has(> #appBar:not([hidden]):not(:empty)) > #paneUrlWrap { flex: 1 1 calc(100% - 96px); }
