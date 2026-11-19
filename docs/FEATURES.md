@@ -17,7 +17,7 @@ a real browser and your real toolchains, and shows how it got every answer.
   is. Settings opens in its own large window over the app.
 - **Any model, with its price.** Every model on OpenRouter through one key, plus makers' own APIs with your key
   (OpenAI, Anthropic, Google Gemini, Moonshot, Meta, xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq, Cerebras),
-  coding-plan subscriptions (OpenCode Go, Command Code, Z.AI, Kimi, Alibaba and MiniMax plans), the coding CLIs
+  ToAPIs (many makers' chat models plus its picture, video and Suno music models on one key), coding-plan subscriptions (OpenCode Go, Command Code, Z.AI, Kimi, Alibaba and MiniMax plans), the coding CLIs
   you've signed in to on this PC (Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code, Qwen Code and others), and
   local models served by LM Studio, Ollama, Microsoft Foundry Local or llama.cpp at no cost. ⚙ Settings → Providers &
   keys turns each on. The model picker searches, sorts by price, filters by what a model can do, and shows your own
