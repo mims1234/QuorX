@@ -3683,7 +3683,7 @@ let liveSideAt = 0, liveSideTimer = null;
 function liveSpend(c, m) {
   // The reply's footer: just its numbers once it shows them (the rest of the reply is left alone).
   const f = m.el && $('.foot', m.el);
-  if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money(m.liveCost, 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
+  if (f && $('.f-cost.live', f)) { $('.f-cost.live', f).textContent = money((m.liveCost || 0) + planTotal(m.livePlan), 5); const d = $('.f-dur.live', f); if (d) d.textContent = `${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}`; }
   else if (m.el) updateMsg(c, m);
   renderChatHead(c); drawBudgetChip(c); budgetNotices();
   // The sidebar at most every 1.5 s (it is redrawn whole).
@@ -3748,7 +3748,7 @@ function traceCostHTML(c, m) {
     <div class="tc-sec tc-cost-sec${folded ? ' folded' : ''}" data-fold="cost">
     <button type="button" class="tc-head tc-fold" aria-expanded="${!folded}" title="Show or hide what this reply cost (⚙ Settings → Window & layout → Steps)"><span><i class="tc-caret" aria-hidden="true"></i>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><span class="tc-head-sum" title="${esc(headTip)}"><b>${money(replyBilled + replyPlan, 5)}</b></span></button>
     <div class="tc-body">
-    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
+    <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
     ${(() => { const bp = byProvider(models.map(([id, v]) => [id, counted(v)])); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
     <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost + (t.plan || 0), 4)}</b></div>
@@ -4457,7 +4457,9 @@ function ownPlan(m, all) {
 function chatTotals(c) {
   for (const m of c.agent.messages) if (m.role === 'assistant' && !m.stats && !m.live && m.trace?.length) partialSpendQuiet(m); // older replies that ended part-way
   const all = c.agent.messages, done = all.filter((m) => m.role === 'assistant' && m.stats);
-  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length, plan: done.reduce((n, m) => n + ownPlan(m, all), 0) };
+  return { cost: done.reduce((s, m) => s + ownCost(m, all), 0) + (c.agent.extraUsage || []).reduce((s, x) => s + (x.cost || 0), 0) + liveOf(c), replies: done.length, msgs: all.filter((m) => m.role === 'user').length,
+    // plan: plan calls at list price, finished replies and (like cost) the one running now.
+    plan: done.reduce((n, m) => n + ownPlan(m, all), 0) + all.reduce((n, m) => n + (m.role === 'assistant' && !m.stats && m.live ? planTotal(m.livePlan) : 0), 0) };
 }
 // Each chat has its own agent notes (.quorx/chats/<chat>.md). A chat off the project (every Scratch chat unless you say
 // otherwise) reads only those: not the project's notes, design system or work log, and it can't change them.
@@ -4959,8 +4961,10 @@ const USAGE_KIND = {
 };
 function chatUsage(c) {
   const rows = new Map(), add = (kind, model, v) => {
-    const k = `${kind}|${model}`, r = rows.get(k) || { kind, model, calls: 0, cost: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cachedIn: 0, cacheWrite: 0 };
-    r.calls += v.calls || 0; r.cost += v.cost || 0; r.tokensIn += v.tokensIn || 0; r.tokensOut += v.tokensOut || 0;
+    const k = `${kind}|${model}`, r = rows.get(k) || { kind, model, calls: 0, cost: 0, plan: 0, refModel: null, tokensIn: 0, tokensOut: 0, cacheRead: 0, cachedIn: 0, cacheWrite: 0 };
+    // A plan model's calls (OpenCode Go…) count at OpenRouter's price for the same model, like any other call.
+    const pv = planTotal(v.planCost);
+    r.calls += v.calls || 0; r.cost += (v.cost || 0) + pv; r.plan += pv; r.refModel ||= v.refModel || null; r.tokensIn += v.tokensIn || 0; r.tokensOut += v.tokensOut || 0;
     r.cacheRead += v.cacheRead || 0; r.cachedIn += v.cachedIn || 0; r.cacheWrite += v.cacheWrite || 0; rows.set(k, r);
   };
   let replies = 0;
@@ -4974,7 +4978,7 @@ function chatUsage(c) {
   }
   for (const x of c.agent.extraUsage || []) add(x.kind, x.model, { calls: 1, cost: x.cost });
   const list = [...rows.values()].sort((a, b) => b.cost - a.cost);
-  return { replies, cost: list.reduce((n, r) => n + r.cost, 0), calls: list.reduce((n, r) => n + r.calls, 0), rows: list };
+  return { replies, cost: list.reduce((n, r) => n + r.cost, 0), plan: list.reduce((n, r) => n + r.plan, 0), calls: list.reduce((n, r) => n + r.calls, 0), rows: list };
 }
 function usageHTML(u, at) {
   const kinds = [...new Set(u.rows.map((r) => r.kind))].sort((a, b) => u.rows.filter((r) => r.kind === b).reduce((n, r) => n + r.cost, 0) - u.rows.filter((r) => r.kind === a).reduce((n, r) => n + r.cost, 0));
@@ -4986,8 +4990,9 @@ function usageHTML(u, at) {
     ${u.rows.length ? kinds.map((k) => {
       const rs = u.rows.filter((r) => r.kind === k), sub = rs.reduce((n, r) => n + r.cost, 0), [ico, name] = USAGE_KIND[k] || ['•', k];
       return `<div class="uc-kind"><div class="uc-kind-h"><span>${ico} ${esc(name)}</span><b>${money(sub, 4)}</b></div>
-        ${rs.map((r) => `<div class="uc-row"><span class="uc-model" title="${esc(r.model)}">${esc(short(r.model))}</span><span class="uc-calls">${r.calls}×${r.tokensIn || r.tokensOut ? ` · ${tok(r.tokensIn)} in / ${tok(r.tokensOut)} out` : ''}</span><span class="uc-cache">${cacheTag(r)}</span><span class="uc-cost">${money(r.cost, 5)}</span><span class="uc-bar"><i style="width:${pct(r.cost)}%"></i></span></div>`).join('')}</div>`;
+        ${rs.map((r) => `<div class="uc-row"><span class="uc-model" title="${esc(r.model)}">${esc(short(r.model))}</span><span class="uc-calls">${r.calls}×${r.tokensIn || r.tokensOut ? ` · ${tok(r.tokensIn)} in / ${tok(r.tokensOut)} out` : ''}</span><span class="uc-cache">${cacheTag(r)}</span><span class="uc-cost">${r.plan > 0 ? `<span class="tc-ref" title="${esc(`Counted at ${r.refModel ? `${r.refModel}'s price on OpenRouter` : 'list price'}: your subscription covers these calls (not billed per call), and they count toward the chat's spending and budget like any other.`)}">≈ ${money(r.cost, 5)}</span>` : money(r.cost, 5)}</span><span class="uc-bar"><i style="width:${pct(r.cost)}%"></i></span></div>`).join('')}</div>`;
     }).join('') : '<p class="uc-empty">Nothing spent in this chat yet.</p>'}
+    ${u.plan > 0 ? `<div class="uc-foot">≈ ${money(u.plan, 4)} of the total is calls on your subscriptions, counted at OpenRouter's price for the same model: covered by the plan, not billed per call.</div>` : ''}
     <div class="uc-foot">Only you see this. It is never sent to the agent.</div>
   </div>`;
 }
@@ -6278,11 +6283,13 @@ const planTag = (x) => (planTotal(x) && !uiOf(G.settings).maskAmounts ? `<span c
 function replyInfoHTML(s, when) {
   const k = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0);
   const row = (label, value) => `<span class="fi-row"><span>${label}</span><b>${value}</b></span>`;
-  const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
+  // Plan calls (OpenCode Go…) count at OpenRouter's price for the same model, like any other call.
+  const counted = (v) => (v.cost || 0) + planTotal(v.planCost);
+  const models = Object.entries(s.byModel || {}).sort((a, b) => counted(b[1]) - counted(a[1]));
   return `<span class="f-info mt-btn" tabindex="0" role="button" aria-label="Reply details"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.6"/><circle cx="12" cy="17.2" r=".6" fill="currentColor"/></svg><span class="f-pop" role="tooltip">
-    <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money(s.cost, 5)}</b></span>
+    <span class="fi-total"><span>Total cost${s.partial ? ' <i>so far: the reply ended early</i>' : ''}</span><b>${money((s.cost || 0) + planTotal(s.planCost), 5)}</b></span>
     ${when ? row('When', esc(new Date(when).toLocaleString())) : ''}
-    ${planTotal(s.planCost) ? row('Sub value', `≈ ${money(s.planCost, 4)}<small>at list price, covered by your subscription</small>`) : ''}
+    ${planTotal(s.planCost) ? row('Of it, plan calls', `≈ ${money(s.planCost, 4)}<small>at OpenRouter's price for the same model, covered by your subscription</small>`) : ''}
     ${row('Took', secs(s.ms))}
     ${row('Model calls', callsLine(s))}
     ${s.tokensIn || s.tokensOut ? `<span class="fi-row tok-in"><span><i class="tok-dot"></i>Tokens in</span><b>${k(s.tokensIn)}</b></span><span class="fi-row tok-out"><span><i class="tok-dot"></i>Tokens out</span><b>${k(s.tokensOut)}</b></span>` : ''}
@@ -6290,8 +6297,8 @@ function replyInfoHTML(s, when) {
     ${s.plan?.of ? row('Plan', `${s.plan.done} of ${s.plan.of} done`) : ''}
     ${s.changed?.length ? row('Files changed', s.changed.length) : ''}
     ${s.mediaSpent ? row('Media', money(s.mediaSpent, 4)) : ''}
-    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}${v.refModel ? ` <i title="No price from ${esc(SOURCE_NAME[sourceOfId(m)] || 'the source')}: counted at ${esc(v.refModel)}'s OpenRouter price (list price, no discount)">≈ OpenRouter price</i>` : ''}</span><b>${v.calls}× · ${money(v.cost || 0, 5)}${planTotal(v.planCost) ? ` <small>+ sub ${money(v.planCost, 4)}</small>` : ''}</b></span>`).join('')}` : ''}
-    ${planTotal(s.planCost) ? '<span class="fi-note">Sub value counts toward the chat\'s budget, so every call is capped.</span>' : ''}
+    ${models.length ? `<span class="fi-h">By model</span>${models.map(([m, v]) => `<span class="fi-row fi-model"><span>${esc(short(m))}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}${v.refModel ? ` <i title="No price from ${esc(SOURCE_NAME[sourceOfId(m)] || 'the source')}: counted at ${esc(v.refModel)}'s OpenRouter price (list price, no discount)">≈ OpenRouter price</i>` : ''}</span><b>${v.calls}× · ${planTotal(v.planCost) ? '≈ ' : ''}${money(counted(v), 5)}</b></span>`).join('')}` : ''}
+    ${planTotal(s.planCost) ? '<span class="fi-note">Plan calls count toward the chat\'s spending and budget like any other call, so every call is capped.</span>' : ''}
   </span></span>`;
 }
 // The breakdown opens above its ? and stays inside the window. It's drawn in one floating box on the page itself:
@@ -6809,7 +6816,7 @@ function traceRows(m) {
     if (e.t === 'llm_start') { llmAt[e.step] = out.length; llmModel[e.step] = e.model; row(e.at, `🧠 <b>${esc(short(e.model))}</b> thinks<span class="sub" data-llm="${e.step}"></span>${m.thinking?.[e.step]?.trim() ? `<details class="think-trace" data-think="${e.step}"><summary>💭 Thinking · ${thinkWords(m, e.step)} words</summary><div class="tt-body"></div></details>` : ''}`, 'think'); }
     else if (e.t === 'llm_done') {
       const i = llmAt[e.step] ?? -1;
-      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${money(e.cost, 5)}${e.planCost ? ` · <span title="Sub value: what this call used of your ${esc(SOURCE_NAME[e.source] || '')} subscription, at list price (covered, not paid). It counts toward the chat's budget.">sub value ${money(e.planCost, 4)}</span>` : ''}${e.refModel ? ` <span class="tr-ref" title="${esc(SOURCE_NAME[e.source] || 'The source')} gave no price for this call, so it is counted at ${esc(e.refModel)}'s price on OpenRouter (list price, no discount).">≈ OpenRouter price</span>` : ''}${e.costUnknown ? ' <span class="tr-ref" title="No price is known for this model, here or on OpenRouter: it counts as $0.">price unknown</span>' : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== llmModel[e.step] ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
+      if (i >= 0) out[i] = out[i].replace(`<span class="sub" data-llm="${e.step}"></span>`, `<div class="sub">${secs(e.ms)} · <span class="tok-out">${e.tokensOut} tokens out</span> · ${planTotal(e.planCost) ? `<span class="tc-ref" title="${esc(`A call on your ${SOURCE_NAME[e.source] || ''} subscription, counted at ${e.refModel ? `${e.refModel}'s price on OpenRouter` : 'list price'} like any other call (covered by the plan, not billed). It counts toward the chat's spending and budget.`)}">≈ ${money((e.cost || 0) + planTotal(e.planCost), 5)}</span>` : money(e.cost, 5)}${e.refModel && !planTotal(e.planCost) ?` <span class="tr-ref" title="${esc(SOURCE_NAME[e.source] || 'The source')} gave no price for this call, so it is counted at ${esc(e.refModel)}'s price on OpenRouter (list price, no discount).">≈ OpenRouter price</span>` : ''}${e.costUnknown ? ' <span class="tr-ref" title="No price is known for this model, here or on OpenRouter: it counts as $0.">price unknown</span>' : ''}${e.provider ? ` · via <span class="tr-prov" title="${e.source ? 'The account this call ran on' : 'The provider OpenRouter routed this call to'}">${esc(e.provider)}</span>` : ''}${e.model && e.model !== llmModel[e.step] ? ` · <b class="tr-fallback" title="${e.fellBackFrom ? `${esc(SOURCE_NAME[sourceOfId(e.fellBackFrom)] || 'The source')} failed, so this step ran on OpenRouter (see ⤵)` : 'The chat\'s model was unavailable, so OpenRouter used the fallback model'}">fallback ${esc(short(e.model))}</b>` : ''}${e.toolCalls.length ? ` · then ${e.toolCalls.map(esc).join(', ')}` : ''}</div>${e.aside ? `<div class="aside">💬 ${esc(e.aside)}</div>` : ''}`);
     } else if (e.t === 'tool' && e.name !== 'decide') row(e.at, `${e.by === 'reviewer' ? '🧪 <span class="tr-rv">reviewer</span> ' : e.by === 'helper' ? `🤝 <span class="tr-hp">helper ${e.helper || ''}</span> ` : ''}${TOOL_NAME[e.name]?.split(' ')[0] || '🔧'} <b>${esc(e.name)}</b><div class="sub">${esc(argSummary(e))}</div>`, e.by === 'reviewer' ? 'browser' : 'tool');
     else if (e.t === 'reading') row(e.at, `📝 <b>Prompt enhancer</b> ${esc(short(e.model))} read the request${e.late ? ' (too late for the first step; the deciders still use it)' : ''} · ${secs(e.ms)} · ${money(e.cost, 5)}<div class="sub" style="white-space:pre-wrap">${linkUrls(esc(e.text))}</div>`, 'note');
     else if (e.t === 'chat_off_project') row(e.at, `📝 Own chat from now on: you said “${esc(e.why || '')}”, so this chat leaves the project's notes, design and log alone. Tick Part of the project in the header to undo.`, 'note');

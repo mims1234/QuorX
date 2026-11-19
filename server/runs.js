@@ -219,7 +219,8 @@ export function scorecard(days = 14) {
     const m = (by[r.model] ??= { model: r.model, replies: 0, stops: {}, checked: 0, passed: 0, steps: 0, tools: 0, cost: 0, ms: 0, retries: 0, trimmed: 0, changedFiles: 0, looksFirst: 0, started: 0 });
     m.replies++; m.stops[r.stop] = (m.stops[r.stop] || 0) + 1;
     if (r.verify) { m.checked++; if (r.verify.ok) m.passed++; }
-    m.steps += r.steps || 0; m.tools += r.tools || 0; m.cost += r.cost || 0; m.ms += r.ms || 0; m.retries += r.retries || 0; m.trimmed += r.trimmed ? 1 : 0; m.changedFiles += r.changed || 0;
+    // Cost counts plan calls (OpenCode Go…) at their list price like any other call (planCost on the run's row).
+    m.steps += r.steps || 0; m.tools += r.tools || 0; m.cost += (Number(r.cost) || 0) + (Number(r.planCost) > 0 && Number(r.planCost) < 1e6 ? Number(r.planCost) : 0); m.ms += r.ms || 0; m.retries += r.retries || 0; m.trimmed += r.trimmed ? 1 : 0; m.changedFiles += r.changed || 0;
     // Replies that wrote something: how many steps only read or looked first (rows from before 0.2.7 have no count).
     if (r.firstWrite != null && r.looksFirst != null) { m.started++; m.looksFirst += r.looksFirst; }
   }
