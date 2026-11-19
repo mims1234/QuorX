@@ -194,7 +194,8 @@ function summarise(c) {
     if (m.stats) plan += planOf(m.stats, prev?.stats);
     if (m.role === 'assistant') prev = m;
     if (cost) spend.push([m.doneAt || m.at || 0, cost]);
-    for (const [model, v] of Object.entries(r?.byModel || {})) { models[model] = (models[model] || 0) + (v.cost || 0); uses.push([m.doneAt || m.at || 0, model, v.cost || 0, v.calls || 1]); }
+    // A plan model's calls cost nothing but carry their sub value (planCost, at list price), kept as a fifth field.
+    for (const [model, v] of Object.entries(r?.byModel || {})) { models[model] = (models[model] || 0) + (v.cost || 0); uses.push([m.doneAt || m.at || 0, model, v.cost || 0, v.calls || 1, Number(v.planCost) || 0]); }
   }
   for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); uses.push([x.at || 0, x.model, x.cost || 0, 1]); }
   return {
@@ -214,7 +215,7 @@ function summarise(c) {
 // background pass every minute catches anything the watcher missed, a few hundred files at a time, so it never holds
 // the server up. Only the very first start, with no saved index yet, reads every chat before answering.
 const INDEX = path.join(HOME, 'data', 'index', 'chats.json');
-const INDEX_V = 4; // 2: each entry also names the pictures its chat uses; 3: and its plan value; 4: and its spend per model per reply
+const INDEX_V = 5; // 2: each entry also names the pictures its chat uses; 3: and its plan value; 4: and its spend per model per reply; 5: and each model's sub value
 // The pictures a chat names (/blob/…), for what deleting it would free.
 const blobsIn = (text) => [...new Set(String(text).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])].map((x) => x.slice(6));
 const keyOf = (st) => `${st.size}:${st.mtimeMs}`;
@@ -315,16 +316,16 @@ function rollups() {
   if (ROLLUP) return ROLLUP;
   const m = new Map();
   for (const c of all) {
-    const r = m.get(c.projectId) || m.set(c.projectId, { cost: 0, runIds: new Set(), chats: 0, active: 0, lastAt: 0 }).get(c.projectId);
-    r.cost += c.cost; r.chats++; if (c.messages) r.active++; r.lastAt = Math.max(r.lastAt, c.lastAt || 0);
+    const r = m.get(c.projectId) || m.set(c.projectId, { cost: 0, plan: 0, runIds: new Set(), chats: 0, active: 0, lastAt: 0 }).get(c.projectId);
+    r.cost += c.cost; r.plan += c.plan || 0; r.chats++; if (c.messages) r.active++; r.lastAt = Math.max(r.lastAt, c.lastAt || 0);
     for (const id of c.runIds) r.runIds.add(id);
   }
   return (ROLLUP = m);
 }
-// What a project's saved chats cost, and which replies those costs come from.
+// What a project's saved chats cost, their sub value (calls on a plan, at list price), and which replies those come from.
 export function projectChatsSpend(projectId) {
   const r = rollups().get(projectId);
-  return { cost: r?.cost || 0, runIds: r?.runIds || new Set() };
+  return { cost: r?.cost || 0, plan: r?.plan || 0, runIds: r?.runIds || new Set() };
 }
 /** What one chat's saved file says it cost, and which replies those costs come from. */
 export function chatSavedSpend(chatId) {
@@ -698,10 +699,13 @@ export function costSummary({ per = 5, sort = 'cost', providerOf = null } = {}) 
 export function providerUsage({ providerOf, now = Date.now() } = {}) {
   const d0 = new Date(new Date(now).toDateString()).getTime(), m0 = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime();
   const out = {};
-  for (const c of summaries()) for (const [t, model, v, n] of c.uses || []) {
-    const cost = Number(v);
-    if (!Number.isFinite(cost) || cost < 0 || cost >= 1e6) continue;
-    const p = (out[providerOf(model)] ??= { today: 0, month: 0, all: 0, calls: 0, models: {}, days: Array(14).fill(0), last: 0 });
+  for (const c of summaries()) for (const [t, model, v, n, pv] of c.uses || []) {
+    // What a call counts: money paid, or on a plan its sub value (`sub` says how much of each figure that is).
+    const paid = Number(v), plan = Number(pv) || 0;
+    if (!Number.isFinite(paid) || paid < 0 || paid >= 1e6 || plan < 0 || plan >= 1e6) continue;
+    const cost = paid + plan;
+    const p = (out[providerOf(model)] ??= { today: 0, month: 0, all: 0, calls: 0, models: {}, days: Array(14).fill(0), last: 0, sub: { today: 0, month: 0, all: 0 } });
+    if (plan) { p.sub.all += plan; if (t >= d0) p.sub.today += plan; if (t >= m0) p.sub.month += plan; }
     p.all += cost; p.calls += Number(n) || 1; p.models[model] = (p.models[model] || 0) + cost; p.last = Math.max(p.last, t || 0);
     if (t >= d0) p.today += cost;
     if (t >= m0) p.month += cost;

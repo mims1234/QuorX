@@ -357,7 +357,8 @@ test('the Spending view totals what each provider was paid; absurd figures count
   const reply = (byModel, cost) => ({ role: 'assistant', content: 'ok', at: now, stats: { cost, byModel } });
   saveChat(`c${now}`, { projectId: 'direct', title: 'Spend', agent: { setup: { model: 'openai-api/gpt-test' }, messages: [{ role: 'user', content: 'hi', at: now },
     reply({ 'openai-api/gpt-test': { cost: 0.5, calls: 2 }, 'anthropic-api/claude-test-5': { cost: 0.25, calls: 1 }, 'openai/gpt-test': { cost: 0.1, calls: 1 }, 'openai-api/decider/gpt-test': { cost: 0.05, calls: 1 } }, 0.9),
-    reply({ 'gemini-api/gemini-test-flash': { cost: 1e12, calls: 1 } }, 0)] } });
+    reply({ 'gemini-api/gemini-test-flash': { cost: 1e12, calls: 1 } }, 0),
+    reply({ 'opencode-go/deepseek-v4.1-flash': { cost: 0, calls: 3, planCost: 0.2 } }, 0)] } });
   const s = costSummary({ providerOf: S.providerOfModel });
   const by = s.total.byProvider;
   assert.ok(Math.abs(by.OpenAI - 0.55) < 1e-9, `OpenAI ${by.OpenAI}: its chat model and its decider`);
@@ -374,6 +375,11 @@ test('the Spending view totals what each provider was paid; absurd figures count
   assert.equal(u.OpenAI.days.length, 14);
   assert.ok(Math.abs(u.OpenAI.days[13] - 0.55) < 1e-9, 'today is the last day');
   assert.equal(u['Google Gemini'], undefined, 'an absurd figure counts as nothing');
+  // A plan's calls cost nothing but count their sub value (at list price), named apart from money paid.
+  const go = u[S.providerOfModel('opencode-go/deepseek-v4.1-flash')];
+  assert.ok(Math.abs(go.all - 0.2) < 1e-9 && Math.abs(go.today - 0.2) < 1e-9, `Go counts its sub value: ${go?.all}`);
+  assert.deepEqual([go.calls, +go.sub.all.toFixed(6), +go.days[13].toFixed(6)], [3, 0.2, 0.2]);
+  assert.equal(u.OpenAI.sub.all, 0, 'money paid is not sub value');
 });
 
 test('reference prices: a call without a money figure of its own counts at the same model on OpenRouter, list price', () => {

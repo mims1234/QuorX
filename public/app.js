@@ -1289,8 +1289,9 @@ function renderSidebar() {
     const moreN = q ? 0 : total - listedNow.filter((c) => c.messages > 0).length;
     // The server's total also counts replies that never reached a chat file (stopped, page closed, deleted), and
     // replies running now as they stood when it was fetched: replies running in this page add what they have spent since.
-    const liveHere = chats.reduce((s, c) => s + liveOf(G.open.get(c.id)), 0);
-    const cost = p.spent != null ? p.spent + Math.max(0, liveHere - (p.runningCost || 0)) : chats.reduce((s, c) => s + (c.cost || 0), 0) + liveHere;
+    // Like a chat's budget, it counts sub value (calls on a plan, at list price) beside money paid.
+    const liveHere = chats.reduce((s, c) => s + liveAllOf(G.open.get(c.id)), 0);
+    const cost = p.spent != null ? p.spent + Math.max(0, liveHere - (p.runningCost || 0)) : chats.reduce((s, c) => s + (c.cost || 0) + (c.plan || 0), 0) + liveHere;
     const folded = (G.foldedProjects || []).includes(p.id) && !q;
     // A project with a chat working glows; with a chat open it's the current one; the rest fade back (see last.css).
     const working = chats.some((c) => G.open.get(c.id)?.running);
@@ -1302,11 +1303,11 @@ function renderSidebar() {
       ${[...shown, ...(olderOpen ? older : [])].map((c, ci) => {
         const live = G.open.get(c.id);
         const running = !!live?.running, waiting = running && live.waiting;
-        const spent = (c.cost || 0) + liveOf(G.open.get(c.id));
+        const spent = chatCounted(c);
         // ⏰ A schedule chat: its runs start fresh, with only the schedule's prompt; what you type in it has the whole chat.
         const sch = schedsOf(c.id), schOn = sch.some((s) => !s.paused && s.nextAt != null);
         const schTag = sch.length ? `<span class="sb-sched ${schOn ? 'on' : 'off'}" title="Schedule chat: ${esc(sch.map((s) => `${s.name} (${s.paused ? 'paused' : s.whenText})`).join(', '))}. Each run starts fresh and sees only the schedule's prompt; what you type here sees the whole chat, every run included.">⏰${schOn ? '' : ' paused'}</span>` : '';
-        const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t${spend(spent)}`].join('\n');
+        const tip = [c.title || 'Untitled', ...(c.model ? [`Model\t${short(c.model)}`] : []), `Last message\t${new Date(c.lastAt || c.updated || Date.now()).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, ...(c.messages ? [`Messages\t${c.messages}`] : []), ...(running ? [`Now\t${waiting ? 'waiting for you' : 'working'}`] : []), `Spent\t${spend(spent)}`, ...(chatSub(c) >= 0.00005 ? [`Sub value\t${spend(chatSub(c))} of it (plan calls at list price, not billed)`] : [])].join('\n');
         // Driving your Chrome or your desktop: the chat glows in that kind's colour (last.css, .drv-chrome / .drv-desktop).
         const drv = running && live.driving ? `drv-${live.driving}` : '';
         // Each state has its own fixed colour, apart from the project colours (last.css, "chat row status"): one at a time,
@@ -1322,7 +1323,7 @@ function renderSidebar() {
           <div class="sb-chat-content">
             <div class="sb-chat-topline">${c.pinned ? `<span class="sb-chat-pin" title="Pinned to the top of ${esc(p.name)}" aria-label="Pinned">${PIN_SVG}</span>` : ''}<span class="sb-chat-title">${esc(c.title)}</span>${schTag}${G.drafts[c.id] ? `<span class="sb-draft" title="Not sent yet: ${esc(draftLine(G.drafts[c.id]))}">✎ draft</span>` : ''}${running ? '<span class="live-dot" aria-label="Running"></span>' : ended ? `<span class="st-mark" aria-label="${ended === 'error' ? 'Stopped with an error' : 'Finished, not seen yet'}"></span>` : ''}</div>
             ${prev ? `<div class="sb-chat-prev">${prev}</div>` : ''}
-            <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${c.cost || liveOf(G.open.get(c.id)) ? `<span class="cost${liveOf(G.open.get(c.id)) ? ' live' : ''}">· ${spend(((c.cost || 0) + liveOf(G.open.get(c.id))))}</span>` : ''}</div>
+            <div class="sb-chat-meta"><span>${ago(c.lastAt || c.updated || Date.now())}</span>${c.model ? `<span>· ${esc(short(c.model))}</span>` : ''}${spent ? `<span class="cost${liveAllOf(G.open.get(c.id)) ? ' live' : ''}">· ${spend(spent)}</span>` : ''}</div>
           </div>
           <div class="sb-chat-acts"><button type="button" class="sb-chat-menu" title="Rename, duplicate or delete (or right-click the chat)" aria-label="Chat options" aria-haspopup="menu">${ICO.more}</button></div>
         </div>`;
@@ -2283,11 +2284,13 @@ function projectSpendHTML(p, n, cost, chats = []) {
   const usd = (v) => `$${v.toFixed(v < 1 ? 3 : 2)}`;
   const info = `<b class="cost">${usd(cost)}</b> spent · ${n} chat${n === 1 ? '' : 's'}`;
   const clean = (t) => String(t || 'Untitled').replace(/\s+/g, ' ').slice(0, 48);
-  const byCost = [...chats].sort((a, b) => (b.cost || 0) - (a.cost || 0));
+  // Each chat as its budget counts it: money paid plus sub value (calls on a plan, at list price, not billed).
+  const byCost = [...chats].sort((a, b) => chatCounted(b) - chatCounted(a));
+  const sub = chats.reduce((t, c) => t + chatSub(c), 0);
   const tip = [`${p.name} · what its chats spent`,
-    ...byCost.slice(0, 8).map((c) => `${clean(c.title)}\t${usd(c.cost || 0)}`),
-    ...(byCost.length > 8 ? [`${byCost.length - 8} more chats\t${usd(byCost.slice(8).reduce((t, c) => t + (c.cost || 0), 0))}`] : []),
-    `Total\t${usd(cost)}`].join('\n');
+    ...byCost.slice(0, 8).map((c) => `${clean(c.title)}\t${usd(chatCounted(c))}`),
+    ...(byCost.length > 8 ? [`${byCost.length - 8} more chats\t${usd(byCost.slice(8).reduce((t, c) => t + chatCounted(c), 0))}`] : []),
+    `Total\t${usd(cost)}`, ...(sub >= 0.0005 ? [`Sub value\t${usd(sub)} of it: plan calls counted at list price, not billed`] : [])].join('\n');
   return `<span class="sb-budget sb-pinfo none" data-tip-delay="900" title="${esc(tip)}">${info}</span>`;
 }
 // ---------- 💵 a chat's budget: the only money limit ----------
@@ -3303,7 +3306,7 @@ function drawHomeProject(box = document) {
   head.innerHTML = p ? `<span class="home-dot" aria-hidden="true"></span><h2 title="${esc(p.dir || '')}">${esc(p.name)}</h2><span class="home-sp"></span><button type="button" class="ld-p-set" data-home-act="projset" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button>` : '';
   const where = $('#homeWhere', box); if (where) where.textContent = p ? `· ${p.name}` : '';
   const chats = G.chats.filter((c) => c.messages > 0 && (c.projectId || 'scratch') === pid).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)).slice(0, 5);
-  list.innerHTML = chats.map((c) => `<button type="button" class="ld-chat home-row" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="home-t">${esc(c.title)}</span><small>${c.model ? `${esc(short(c.model))} · ` : ''}${ago(c.lastAt || Date.now())}</small><span class="money">${spend((c.cost || 0))}</span></button>`).join('')
+  list.innerHTML = chats.map((c) => `<button type="button" class="ld-chat home-row" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="home-t">${esc(c.title)}</span><small>${c.model ? `${esc(short(c.model))} · ` : ''}${ago(c.lastAt || Date.now())}</small><span class="money">${spend(chatCounted(c))}</span></button>`).join('')
     || `<p class="home-none">No chats in ${esc(p?.name || 'this project')} yet: the box above starts one.</p>`;
   for (const b of list.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
   for (const b of head.querySelectorAll('[data-home-act]')) b.onclick = () => homeAct(b.dataset.homeAct);
@@ -3351,7 +3354,7 @@ function renderLanding(box) {
       const mine = allRecent.filter((c) => (c.projectId || 'scratch') === p.id), n = G.chatStats?.[p.id]?.active ?? mine.length, spent = p.spent || 0;
       return `<div class="ld-project" style="${projStyle(p)}"><div class="ld-p-top">${p.pinned ? '<span class="ld-p-pin" title="Pinned" aria-label="Pinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 4 4H6l4-4z"/><path d="M12 14v6"/></svg></span>' : ''}<b>${esc(p.name)}</b>${p.github ? `<a class="ld-p-gh" href="${esc(p.github.url)}" rel="noopener noreferrer" data-cl="1" title="Open ${esc(p.github.owner)}/${esc(p.github.repo)} on GitHub" aria-label="Open on GitHub">${GH_ICO}</a>` : ''}<button type="button" class="ld-p-set" data-set="${esc(p.id)}" title="Project settings" aria-label="Settings for ${esc(p.name)}">${ICO.gear}</button><button type="button" class="ld-p-plus" data-new="${esc(p.id)}" title="New chat in ${esc(p.name)}" aria-label="New chat in ${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <small class="ld-p-meta">${n} chat${n === 1 ? '' : 's'} · <span class="money">${spend(spent)}</span> spent</small>
-        <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">${spend((c.cost || 0))}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
+        <div class="ld-p-chats">${mine.slice(0, 3).map((c) => `<button type="button" class="ld-chat ld-pc" data-c="${esc(c.id)}" title="${esc(c.title)}"><b>${esc(c.title)}</b><small>${ago(c.lastAt || Date.now())}</small><span class="ld-cost">${spend(chatCounted(c))}</span></button>`).join('') || '<span class="ld-p-none">No chats yet</span>'}${n > 3 ? `<span class="ld-p-more">+${n - 3} more in the sidebar</span>` : ''}</div></div>`;
     }).join('')}</div>
     <p class="ld-tips">Tips: type <kbd>@</kbd> to add files or other chats as context, <kbd>/</kbd> for commands, and ⚙ for settings.</p>
   </section>`;
@@ -3666,6 +3669,11 @@ async function openFolderAsProject(btn, errEl, { pickOnly = false } = {}) {
 // the calls it made: their costs are in its steps, so the chat and the Costs window count them.
 // ---------- what a running reply has spent so far: sent after every model call, shown as it climbs ----------
 const liveOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.liveCost || 0 : 0), 0);
+// What running replies count so far toward a budget: money paid plus sub value (calls on a plan, at list price).
+const liveAllOf = (c) => (c?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? (m.liveCost || 0) + (m.livePlan || 0) : 0), 0);
+// What a chat in a list counts, like its budget: paid plus sub value, saved and running; chatSub: the sub value part.
+const chatCounted = (c) => (c?.cost || 0) + (c?.plan || 0) + liveAllOf(G.open.get(c?.id));
+const chatSub = (c) => (c?.plan || 0) + (G.open.get(c?.id)?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.livePlan || 0 : 0), 0);
 const stoppedByYou = (m) => m.error === 'Stopped.';
 function liveFootHTML(m) {
   return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
@@ -10712,8 +10720,8 @@ function wsContextLeft(c) {
 // spent since it was read.
 function projSpent(pid) {
   const p = G.projects.find((x) => x.id === pid); if (!p) return 0;
-  const chats = G.chats.filter((x) => projOf(x) === pid), live = chats.reduce((s, x) => s + liveOf(G.open.get(x.id)), 0);
-  return p.spent != null ? p.spent + Math.max(0, live - (p.runningCost || 0)) : chats.reduce((s, x) => s + (x.cost || 0), 0) + live;
+  const chats = G.chats.filter((x) => projOf(x) === pid), live = chats.reduce((s, x) => s + liveAllOf(G.open.get(x.id)), 0);
+  return p.spent != null ? p.spent + Math.max(0, live - (p.runningCost || 0)) : chats.reduce((s, x) => s + (x.cost || 0) + (x.plan || 0), 0) + live;
 }
 // The branch: the chat's own worktree's, else the project folder's (from git, cached for half a minute).
 const wsBranches = new Map(); // project id → { at, branch }
@@ -13122,6 +13130,7 @@ function pvUsageHTML(x) {
     <div class="pv-kpis"><div class="pv-kpi"><small>Today</small>${pvMoney(u.today)}</div><div class="pv-kpi"><small>This month</small>${pvMoney(u.month)}</div><div class="pv-kpi"><small>All time</small>${pvMoney(u.all)}</div><div class="pv-kpi"><small>Calls</small><b>${u.calls.toLocaleString()}</b></div></div>
     <div class="pv-spark" role="img" aria-label="Spending over the last 14 days">${bars}</div><div class="pv-spark-axis"><span>14 days ago</span><span>today</span></div>
     ${top.length ? `<ul class="pv-top">${top.map(([id, v]) => `<li><span title="${esc(id)}">${esc(short(id))}</span>${pvMoney(v)}</li>`).join('')}</ul>` : ''}
+    ${u.sub?.all >= 0.00005 ? `<p class="st-row-help">${u.sub.all >= u.all - 0.00005 ? 'All of it is' : `${money(u.sub.all, 4)} of it is`} sub value: calls on your plan, counted at the same model’s price on OpenRouter (or the plan’s own list price) toward chat budgets, not billed. Replies still running join when they finish.</p>` : ''}
     ${u.last ? `<p class="st-row-help">Last used ${esc(ago(u.last))}.</p>` : ''}
   </section>`;
 }
