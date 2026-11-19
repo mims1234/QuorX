@@ -1344,7 +1344,8 @@ function renderSidebar() {
     return `<button type="button" class="sb-rail-btn ${G.panes.includes(c.id) ? 'active' : ''} ${running ? 'live-running' : ''}" data-c="${esc(c.id)}" data-tip="${esc(c.title)}" style="--h:${hue(c.title)}">${esc(initials(c.title))}${running ? '<span class="rail-dot"></span>' : ''}</button>`;
   }).join('');
   for (const b of document.querySelectorAll('#railList .sb-rail-btn')) b.onclick = () => showChat(b.dataset.c, G.focus);
-  const total = Object.values(G.chatStats || {}).reduce((n, s) => n + (s.cost || 0), 0) || G.chats.reduce((n, c) => n + (c.cost || 0), 0);
+  // Every project's chats, plan calls counted at list price like any other call (the server's stats include them).
+  const total = Object.values(G.chatStats || {}).reduce((n, s) => n + (s.cost || 0), 0) || G.chats.reduce((n, c) => n + (c.cost || 0) + (c.plan || 0), 0);
   $('#costsPill').textContent = `$${total.toFixed(total < 1 ? 3 : 2)}`; // everything spent so far, all projects
   for (const el of document.querySelectorAll('#projectList .sb-chat')) {
     const id = el.dataset.c;
@@ -3676,7 +3677,7 @@ const chatCounted = (c) => (c?.cost || 0) + (c?.plan || 0) + liveAllOf(G.open.ge
 const chatSub = (c) => (c?.plan || 0) + (G.open.get(c?.id)?.agent?.messages || []).reduce((s, m) => s + (m.role === 'assistant' && !m.stats && m.live ? m.livePlan || 0 : 0), 0);
 const stoppedByYou = (m) => m.error === 'Stopped.';
 function liveFootHTML(m) {
-  return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call">${money(m.liveCost, 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
+  return `<span class="f-cost live" title="Spent so far by this reply, updated after every model call${planTotal(m.livePlan) ? ` (≈ ${money(planTotal(m.livePlan), 5)} of it is calls on your plan, counted at OpenRouter's price)` : ''}">${money((m.liveCost || 0) + planTotal(m.livePlan), 5)}</span><span class="f-dur live" title="Model calls so far">${m.liveCalls || 0} call${m.liveCalls === 1 ? '' : 's'}</span>`;
 }
 let liveSideAt = 0, liveSideTimer = null;
 function liveSpend(c, m) {
@@ -3725,25 +3726,33 @@ function byProvider(pairs) {
 }
 // ---------- the end of the Steps pane: what this reply cost (so far, while it runs), by model, and the chat's total ----------
 function traceCostHTML(c, m) {
-  const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
+  const s = m.stats || (m.live && m.liveCost != null ? { cost: m.liveCost, planCost: m.livePlan, byModel: m.liveByModel || {}, tokensIn: m.liveTokens?.[0], tokensOut: m.liveTokens?.[1], live: true } : null);
   if (!s) return '';
   const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
-  const models = Object.entries(s.byModel || {}).sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0));
+  // A plan model's calls (OpenCode Go…) cost nothing per call: they count at the same model's OpenRouter price (or the
+  // plan's list price) like any other call, in every total and budget, marked ≈ with a note that the plan covers it.
+  const counted = (v) => (v.cost || 0) + (Number(v.planCost) || 0);
+  const models = Object.entries(s.byModel || {}).sort((a, b) => counted(b[1]) - counted(a[1]));
+  const subTip = (ref) => `Counted at ${ref ? `${ref}'s price on OpenRouter` : 'list price'}: your subscription covers these calls, so nothing is billed per call, but they count toward the chat's and project's spending and budget like any other.`;
+  const costCell = (v) => (Number(v.planCost) > 0 ? `<span class="tc-ref" title="${esc(subTip(v.refModel))}">≈ ${money(counted(v), 5)}</span>` : money(v.cost || 0, 5));
+  const replyPlan = m.stats ? ownPlan(m, c.agent.messages) : Number(m.livePlan) || 0;
+  const replyBilled = m.stats ? ownCost(m, c.agent.messages) : s.cost || 0;
+  const headTip = replyPlan > 0 ? `${money(replyBilled, 5)} billed + ≈ ${money(replyPlan, 5)} for calls on your plan, counted at OpenRouter's price for the same model` : '';
   const calls = models.reduce((n, [, v]) => n + (v.calls || 0), 0) || s.llmCalls || 0;
   const sumCache = (list) => list.reduce((a, [, v]) => ({ cacheRead: a.cacheRead + (v.cacheRead || 0), cachedIn: a.cachedIn + (v.cachedIn || 0), cacheWrite: a.cacheWrite + (v.cacheWrite || 0) }), { cacheRead: 0, cachedIn: 0, cacheWrite: 0 });
   const t = chatTotals(c); // every reply in the chat (this one included, live or done) and calls outside replies
-  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${provTag(id)}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${money(v.cost || 0, 5)}</td></tr>`).join('');
+  const rows = models.map(([id, v]) => `<tr><td><span class="tc-model" title="${esc(id)}">${esc(short(id))}</span>${provTag(id)}${v.role && v.role !== 'writer' ? ` <i>${esc(v.role)}</i>` : ''}</td><td>${v.calls || 0}×</td><td>${v.tokensIn || v.tokensOut ? `<span class="tok-in">${k(v.tokensIn)} in</span> · <span class="tok-out">${k(v.tokensOut)} out</span>` : ''}</td><td class="tc-cache">${cacheTag(v)}</td><td class="tc-c">${costCell(v)}</td></tr>`).join('');
   // The cost part folds to its header line (▸ and the reply's $) like the context part above it (ui.stepsCost).
   const folded = !uiOf(G.settings).stepsCost;
   return `<div class="trace-cost">${traceContextHTML(c)}
     <div class="tc-sec tc-cost-sec${folded ? ' folded' : ''}" data-fold="cost">
-    <button type="button" class="tc-head tc-fold" aria-expanded="${!folded}" title="Show or hide what this reply cost (⚙ Settings → Window & layout → Steps)"><span><i class="tc-caret" aria-hidden="true"></i>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><b>${money(m.stats ? ownCost(m, c.agent.messages) : s.cost || 0, 5)}</b></button>
+    <button type="button" class="tc-head tc-fold" aria-expanded="${!folded}" title="Show or hide what this reply cost (⚙ Settings → Window & layout → Steps)"><span><i class="tc-caret" aria-hidden="true"></i>💲 ${s.live ? 'Spent so far' : s.partial ? 'This reply spent (it ended early)' : 'This reply cost'}</span><span class="tc-head-sum" title="${esc(headTip)}"><b>${money(replyBilled + replyPlan, 5)}</b></span></button>
     <div class="tc-body">
     <div class="tc-sub">${calls} model call${calls === 1 ? '' : 's'}${s.tokensIn ? ` · <span class="tok-in">${k(s.tokensIn)} tokens in</span>` : ''}${s.tokensOut ? ` · <span class="tok-out">${k(s.tokensOut)} tokens out</span>` : ''}${cacheShare(sumCache(models)) != null ? ` · ${cacheTag(sumCache(models))}` : ''}${s.ms ? ` · ${secs(s.ms)}` : ''}${s.mediaSpent ? ` · media ${money(s.mediaSpent, 4)}` : ''}${planTag(s.planCost)}</div>
     ${rows ? `<table class="tc-table"><tbody>${rows}</tbody></table>` : ''}
-    ${(() => { const bp = byProvider(models); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
-    <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost, 4)}</b></div>
-    ${t.plan ? `<div class="tc-chat tc-plan"><span>Sub value, whole chat <i>at list price, covered by your subscriptions; counts toward the chat's budget</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
+    ${(() => { const bp = byProvider(models.map(([id, v]) => [id, counted(v)])); return bp.length > 1 ? `<div class="tc-provs"><span>By provider</span>${bp.map(([k, v]) => `<span class="tc-prov-sum"><span class="tc-prov">${esc(k)}</span><b>${money(v, 5)}</b></span>`).join('')}</div>` : ''; })()}
+    <div class="tc-chat"><span>Whole chat so far · ${t.replies} repl${t.replies === 1 ? 'y' : 'ies'}${t.msgs ? ` · ${t.msgs} message${t.msgs === 1 ? '' : 's'}` : ''}</span><b>${money(t.cost + (t.plan || 0), 4)}</b></div>
+    ${t.plan ? `<div class="tc-chat tc-plan"><span>of which plan calls <i>counted at OpenRouter's price for the same model; your subscription covers them, so they aren't billed</i></span><b>≈ ${money(t.plan, 4)}</b></div>` : ''}
   </div></div></div>`;
 }
 // ---------- zoom: Ctrl + / − / 0 (and Ctrl+wheel) ----------
@@ -4505,8 +4514,8 @@ function renderChatHead(c) {
   const gh = $('.ch-gh', r);
   if (gh) { gh.hidden = !p?.github; if (p?.github && gh.getAttribute('href') !== p.github.url) { gh.href = p.github.url; gh.title = `Open ${p.github.owner}/${p.github.repo} on GitHub`; gh.innerHTML = GH_ICO; } }
   $('.dir-a-msgs-count', r).textContent = `${t.msgs} msg${t.msgs === 1 ? '' : 's'}`;
-  $('.ch-cost', r).textContent = spend(t.cost);
-  $('.ch-cost', r).title = `What this chat has cost (click for the breakdown)${t.plan && !uiOf(G.settings).maskAmounts ? `\nSub value ≈ ${money(t.plan, 4)}: what it used of your subscriptions, at list price (covered, not paid per reply)` : ''}`;
+  $('.ch-cost', r).textContent = spend(t.cost + (t.plan || 0));
+  $('.ch-cost', r).title = `What this chat has cost (click for the breakdown)${t.plan && !uiOf(G.settings).maskAmounts ? `\nIncludes ≈ ${money(t.plan, 4)} for calls on your subscriptions, counted at OpenRouter's price for the same model (covered by the plan, not billed per call)` : ''}`;
   // ⏰ the schedules that post in this chat: how many, and whether they are on; click for them in Schedules.
   const sc = $('.ch-sched', r);
   if (sc) {
@@ -6121,7 +6130,8 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   // A reply cut off by a restart may carry partial stats (what it spent before the cut): it can still be resumed.
   $('.foot', el).innerHTML = (!s || s.partial) && m.resumable && !m.live ? '<button type="button" class="resume-btn primary" title="Carry on from the last finished step">▶ Resume where it stopped</button>'
     : !s && m.live && m.liveCost != null ? liveFootHTML(m)
-    : s ? `<span class="f-cost" title="What the reply cost">${money(s.cost, 5)}</span>${planTag(s.planCost)}${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
+    // Plan calls (OpenCode Go…) count at OpenRouter's price for the same model, like any other call; the tip splits it.
+    : s ? `<span class="f-cost" title="${esc(planTotal(s.planCost) ? `What the reply cost: ${money(s.cost, 5)} billed + ≈ ${money(planTotal(s.planCost), 5)} for calls on your plan, counted at OpenRouter's price for the same model (covered by the plan)` : 'What the reply cost')}">${money(s.cost + planTotal(s.planCost), 5)}</span>${s.ms ? `<span class="f-dur" title="How long the reply took">${secs(s.ms)}</span>` : ''}${checkTag}${stopTag}` : '';
   // A reply you stopped says so in one small tag down here, not in a box above.
   if (stoppedByYou(m) && !m.live) {
     // The chat's last reply, stopped: ▶ Continue carries on from where it stopped (the next message gets what was
@@ -12128,7 +12138,7 @@ async function drawCosts() {
   if (!d) { body.innerHTML = '<div class="cx-empty">Could not load costs. <button type="button" class="mp-link" id="cxRetry">Try again</button></div>'; $('#cxRetry').onclick = drawCosts; return; }
   const max = Math.max(0.000001, ...d.projects.map((p) => p.cost));
   body.innerHTML = `
-    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="Sub value: what replies on your subscriptions (OpenCode Go, Grok Build, Claude Code) used of them, at list price. Not paid per reply: your subscriptions cover it."><small>Sub value</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
+    <div class="cost-totals cx-line"><div><small>Today</small><b>${money(d.total.today, 3)}</b></div><div><small>7 days</small><b>${money(d.total.week, 3)}</b></div><div><small>All time</small><b>${money(d.total.cost, 3)}</b></div><div><small>Chats</small><b class="cx-count">${d.total.chats}</b></div>${planTotal(d.total.plan) ? `<div class="cx-plan" title="The part of the totals that is calls on your subscriptions (OpenCode Go, Grok Build, Claude Code), counted at OpenRouter's price for the same model like any other call. Not billed per call: your subscriptions cover it."><small>Of it, plan calls</small><b>≈ ${money(planTotal(d.total.plan), 3)}</b></div>` : ''}</div>
     ${(d.total.byProvider && Object.keys(d.total.byProvider).length) ? `<div class="cx-provs" title="What each provider was paid, all time: OpenRouter, and each key or plan you added (⚙ Settings → Providers)"><small>By provider</small>${Object.entries(d.total.byProvider).filter(([, v]) => Number(v) > 0 && Number(v) < 1e6).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="cx-prov"><span class="tc-prov">${esc(k)}</span><b>${money(v, 3)}</b></span>`).join('')}</div>` : ''}
     <div class="cx-tools">
       <label class="mp-search cx-search"><span aria-hidden="true">⌕</span><input id="cxSearch" placeholder="Search every chat by title" aria-label="Search chats" value="${esc(COSTS.q)}"></label>

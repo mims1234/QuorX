@@ -358,13 +358,16 @@ test('the Spending view totals what each provider was paid; absurd figures count
   saveChat(`c${now}`, { projectId: 'direct', title: 'Spend', agent: { setup: { model: 'openai-api/gpt-test' }, messages: [{ role: 'user', content: 'hi', at: now },
     reply({ 'openai-api/gpt-test': { cost: 0.5, calls: 2 }, 'anthropic-api/claude-test-5': { cost: 0.25, calls: 1 }, 'openai/gpt-test': { cost: 0.1, calls: 1 }, 'openai-api/decider/gpt-test': { cost: 0.05, calls: 1 } }, 0.9),
     reply({ 'gemini-api/gemini-test-flash': { cost: 1e12, calls: 1 } }, 0),
-    reply({ 'opencode-go/deepseek-v4.1-flash': { cost: 0, calls: 3, planCost: 0.2 } }, 0)] } });
+    { ...reply({ 'opencode-go/deepseek-v4.1-flash': { cost: 0, calls: 3, planCost: 0.2 } }, 0), stats: { cost: 0, planCost: 0.2, byModel: { 'opencode-go/deepseek-v4.1-flash': { cost: 0, calls: 3, planCost: 0.2 } } } }] } });
   const s = costSummary({ providerOf: S.providerOfModel });
   const by = s.total.byProvider;
   assert.ok(Math.abs(by.OpenAI - 0.55) < 1e-9, `OpenAI ${by.OpenAI}: its chat model and its decider`);
   assert.ok(Math.abs(by.Anthropic - 0.25) < 1e-9);
   assert.ok(Math.abs(by.OpenRouter - 0.1) < 1e-9);
   assert.equal(by['Google Gemini'], undefined, 'a billion-dollar figure is a bad record, not spending');
+  // Plan calls count in Spending like any other, at their list price: by provider, in the totals, with the part named.
+  assert.ok(Math.abs(by[S.providerOfModel('opencode-go/deepseek-v4.1-flash')] - 0.2) < 1e-9, 'Go counts at its list price');
+  assert.ok(Math.abs(s.total.cost - 1.1) < 1e-9 && Math.abs(s.total.plan - 0.2) < 1e-9 && Math.abs(s.total.today - 1.1) < 1e-9, `totals ${s.total.cost} / ${s.total.plan} / ${s.total.today}`);
   assert.equal(costSummary().total.byProvider, undefined, 'only when asked');
   // ⚙ Settings → Providers: each provider's today, month, all time, calls, models and last 14 days.
   const { providerUsage } = await import('../server/store.js');

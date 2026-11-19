@@ -188,21 +188,25 @@ function summarise(c) {
   // Spend over time (for today / 7 days) and per model, plus calls made outside a reply (mic).
   // `uses`: [when, model, cost, calls] per model per reply, for each provider's usage in ⚙ Settings → Providers.
   const spend = [], models = {}, uses = [];
-  let prev = null, plan = 0;
+  let prev = null, plan = 0, paid = 0;
   for (const m of msgs) {
     const r = replySpend(m, prev), cost = r?.cost || 0;
-    if (m.stats) plan += planOf(m.stats, prev?.stats);
+    paid += cost;
+    const pv = m.stats ? planOf(m.stats, prev?.stats) : 0;
+    plan += pv;
     if (m.role === 'assistant') prev = m;
-    if (cost) spend.push([m.doneAt || m.at || 0, cost]);
+    // Spending over time and per model counts plan calls (OpenCode Go…) at their list price like any other call;
+    // `cost` stays what was billed, and `plan` the part that is plan calls.
+    if (cost || pv) spend.push([m.doneAt || m.at || 0, cost + pv]);
     // A plan model's calls cost nothing but carry their sub value (planCost, at list price), kept as a fifth field.
-    for (const [model, v] of Object.entries(r?.byModel || {})) { models[model] = (models[model] || 0) + (v.cost || 0); uses.push([m.doneAt || m.at || 0, model, v.cost || 0, v.calls || 1, Number(v.planCost) || 0]); }
+    for (const [model, v] of Object.entries(r?.byModel || {})) { models[model] = (models[model] || 0) + (v.cost || 0) + (Number(v.planCost) || 0); uses.push([m.doneAt || m.at || 0, model, v.cost || 0, v.calls || 1, Number(v.planCost) || 0]); }
   }
-  for (const x of c.agent?.extraUsage || []) { spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); uses.push([x.at || 0, x.model, x.cost || 0, 1]); }
+  for (const x of c.agent?.extraUsage || []) { paid += x.cost || 0; spend.push([x.at || 0, x.cost || 0]); models[x.model] = (models[x.model] || 0) + (x.cost || 0); uses.push([x.at || 0, x.model, x.cost || 0, 1]); }
   return {
     id: c.id, title: String(c.title || 'New chat'), mode: c.mode, projectId: c.projectId || 'scratch', created: c.created, updated: c.updated,
     lastAt: Math.max(0, ...all.map((m) => m.doneAt || m.at || 0)) || c.lastAt || c.created || c.updated,
     agents: lay.map((col) => col.name), model: lay[0]?.setup?.model || null, preview: String(lastBot?.content || '').replace(/\s+/g, ' ').slice(0, 90),
-    messages: msgs.filter((m) => m.role === 'user').length, cost: spend.reduce((n, [, v]) => n + v, 0), plan,
+    messages: msgs.filter((m) => m.role === 'user').length, cost: paid, plan, // cost: billed; plan: plan calls at list price
     artifacts: lay.reduce((n, col) => n + Object.keys(col.artifacts || {}).length, 0), spend, models, uses,
     // Replies whose cost (and sub value) is saved in this file (the budget ledger counts the others itself).
     runIds: [...msgs.filter((m) => m.runId && replySpend(m)).map((m) => m.runId), ...(c.agent?.extraUsage || []).filter((x) => x.runId).map((x) => x.runId)],
@@ -215,7 +219,7 @@ function summarise(c) {
 // background pass every minute catches anything the watcher missed, a few hundred files at a time, so it never holds
 // the server up. Only the very first start, with no saved index yet, reads every chat before answering.
 const INDEX = path.join(HOME, 'data', 'index', 'chats.json');
-const INDEX_V = 5; // 2: each entry also names the pictures its chat uses; 3: and its plan value; 4: and its spend per model per reply; 5: and each model's sub value
+const INDEX_V = 6; // 2: each entry also names the pictures its chat uses; 3: and its plan value; 4: and its spend per model per reply; 5: and each model's sub value; 6: spend over time and per model counts it
 // The pictures a chat names (/blob/…), for what deleting it would free.
 const blobsIn = (text) => [...new Set(String(text).match(/\/blob\/[0-9a-f]{64}\.[a-z0-9]{2,5}/g) || [])].map((x) => x.slice(6));
 const keyOf = (st) => `${st.size}:${st.mtimeMs}`;
@@ -334,7 +338,8 @@ export function chatSavedSpend(chatId) {
 }
 /** Per-project counts for the sidebar: { [projectId]: { chats, active, cost, lastAt } }. */
 export function projectChatStats() {
-  return Object.fromEntries([...rollups()].map(([id, r]) => [id, { chats: r.chats, active: r.active, cost: r.cost, lastAt: r.lastAt }]));
+  // cost counts plan calls at list price too (like budgets and Spending); plan names that part.
+  return Object.fromEntries([...rollups()].map(([id, r]) => [id, { chats: r.chats, active: r.active, cost: r.cost + (r.plan || 0), plan: r.plan || 0, lastAt: r.lastAt }]));
 }
 /**
  * The sidebar's chats: each project's newest `per` chats with messages, plus any chat asked for by id (open panes),
@@ -670,7 +675,8 @@ function costRows() {
   return summaries().filter((c) => c.messages).map((c) => {
     let today = 0, week = 0;
     for (const [t, v] of c.spend) { if (t >= dayStart) today += v; if (t >= weekAgo) week += v; }
-    return { id: c.id, title: c.title, projectId: c.projectId, messages: c.messages, cost: c.cost, plan: c.plan || 0, today, week, lastAt: c.lastAt, models: c.models };
+    // cost: everything the chat counts, plan calls at list price included (like its budget); plan: that part.
+    return { id: c.id, title: c.title, projectId: c.projectId, messages: c.messages, cost: (c.cost || 0) + (c.plan || 0), billed: c.cost || 0, plan: c.plan || 0, today, week, lastAt: c.lastAt, models: c.models };
   });
 }
 const SORT = { cost: (a, b) => b.cost - a.cost, today: (a, b) => b.today - a.today || b.cost - a.cost, messages: (a, b) => b.messages - a.messages, name: (a, b) => a.title.localeCompare(b.title), recent: (a, b) => (b.lastAt || 0) - (a.lastAt || 0) };

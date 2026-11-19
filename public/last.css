@@ -1982,6 +1982,8 @@ img.shot:hover, img.dsnap:hover, .msg .msg-md img:hover { outline: 2px solid var
 .trace-cost .tc-table td:nth-child(2) { width: 9%; }
 .trace-cost .tc-table td i { font-style: normal; color: var(--muted); }
 .trace-cost .tc-table .tc-c { text-align: right; color: var(--amber, #f59e0b); font-variant-numeric: tabular-nums; }
+/* A plan call counted at OpenRouter's price: money like the rest, dashed so its note is one hover away. */
+.trace-cost .tc-ref { border-bottom: 1px dashed currentColor; cursor: help; }
 .trace-cost .tc-chat { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-strong, var(--line)); color: var(--muted); }
 .trace-cost .tc-chat b { font: 700 13px var(--mono); color: var(--amber, #f59e0b); }
 
