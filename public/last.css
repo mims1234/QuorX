@@ -3451,3 +3451,9 @@ html.speak-set .msg-tools .mt-speak-pick { display: inline-grid; }
 .chatpane.cp-tiny .cmp-input-row textarea.cmp-textarea { max-height: 72px; }
 .chatpane.cp-tiny .mic-hint { display: none; }
 .chatpane.cp-tiny form.composer.composer-v2 { padding-top: 4px; padding-bottom: 4px; }
+/* ▶ Resume / ⏱ Keep going on a reply a newer one carried on from: grey and switched off (the title says why), so it
+   no longer reads as the next thing to press. theme-v4 paints .approval .primary green with !important, hence these (and .msg, to outrank its :hover). */
+.msg .foot .resume-btn[aria-disabled="true"], .msg .oos-card .oos-acts button[aria-disabled="true"] { background: var(--panel) !important; color: var(--muted) !important; border-color: var(--line) !important; box-shadow: none !important; transform: none !important; opacity: .7; cursor: not-allowed; }
+.oos-card .oos-acts button[aria-disabled="true"] .oos-rec { background: none; color: inherit; }
+/* …and its ⏱ card reads like an answered one (theme-v4 .approval.done), not one waiting on you. */
+.oos-card:has(.oos-acts button[aria-disabled="true"]) { border-color: var(--line-strong) !important; box-shadow: none !important; opacity: .85; }

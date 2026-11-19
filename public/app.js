@@ -5404,6 +5404,7 @@ function syncRunState(c) {
   c.el.root.classList.toggle('busy', busy);
   drawContextMeter(c); // Compact waits for the reply to end
   drawFilesChanged(c); // what the replies since your last message changed
+  drawStaleAll(c); // ▶ Resume / ⏱ Keep going on older replies wait while a reply runs
   renderChatHead(c);
 }
 
@@ -6118,7 +6119,7 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   if (stoppedByYou(m) && !m.live) {
     // The chat's last reply, stopped: ▶ Continue carries on from where it stopped (the next message gets what was
     // already written, and a note that it stopped there).
-    const last = c.agent.messages.at(-1) === m;
+    const last = !newerTurn(c, m);
     $('.foot', el).insertAdjacentHTML('afterbegin', `<span class="f-stopped" title="You stopped this reply">■ Stopped</span>${last ? '<button type="button" class="continue-btn" title="Carry on from where you stopped it">▶ Continue</button>' : ''}`);
     const cb = $('.continue-btn', el); if (cb) cb.onclick = () => continueReply(c, m);
   }
@@ -6143,9 +6144,40 @@ function updateMsg(c, m, { bodyOnly = false } = {}) {
   const undo = $('.f-undo-row .undo', el);
   if (undo) undo.onclick = () => undoReply(c, m);
   const resume = $('.foot .resume-btn', el);
-  if (resume) resume.onclick = () => { if (c.running) return; m.resumable = false; updateMsg(c, m); saveChat(c); runChat(c, '', null, [], { resumeOf: m.runId }); };
+  if (resume) resume.onclick = () => { if (c.running || staleWhy(c, m)) return drawStale(c, m); m.resumable = false; updateMsg(c, m); saveChat(c); runChat(c, '', null, [], { resumeOf: m.runId }); };
   drawReviewCard(c, m, el);
+  drawStale(c, m);
 }
+// ---------- actions that only carry on the newest reply ----------
+// ▶ Resume (cut off by a restart) and the ⏱ out-of-steps card's buttons carry a reply on from where it ended. Once a
+// newer turn carried on from there, or another reply is running in this chat, that would go back over newer work, so
+// they are switched off and say why. They come back when the newer turn goes (↩ rewind, ↻ Retry) or the run ends.
+function newerTurn(c, m) {
+  const msgs = c.agent?.messages || [], i = msgs.indexOf(m);
+  return i >= 0 && msgs.slice(i + 1).some((x) => x.role === 'user' || x.role === 'assistant');
+}
+function staleWhy(c, m) {
+  if (newerTurn(c, m)) return 'A newer reply carried on from here';
+  if (c.running && c.running.runId !== m.runId) return 'A reply is running in this chat';
+  return '';
+}
+// Switched off with aria-disabled, not disabled: a disabled button gets no hover, so its tip (the reason) wouldn't show.
+// The clicks are refused in their handlers (and by the ⏱ card's own guard).
+const STALE_BTNS = '.foot .resume-btn, .oos-card .oos-acts button';
+function drawStale(c, m) {
+  const el = m.el; if (!el || offPage(el)) return;
+  const why = staleWhy(c, m);
+  for (const b of el.querySelectorAll(STALE_BTNS)) {
+    if (b.dataset.busy) continue; // ✦ Fresh chat is writing its brief: it stays as it is
+    // The tip may be moved aside while the pointer is over it (data-oh-title): the text goes where it is now.
+    b.dataset.staleOrig ??= b.dataset.ohTitle ?? b.getAttribute('title') ?? '';
+    const tip = why ? `${why}, so this no longer applies` : b.dataset.staleOrig;
+    if (b.dataset.ohTitle != null) b.dataset.ohTitle = tip; else b.title = tip;
+    if (why) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
+  }
+}
+// Every reply in the chat: a run starting or ending changes which ones can carry on.
+function drawStaleAll(c) { for (const m of c.agent?.messages || []) if (m.role === 'assistant') drawStale(c, m); }
 // ---------- Review changes: under a reply that changed files ----------
 // Each file with its + / − lines; click one for its diff; ↶ Undo file puts back just that file (the reply's
 // version goes to .quorx/trash). The reply's own "Undo changes" then covers the files that are left.
@@ -7364,6 +7396,7 @@ function continueLast(c, arg) {
   const m = [...c.agent.messages].reverse().find((x) => x.role === 'assistant' && (x.trace || []).some((e) => e.t === 'out_of_steps'));
   if (!m) return uiAlert('No reply in this chat ran out of steps, so there is nothing to continue. Just send a message to keep working.');
   if (m.oosUsed) return uiAlert('That reply was already continued (or moved to a fresh chat).');
+  if (newerTurn(c, m)) return uiAlert('A newer reply already carried on from the one that ran out of steps. Just send a message to keep working.');
   const e = m.trace.find((x) => x.t === 'out_of_steps');
   const more = Math.max(5, Math.min(200, Number(arg) || e.more || 30));
   m.oosUsed = 'more'; updateMsg(c, m); saveChat(c);
@@ -7372,7 +7405,9 @@ function continueLast(c, arg) {
 function wireOutOfSteps(card, c, m) {
   const e = (m.trace || []).find((x) => x.t === 'out_of_steps'), err = $('.err', card);
   const fail = (t) => { err.hidden = false; err.textContent = t; };
-  const go = (opts, mark) => { if (c.running) return fail('A reply is already running in this chat.'); m.oosUsed = mark; updateMsg(c, m); saveChat(c); runChat(c, '', null, [], { resumeOf: card.dataset.run, more: e.more, ...opts }); };
+  // A newer turn carried on (or a reply runs): its buttons are switched off, and a click on one does nothing.
+  card.addEventListener('click', (ev) => { if (ev.target.closest?.('button[aria-disabled="true"]')) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+  const go = (opts, mark) => { if (c.running) return fail('A reply is already running in this chat.'); if (staleWhy(c, m)) return fail(`${staleWhy(c, m)}.`); m.oosUsed = mark; updateMsg(c, m); saveChat(c); runChat(c, '', null, [], { resumeOf: card.dataset.run, more: e.more, ...opts }); };
   $('.oos-more', card).onclick = () => go({}, 'more');
   $('.oos-model', card).onclick = async () => {
     const id = await pickModel('chat', c.agent.setup.model, { context: 'Keep going with another model (same context)' });
@@ -7383,8 +7418,10 @@ function wireOutOfSteps(card, c, m) {
   $('.oos-fresh', card).onclick = async () => {
     const id = await pickModel('chat', c.agent.setup.model, { context: 'Model for the fresh chat' });
     if (!id) return;
-    const b = $('.oos-fresh', card); b.disabled = true; b.textContent = 'Writing the brief…';
+    if (staleWhy(c, m)) return fail(`${staleWhy(c, m)}.`);
+    const b = $('.oos-fresh', card); b.disabled = true; b.dataset.busy = '1'; b.textContent = 'Writing the brief…';
     const r = await postJ(`/api/runs/${card.dataset.run}/brief`, {});
+    delete b.dataset.busy;
     if (!r || r.error) { b.disabled = false; b.textContent = '✦ Fresh chat from a summary…'; return fail(r?.error || 'The brief could not be written.'); }
     (c.agent.extraUsage ||= []).push({ kind: 'summary', model: r.model, cost: r.cost, at: Date.now() });
     m.oosUsed = 'fresh'; saveChat(c); updateMsg(c, m);
@@ -17234,7 +17271,7 @@ function retryable(c, m) {
 // ▶ Continue on a reply you stopped: a short message asking it to carry on. The stopped reply's text goes with it in
 // the history, so it picks up where it was instead of starting again.
 function continueReply(c, m) {
-  if (c.agent.messages.at(-1) !== m || !stoppedByYou(m)) { m.el?.querySelector('.continue-btn')?.remove(); return; }
+  if (newerTurn(c, m) || !stoppedByYou(m)) { m.el?.querySelector('.continue-btn')?.remove(); return; }
   if (c.running) return;
   const ta = c.el && $('.input', c.el.root);
   if (String(ta?.value || '').trim() || c.images?.length || c.docs?.length || c.ctx?.length || c.comments?.length) return uiAlert('Send or clear what’s in the message box first, then Continue.');
