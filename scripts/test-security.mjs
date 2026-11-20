@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPut, handoffTake } from '../server/access.js';
+import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPut, handoffTake, mediaLinkQuery, mediaSigned, MEDIA_LINK_TTL } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
@@ -301,6 +301,31 @@ test('/api on this computer needs the app key; the app link sets it', () => {
   const r3 = res();
   assert.equal(appGate(req({ ip: '127.0.0.1' }), r3, u('/?k=wrong')), true);
   assert.equal(r3.code, 401);
+});
+
+test("a chat's media opens in your own browser with a link signed for that one file, and nothing else opens with it", () => {
+  const u = (p) => new URL(p, 'http://x');
+  const outside = (method = 'GET') => ({ ...req({ host: 'quorx.localhost:5188' }), method }); // no cookie, no key
+  const base = { project: 'pmvrdjqg6', chat: 'cmwpfylgzryyqw', path: '.quorx/scratch/s17/s17-silent.mp4' };
+  const signed = (q = base, now) => `/api/media?${new URLSearchParams({ ...q, v: '1795207715439', ...mediaLinkQuery(q.project, q.chat, q.path, now) })}`;
+  const r0 = res();
+  assert.equal(appGate(outside(), r0, u(`/api/media?${new URLSearchParams(base)}`)), true, 'unsigned still needs the key');
+  assert.equal(r0.code, 401);
+  assert.equal(appGate(outside(), res(), u(signed())), false, 'the signed link opens');
+  assert.equal(appGate(outside('HEAD'), res(), u(signed())), false, 'and can be asked for its size');
+  assert.equal(mediaSigned(u(signed(base, Date.now() - MEDIA_LINK_TTL - 1000))), false, 'it runs out');
+  // The signature is for that project, chat and path only.
+  for (const k of ['project', 'chat', 'path']) {
+    const x = u(signed()); x.searchParams.set(k, k === 'path' ? '.quorx/scratch/other.mp4' : 'someoneelse');
+    assert.equal(appGate(outside(), res(), x), true, k);
+  }
+  const far = u(signed()); far.searchParams.set('exp', String(Number(far.searchParams.get('exp')) + 3600));
+  assert.equal(appGate(outside(), res(), far), true, 'a later expiry is not signed');
+  // It opens /api/media for GET and HEAD only, never another route.
+  const q = u(signed()).search;
+  assert.equal(appGate(outside('POST'), res(), u(`/api/media${q}`)), true);
+  for (const p of ['/api/chats', '/api/media/link', '/api/command-log', '/api/files/text']) assert.equal(appGate(outside(), res(), u(`${p}${q}`)), true, p);
+  assert.equal(appGate(outside(), res(), u(`/api/media?${new URLSearchParams({ ...base, exp: '9999999999', sig: 'x' })}`)), true, 'a made-up signature');
 });
 
 test('S1: the cookie lives at quorx.localhost only; settings move there through a one-use handoff, sign-in comes back, and the old app key is replaced once', () => {

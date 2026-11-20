@@ -16787,10 +16787,11 @@ function wireAreaChrome() {
   };
   $('#reloadBtn').onclick = () => { if (G.view.browser && G.dsk?.ph.isConnected) return window.ohDesktop.nav(G.dsk.sid, 'reload'); if (G.view.browser && $('#paneBody .ubview')) return ubCall('reload'); if (!$('#paneBody iframe')) return renderPane(); reloadPreview(); };
   $('#popBtn').onclick = () => {
-    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return DESK ? window.ohDesktop.openExternal(G.paneUrl) : window.open(G.paneUrl, '_blank', 'noopener');
+    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return openOutside(G.paneUrl);
     const f = $('#paneBody iframe'), img = $('#paneBody img'), au = $('#paneBody audio'), vid = $('#paneBody video');
-    const url = f ? (f.srcdoc ? URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })) : f.src) : img?.src || au?.src || vid?.src;
-    if (url) window.open(url, '_blank');
+    if (f?.srcdoc) return window.open(URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })), '_blank');
+    const url = f ? f.src : img?.src || au?.src || vid?.src;
+    if (url) openOutside(url);
   };
   $('#copyUrlBtn').onclick = async () => {
     if (!G.paneUrl) return;
@@ -17084,10 +17085,19 @@ async function openLink(url, from) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane(); toPreview();
 }
-function openOutside(url) {
+// A chat's picture or video (/api/media) needs the app cookie, which your own browser doesn't have: it opens there
+// with a link signed for that one file instead (POST /api/media/link).
+async function outsideAddress(href) {
+  let u; try { u = new URL(href, location.href); } catch { return href; }
+  if (u.origin !== location.origin || u.pathname !== '/api/media') return u.href;
+  const r = await fetch('/api/media/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: u.pathname + u.search }) }).then((x) => x.json()).catch(() => ({}));
+  return r.url ? location.origin + r.url : u.href;
+}
+async function openOutside(url) {
   let u; try { u = new URL(offAppHost(String(url || '')), location.href); } catch { return; }
   if (!/^https?:$/.test(u.protocol)) return;
-  if (DESK) window.ohDesktop.openExternal(u.href); else window.open(u.href, '_blank', 'noopener');
+  const href = await outsideAddress(u.href);
+  if (DESK) window.ohDesktop.openExternal(href); else window.open(href, '_blank', 'noopener');
 }
 const followLink = (url, from, outside) => (outside ? openOutside(url) : openLink(url, from));
 document.addEventListener('click', (e) => {

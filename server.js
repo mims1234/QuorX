@@ -68,7 +68,7 @@ import { hostedHtml, browserPath, openTab } from './server/browser.js';
 import { zipFolder } from './server/zip.js';
 import { exportBackup, findBackups, inspectBackup, importBackup } from './server/backup.js';
 import { artifactContent, servedArtifact, ARTIFACT_HEADERS, folderStamp } from './server/artifacts.js';
-import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffPut, handoffTake } from './server/access.js';
+import { gate, appGate, appLink, hostAllowed, crossSiteApi, isLoopback, handoffPut, handoffTake, mediaLinkQuery } from './server/access.js';
 import { gitHubRemote, gitHubInfo } from './server/github.js';
 import { serveBlob, startSweeping, chatFootprint, sendFile, sendRanged } from './server/blobs.js';
 import { mediaFile, serveMedia } from './server/media.js';
@@ -485,6 +485,17 @@ const server = http.createServer(async (req, res) => {
       if (!knownFolder(pid)) return json(res, 404, { error: 'not found' });
       const mf = mediaFile(workspaceDir(pid), validId(cid) ? cid : '', url.searchParams.get('path'));
       return mf ? serveMedia(req, res, mf) : json(res, 404, { error: 'not found' });
+    }
+    // The same file as a link that opens in your own browser, which has no app cookie: { src: '/api/media?…' } →
+    // { url: that address signed for that one file for a few hours } (server/access.js).
+    if (url.pathname === '/api/media/link' && req.method === 'POST') {
+      const b = JSON.parse(await readBody(req, 1e4) || '{}');
+      let q; try { q = new URL(String(b.src || ''), 'http://x'); } catch { return json(res, 400, { error: 'not a media address' }); }
+      if (q.pathname !== '/api/media') return json(res, 400, { error: 'not a media address' });
+      const pid = q.searchParams.get('project') || '', cid = q.searchParams.get('chat') || '', p = q.searchParams.get('path') || '';
+      if (!knownFolder(pid) || !mediaFile(workspaceDir(pid), validId(cid) ? cid : '', p)) return json(res, 404, { error: 'not found' });
+      const out = new URLSearchParams({ project: pid, ...(cid ? { chat: cid } : {}), path: p, ...(q.searchParams.get('v') ? { v: q.searchParams.get('v') } : {}), ...mediaLinkQuery(pid, cid, p) });
+      return json(res, 200, { url: `/api/media?${out}` });
     }
     // A command's whole output, for the side pane: only the agent's own command logs (.quorx/scratch/logs/*.log), which
     // /ws/ never serves (dot folders stay off the pages address). The last 2 MB of a longer one.
