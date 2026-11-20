@@ -856,8 +856,8 @@ from an app on this PC) can send until you add one.
 The same page turns on the other providers, each with its own key, plan or sign-in: makers' APIs (OpenAI, Anthropic,
 Google Gemini, Moonshot, Meta, xAI, DeepSeek, Mistral, Z.AI, Qwen, MiniMax, Groq, Cerebras), coding-plan subscriptions
 (OpenCode Go, Command Code, and the Z.AI, Kimi, Alibaba and MiniMax plans), coding CLIs signed in on this PC over the
-Agent Client Protocol (Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code, Qwen Code, and Google Antigravity on a
-Gemini API key or Google Cloud), and local model servers (Ollama, LM Studio, Microsoft Foundry Local, llama.cpp).
+Agent Client Protocol (Codex, GitHub Copilot, Cursor, Factory Droid, Kimi Code and
+Qwen Code), and local model servers (Ollama, LM Studio, Microsoft Foundry Local, llama.cpp).
 Budgets count every call at a price: a plan's calls at the same model's list price, and a provider that names no price
 at the same model's OpenRouter price.
 
