@@ -2789,7 +2789,9 @@ function drawPicker(full = false) {
   if (!srcs.includes(PK.source)) PK.source = 'all';
   const scoped = all.filter(inSource), sub = SOURCE_SUB[PK.source];
   const usable = FILTERS.filter(([k, , f]) => k === 'fav' ? (G.favModels?.[PK.kind] || []).length : scoped.some(f) && !scoped.every(f));
-  const srcBar = srcs.length > 1 ? `<div class="mp-src-row"><span class="mp-row-label">Where it runs</span><div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" aria-label="${esc(l)}" title="${esc(l)}" data-src="${k}">${k === 'all' ? 'All' : srcLogo(k, l)} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div></div>` : '';
+  const srcBar = srcs.length > 1 ? `<div class="mp-src-row"><span class="mp-row-label">Where it runs</span><div class="st-segmented mp-src-seg" role="radiogroup" aria-label="Where the model runs">${[['all', 'All'], ...['openrouter', ...Object.keys(SOURCE_NAME)].filter((k) => srcs.includes(k)).map((k) => [k, k === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[k]])].map(([k, l]) => `<button type="button" class="st-seg-btn ${PK.source === k ? 'active' : ''}" role="radio" aria-checked="${PK.source === k}" aria-label="${esc(l)}" title="${esc(l)}" data-src="${k}" data-src-name="${esc(l)}">${k === 'all' ? 'All' : srcLogo(k, l)} <small>${k === 'all' ? all.length : all.filter((m) => sourceKey(m) === k).length}</small></button>`).join('')}</div>`
+    + '<div class="mp-prov-wrap mp-src-more" hidden><button type="button" class="st-seg-btn mp-src-more-btn" aria-haspopup="true" aria-expanded="false"></button><div class="mp-prov-pop mp-src-pop" role="menu" aria-label="More places it runs" hidden></div></div>'
+    + `<button type="button" class="mp-src-set" title="${esc(PK.source === 'all' ? 'Provider settings' : `${PK.source === 'openrouter' ? 'OpenRouter' : SOURCE_NAME[PK.source] || 'Provider'} settings`)}" aria-label="Provider settings">⚙</button></div>` : '';
   const popBtn = (cls, icon, set, none, one) => `<div class="mp-prov-wrap"><button type="button" class="mp-chip ${cls} ${set.size ? 'on' : ''}" aria-haspopup="true">${icon} ${set.size ? `${set.size} ${one}${set.size > 1 ? 's' : ''}` : none} ▾</button><div class="mp-prov-pop" hidden></div></div>`;
   const sb = $('#pkSource'); if (sb) { sb.innerHTML = srcBar; sb.hidden = !srcBar; }
   $('#pkFilters').innerHTML = (sb ? '' : srcBar) + `<div class="mp-filter-row">`
@@ -2801,6 +2803,7 @@ function drawPicker(full = false) {
   // A new source starts with its own filters clear.
   for (const b of document.querySelectorAll('#pkSource [data-src], #pkFilters [data-src]')) b.onclick = () => { if (PK.source !== b.dataset.src) { PK.source = b.dataset.src; PK.providers.clear(); PK.subs.clear(); } PK.sel = 0; drawPicker(); };
   const clr = $('#pkFilters .mp-clear'); if (clr) clr.onclick = () => { PK.filters.clear(); PK.providers.clear(); PK.subs.clear(); drawPicker(); };
+  fitSourceTabs($('#picker .mp-src-row'));
   // A searchable multi-select with counts, over this source's models: makers, and the source's own filter.
   const pop = (btn, set, keyOf, nameOf, find, label) => {
     if (!btn) return;
@@ -2819,6 +2822,41 @@ function drawPicker(full = false) {
   pop($('#pkFilters .mp-prov-btn'), PK.providers, makerOf, (m) => PROVIDER_NAME(makerOf(m)), 'Find a maker', () => `🏢 ${PK.providers.size ? `${PK.providers.size} maker${PK.providers.size > 1 ? 's' : ''}` : 'All makers'} ▾`);
   if (sub) pop($('#pkFilters .mp-sub-btn'), PK.subs, sub.key, sub.name, `Find a provider in ${SOURCE_NAME[PK.source] || 'this source'}`, () => `🔌 ${PK.subs.size ? `${PK.subs.size} provider${PK.subs.size > 1 ? 's' : ''}` : `${sub.label}: ${sub.all}`} ▾`);
   drawList();
+}
+// The picker's "Where it runs" tabs on one line, however many sources are on: from the end, the tabs that don't fit go
+// into a +N menu (All and the picked one stay out), which lists them with their logo, name and count. Checked again when
+// the picker is resized. The ⚙ beside them opens Settings → Providers on the picked source.
+function fitSourceTabs(row) {
+  if (!row) return;
+  const seg = $('.mp-src-seg', row), wrap = $('.mp-src-more', row), more = $('.mp-src-more-btn', row), pop = $('.mp-src-pop', row);
+  const tabs = [...seg.querySelectorAll('[data-src]')];
+  const fit = () => {
+    if (!row.isConnected) return;
+    for (const b of tabs) b.hidden = false;
+    wrap.hidden = true;
+    const over = () => seg.scrollWidth > seg.clientWidth + 1;
+    const order = tabs.filter((b) => b.dataset.src !== 'all' && b.dataset.src !== PK.source).reverse();
+    for (const b of order) { if (!over()) break; b.hidden = true; wrap.hidden = false; }
+    const hid = tabs.filter((b) => b.hidden);
+    more.textContent = `+${hid.length} ▾`;
+    more.title = hid.map((b) => b.dataset.srcName).join(', ');
+  };
+  more.onclick = () => {
+    if (!pop.hidden) { pop.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
+    pop.innerHTML = tabs.filter((b) => b.hidden).map((b) => `<button type="button" role="menuitem" class="mp-src-opt" data-src="${esc(b.dataset.src)}">${srcLogo(b.dataset.src, b.dataset.srcName)}<span>${esc(b.dataset.srcName)}</span><small>${esc($('small', b)?.textContent || '')}</small></button>`).join('');
+    for (const o of pop.querySelectorAll('[data-src]')) o.onclick = () => { if (PK.source !== o.dataset.src) { PK.source = o.dataset.src; PK.providers.clear(); PK.subs.clear(); } PK.sel = 0; drawPicker(); };
+    pop.hidden = false; more.setAttribute('aria-expanded', 'true');
+    $('.mp-src-opt', pop)?.focus();
+  };
+  $('.mp-src-set', row).onclick = () => {
+    const id = PK.source === 'all' ? null : PK.source;
+    $('#picker').close();
+    Object.assign(pvState(), { tab: 'all', q: '', sel: id });
+    openSettings('providers');
+  };
+  requestAnimationFrame(fit);
+  const host = row.parentElement;
+  host._srcFit?.disconnect(); host._srcFit = new ResizeObserver(() => fit()); host._srcFit.observe(host);
 }
 function drawList() {
   const box = $('#pkList'), count = $('#pkCount');
@@ -13274,7 +13312,8 @@ function drawProviders(say = null) {
   const inTab = (x) => P.tab === 'all' || pvKind(x) === P.tab;
   const hit = (x) => !q || [x.name, x.id, x.short, x.appName].some((s) => String(s || '').toLowerCase().includes(q)) || (q === 'llama' && x.id === 'meta-api') || (q === 'zhipu' && x.id === 'zai-api') || (q === 'dashscope' && x.id === 'qwen-api');
   const shown = all.filter((x) => inTab(x) && hit(x));
-  if (P.sel && !all.some((x) => x.id === P.sel)) P.sel = null;
+  // (Kept while the sources are still loading: the model picker's ⚙ opens a source's page before they arrive.)
+  if (P.sel && ST.sources && !all.some((x) => x.id === P.sel)) P.sel = null;
   const groups = P.tab === 'all' ? ['openrouter', 'plan', 'direct', 'local'] : [P.tab];
   const list = groups.map((g) => { const rows = shown.filter((x) => pvKind(x) === g); return rows.length ? `${P.tab === 'all' ? `<div class="pv-gh"><b>${esc(PV_TABS.find(([k]) => k === g)[1])}</b><small>${esc(PV_NOTE[g])}</small></div>` : ''}${rows.map((x) => pvRow(x, x.id === P.sel)).join('')}` : ''; }).join('');
   const sel = all.find((x) => x.id === P.sel);
