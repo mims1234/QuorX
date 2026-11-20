@@ -360,10 +360,19 @@ function pcmToWav(pcm, rate = 24000) {
   return Buffer.concat([h, pcm]);
 }
 
-export async function synthesize({ model, input, voice, instructions, speed }, signal) {
+// A speech model's endpoints: which of them copy a voice from a recording (supports_voice_cloning and friends).
+export const speechEndpoints = (id) => cached(`speech-ep:${id}`, async () => {
+  const j = await (await fetch(`${BASE}/api/v1/models/${String(id).split('/').map(encodeURIComponent).join('/')}/endpoints`)).json();
+  return j.data?.endpoints || [];
+});
+
+// references: input_references for a voice copied from a recording (server/mediainputs.js speechRefs). A model that
+// takes one rejects a voice name next to it, so the voice is left out then.
+export async function synthesize({ model, input, voice, instructions, speed, references }, signal) {
   const t = Date.now();
+  const refs = Array.isArray(references) && references.length ? references : null;
   const send = (format) => fetch(`${BASE}/api/v1/audio/speech`, { method: 'POST', headers: headers(), signal,
-    body: JSON.stringify({ model, input, ...(voice ? { voice } : {}), ...(instructions ? { instructions } : {}), ...(speed ? { speed } : {}), response_format: format }) });
+    body: JSON.stringify({ model, input, ...(voice && !refs ? { voice } : {}), ...(refs ? { input_references: refs } : {}), ...(instructions ? { instructions } : {}), ...(speed ? { speed } : {}), response_format: format }) });
   let r = await send('mp3'), format = 'mp3';
   if (!r.ok) {
     const msg = (await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`;
