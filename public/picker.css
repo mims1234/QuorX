@@ -153,6 +153,23 @@ dialog.mp-dialog::backdrop { background: rgba(4, 6, 6, .72); backdrop-filter: bl
 .mp-row-label { font: 600 11px var(--font-ui); color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
 .mp-filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .mp-src-row .mp-src-seg { margin-right: 0; }
+/* One line of tabs: the ones that don't fit go into +N (fitSourceTabs), and ⚙ opens the providers' settings. */
+.mp-src-row { flex-wrap: nowrap; gap: 8px; }
+.mp-src-row .mp-row-label { flex: none; }
+.mp-src-row .mp-src-seg { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; overflow: hidden; }
+.mp-src-seg .st-seg-btn[hidden] { display: none; }
+.mp-src-more { flex: none; }
+.mp-src-more[hidden] { display: none; }
+.mp-src-more-btn { height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border-inset, var(--line)); background: var(--surface-inset, var(--bg)); color: var(--muted); font: 600 11.5px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.mp-src-more-btn:hover, .mp-src-more-btn[aria-expanded="true"] { color: var(--text); border-color: var(--line-strong, var(--line)); }
+.mp-src-pop { left: auto; right: 0; width: 290px; gap: 2px; overflow-y: auto; }
+.mp-src-opt { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: 500 12px var(--font-ui); text-align: left; cursor: pointer; }
+.mp-src-opt:hover, .mp-src-opt:focus-visible { background: var(--hover, var(--surface-inset)); outline: none; }
+.mp-src-opt > span:not(.src-logo):not(.src-tag) { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-src-opt small { font: 10.5px var(--mono); color: var(--dim); }
+.mp-src-opt .src-logo { width: 16px; height: 16px; cursor: inherit; }
+.mp-src-set { flex: none; margin-left: auto; width: 30px; height: 30px; display: inline-grid; place-items: center; border-radius: 8px; border: 1px solid var(--border-inset, var(--line)); background: transparent; color: var(--muted); font-size: 15px; cursor: pointer; }
+.mp-src-set:hover { color: var(--text); border-color: var(--line-strong, var(--line)); background: var(--surface-inset, var(--bg)); }
 .mp-source { padding-bottom: 0; }
 .mp-source[hidden] { display: none; }
 
