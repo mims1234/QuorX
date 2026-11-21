@@ -32,6 +32,20 @@ export function stepMedia(e) {
     kind: ['image', 'video', 'audio'].includes(x.kind) ? x.kind : mediaKind(x.path) || 'file', tool: String(e.name || ''), ...(x.name ? { name: String(x.name) } : {}),
   }));
 }
+/** Every file a chat's replies made or wrote, oldest first, each once (made again, it moves to the end): project files
+ *  as { path, name? }, media made inside QuorX as { art, kind, name? }. The side pane's "From the chat" list starts
+ *  from this and keeps only what is still there. */
+export function chatMadeFiles(messages) {
+  const out = new Map();
+  const put = (k, v) => { out.delete(k); out.set(k, v); };
+  for (const m of messages || []) {
+    if (!m || m.role === 'user') continue;
+    const made = madeMedia(m.trace), byPath = new Map(made.filter((x) => x.path).map((x) => [x.path, x]));
+    for (const p of writtenMedia(m.trace)) if (!byPath.has(p)) put(`p:${p.replace(/\\/g, '/').toLowerCase()}`, { path: p });
+    for (const x of made) put(x.path ? `p:${x.path.replace(/\\/g, '/').toLowerCase()}` : `a:${x.art}`, x.path ? { path: x.path, ...(x.name ? { name: x.name } : {}) } : { art: x.art, kind: x.kind, ...(x.name ? { name: x.name } : {}) });
+  }
+  return [...out.values()];
+}
 /** Every piece of media a reply's tools made, in order, each once (the last call that made it names it). */
 export function madeMedia(trace) {
   const out = new Map();
