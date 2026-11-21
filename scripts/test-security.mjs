@@ -8,13 +8,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPut, handoffTake } from '../server/access.js';
+import { hostAllowed, crossSiteApi, gate, isLoopback, appGate, appKey, handoffPut, handoffTake, mediaLinkQuery, mediaSigned, MEDIA_LINK_TTL } from '../server/access.js';
 import { privateAddress } from '../server/safefetch.js';
 import { startSignIn } from '../server/oauth.js';
 import { decide, agentWriteBlocked } from '../server/cmdpolicy.js';
 import { PassThrough } from 'node:stream';
 import { safePath, fullLocalPath, isCommandLog, checkCommand,preApproved, searchFiles, childEnv, runLine, registerFolders } from '../server/workspace.js';
-import { mediaFile, serveMedia } from '../server/media.js';
+import { mediaFile, serveMedia, mediaFromSrc, copyFileToClipboard } from '../server/media.js';
 import { mediaKind, writtenMedia } from '../public/chat-media.js';
 import { renderMarkdown } from '../public/markdown.js';
 import { userEnv, mergePath } from '../server/userenv.js';
@@ -121,6 +121,29 @@ test('files shown in a chat: only pictures, videos, PDFs and Markdown, from the 
   assert.equal(mediaFile(root, 'chat-media-1', outside)?.kind, 'image');
   assert.equal(mediaFile(root, 'chat-media-2', outside), null, "another chat doesn't get it");
   registerFolders('chat-media-1', []);
+});
+
+test("right-click Copy file finds the file only through the media checks, and hands PowerShell the path outside the command", async () => {
+  const root = tempDir('oh-media-copy-');
+  for (const f of ['out/a b.png', '.quorx/scratch/s17/v.mp4', '.git/x.png', 'app.js']) { fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); fs.writeFileSync(path.join(root, f), 'x'); }
+  const env = { known: (id) => id === 'p1', dirOf: () => root, chatOk: (id) => /^c\w+$/.test(id) };
+  const q = (p, project = 'p1') => `/api/media?${new URLSearchParams({ project, chat: 'c1', path: p })}`;
+  assert.equal(mediaFromSrc(q('.quorx/scratch/s17/v.mp4'), env)?.file, path.join(root, '.quorx', 'scratch', 's17', 'v.mp4'));
+  assert.equal(mediaFromSrc('/ws/p1/out/a%20b.png', env)?.file, path.join(root, 'out', 'a b.png'), 'a project file in the Files view');
+  assert.equal(mediaFromSrc(`http://quorx.localhost:5188${q('out/a b.png')}`, env)?.kind, 'image', 'a full address');
+  for (const s of [q('.git/x.png'), q('app.js'), q('../x.png'), q('out/a b.png', 'p2'), '/ws/p1/.git/x.png', '/ws/p1/app.js', '/ws/p2/out/a%20b.png', '/blob/x.png', 'data:image/png;base64,AA', '', '/ws/p1/%E0%A4%A.png'])
+    assert.equal(mediaFromSrc(s, env), null, s || '(empty)');
+  if (process.platform !== 'win32') return;
+  const file = path.join(root, "it's; $(x) & y.mp4");
+  let seen;
+  const fake = (cmd, args, opts) => { seen = { cmd, args, opts }; const p = new PassThrough(); p.stderr = new PassThrough(); setImmediate(() => p.emit('close', 0)); return p; };
+  await copyFileToClipboard(file, fake);
+  assert.equal(seen.cmd, 'powershell.exe');
+  assert.equal(seen.opts.env.QX_CLIP_FILE, file);
+  assert.ok(seen.args.every((a) => !a.includes(file)), 'the path is never part of the command');
+  assert.equal(seen.opts.windowsHide, true);
+  const failing = () => { const p = new PassThrough(); p.stderr = new PassThrough(); setImmediate(() => { p.stderr.emit('data', 'Set-Clipboard: no such file\n'); p.emit('close', 1); }); return p; };
+  await assert.rejects(copyFileToClipboard(file, failing), /no such file/);
 });
 
 test('a shown file is sent with its type, byte ranges for seeking, and SVG sandboxed', async () => {
@@ -301,6 +324,31 @@ test('/api on this computer needs the app key; the app link sets it', () => {
   const r3 = res();
   assert.equal(appGate(req({ ip: '127.0.0.1' }), r3, u('/?k=wrong')), true);
   assert.equal(r3.code, 401);
+});
+
+test("a chat's media opens in your own browser with a link signed for that one file, and nothing else opens with it", () => {
+  const u = (p) => new URL(p, 'http://x');
+  const outside = (method = 'GET') => ({ ...req({ host: 'quorx.localhost:5188' }), method }); // no cookie, no key
+  const base = { project: 'pmvrdjqg6', chat: 'cmwpfylgzryyqw', path: '.quorx/scratch/s17/s17-silent.mp4' };
+  const signed = (q = base, now) => `/api/media?${new URLSearchParams({ ...q, v: '1795207715439', ...mediaLinkQuery(q.project, q.chat, q.path, now) })}`;
+  const r0 = res();
+  assert.equal(appGate(outside(), r0, u(`/api/media?${new URLSearchParams(base)}`)), true, 'unsigned still needs the key');
+  assert.equal(r0.code, 401);
+  assert.equal(appGate(outside(), res(), u(signed())), false, 'the signed link opens');
+  assert.equal(appGate(outside('HEAD'), res(), u(signed())), false, 'and can be asked for its size');
+  assert.equal(mediaSigned(u(signed(base, Date.now() - MEDIA_LINK_TTL - 1000))), false, 'it runs out');
+  // The signature is for that project, chat and path only.
+  for (const k of ['project', 'chat', 'path']) {
+    const x = u(signed()); x.searchParams.set(k, k === 'path' ? '.quorx/scratch/other.mp4' : 'someoneelse');
+    assert.equal(appGate(outside(), res(), x), true, k);
+  }
+  const far = u(signed()); far.searchParams.set('exp', String(Number(far.searchParams.get('exp')) + 3600));
+  assert.equal(appGate(outside(), res(), far), true, 'a later expiry is not signed');
+  // It opens /api/media for GET and HEAD only, never another route.
+  const q = u(signed()).search;
+  assert.equal(appGate(outside('POST'), res(), u(`/api/media${q}`)), true);
+  for (const p of ['/api/chats', '/api/media/link', '/api/command-log', '/api/files/text']) assert.equal(appGate(outside(), res(), u(`${p}${q}`)), true, p);
+  assert.equal(appGate(outside(), res(), u(`/api/media?${new URLSearchParams({ ...base, exp: '9999999999', sig: 'x' })}`)), true, 'a made-up signature');
 });
 
 test('S1: the cookie lives at quorx.localhost only; settings move there through a one-use handoff, sign-in comes back, and the old app key is replaced once', () => {

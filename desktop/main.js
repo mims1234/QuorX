@@ -7,7 +7,7 @@
 // The server: if this data folder's harness already answers on its port, the window attaches to it (two servers on
 // the same data folder would fight). Another QuorX on that port (its own data folder, so its own app key) is left
 // alone, and this one starts server.js with Electron's own Node on the next free port.
-const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, ipcMain, session, shell, dialog, Notification, screen, globalShortcut, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, nativeImage, clipboard, ClipboardItem, ipcMain, session, shell, dialog, Notification, screen, globalShortcut, powerSaveBlocker } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -876,6 +876,13 @@ function registerToastName() {
   } catch { /* the name stays Windows' default */ }
 }
 handle('openExternal', (url) => { if (/^https?:\/\//i.test(String(url))) shell.openExternal(url); return true; });
+// Right-click → Copy image on a picture or a video frame: the page sends the PNG's bytes (up to 64 MB).
+// (Electron's clipboard takes ClipboardItems, as the web's does; Windows gets the picture as a bitmap too.)
+handle('copyImage', async (bytes) => {
+  if (!bytes?.byteLength || bytes.byteLength > 64e6 || nativeImage.createFromBuffer(Buffer.from(bytes)).isEmpty()) return false;
+  await clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })]);
+  return true;
+});
 handle('showFile', (file) => { if (file && file.startsWith(app.getPath('downloads'))) shell.showItemInFolder(file); return true; });
 
 // ---------- the agent's tabs: real views driven by the harness (server/desktop.js, server/browser.js) ----------

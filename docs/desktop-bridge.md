@@ -55,6 +55,7 @@ All calls return a promise.
 | `frame` | The window frame (the page's menu bar is the title bar): the colours of the native − □ × over it, full screen, and the Edit menu's commands where the focus is | `'overlay', { color, symbolColor }` (#rrggbb) · `'fullscreen'` · `'edit', 'undo' \| 'redo' \| 'cut' \| 'copy' \| 'paste' \| 'selectAll'` | `true`; for full screen, whether it is on now |
 | `openExternal` | Opens a web address in your own browser | `url` (http or https only) | `true` |
 | `showFile` | Shows a downloaded file in File Explorer | a path inside Downloads | `true` |
+| `copyImage` | Puts a picture on the clipboard (right-click → Copy image on a picture or a video frame) | the PNG's bytes (up to 64 MB) | `true`, or `false` when it is not a picture |
 | `perf` | The performance readout: every process with memory and processor, each tab, lost 3D views | | `{ totalMb, appMb, gpuMb, tabsMb, cpu, gpuCpu, procs, tabs, webglLost }` |
 | `navButtons` | Always `true` (a value, not a call): the mouse's side buttons arrive as `ws-nav` events, so the page ignores its own | | `true` |
 | `on` | Listens to the shell's events (below) | `fn(event)` | a function that stops listening |
@@ -97,6 +98,6 @@ A replacement shell needs, roughly in order of effort:
    live entirely in the shell (`desktop/tab-sleep.js` decides which).
 2. **The agent's tabs** (`agent-tab`, `agent-lock`, `compact`), driven over DevTools by the desktop link in `main.js`.
 3. **Window and system** (`zoom`, `frame`, `notify`, `focusWindow`, `loginItem`, `closeAction`, `keepAwake`, `summon`, `quit`, `openExternal`,
-   `showFile`, `openHome`).
+   `showFile`, `copyImage`, `openHome`).
 4. **App updates and storage** (`update`, `storage`, `info`, `restartHarness`).
 5. **Readout** (`perf`): optional; the page shows its own numbers without it.

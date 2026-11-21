@@ -5,6 +5,7 @@
 // Other dot folders (.git, .env and the like) and every other kind of file are refused.
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { safePath, fullLocalPath, chatFolder, folderIndex } from './workspace.js';
 import { sendFile } from './blobs.js';
 
@@ -48,6 +49,37 @@ export function mediaFile(root, chatId, p) {
     } catch { /* outside, off limits or not there */ }
   }
   return null;
+}
+
+/**
+ * The file a page's media address points at: /api/media?project&chat&path or /ws/<project>/<path>, through mediaFile's
+ * checks. `known(id)` says the project is one of yours, `dirOf(id)` is its folder, `chatOk(id)` checks a chat id.
+ */
+export function mediaFromSrc(src, { known, dirOf, chatOk }) {
+  let u; try { u = new URL(String(src || ''), 'http://x'); } catch { return null; }
+  if (u.pathname === '/api/media') {
+    const pid = u.searchParams.get('project') || '', cid = u.searchParams.get('chat') || '';
+    return known(pid) ? mediaFile(dirOf(pid), chatOk(cid) ? cid : '', u.searchParams.get('path')) : null;
+  }
+  const m = u.pathname.match(/^\/ws\/([^/]+)\/(.+)$/);
+  if (!m) return null;
+  let pid, rel; try { pid = decodeURIComponent(m[1]); rel = m[2].split('/').map(decodeURIComponent).join('/'); } catch { return null; }
+  return known(pid) ? mediaFile(dirOf(pid), '', rel) : null;
+}
+
+/**
+ * Puts the file itself on Windows' clipboard (as File Explorer's Copy does), so it pastes into a folder or an app that
+ * takes files. The path goes to PowerShell in an environment variable, never in the command text.
+ */
+export function copyFileToClipboard(file, run = spawn) {
+  if (process.platform !== 'win32') return Promise.reject(Object.assign(new Error('Copying a file is only on Windows for now.'), { status: 501 }));
+  return new Promise((resolve, reject) => {
+    const p = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', 'Set-Clipboard -LiteralPath $env:QX_CLIP_FILE'], { env: { ...process.env, QX_CLIP_FILE: file }, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    p.stderr?.on('data', (d) => { err += d; });
+    p.on('error', reject);
+    p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(err.trim().split('\n')[0] || `PowerShell ended with ${code}`))));
+  });
 }
 
 /** Sends a file found by mediaFile: its type, byte ranges (so a video can seek), and SVG as a sandboxed document. */
