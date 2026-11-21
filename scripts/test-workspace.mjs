@@ -7,6 +7,7 @@ import * as W from '../public/workspace.js';
 import { createHistory, HISTORY_CAP } from '../public/nav-history.js';
 import * as K from '../public/keymap.js';
 import * as QF from '../public/frame-model.js';
+import { chatMadeFiles } from '../public/chat-media.js';
 import fs from 'node:fs';
 
 // A four-group shape (the chat, steps, and a page over a terminal): the cap, in the W4/W5 tests.
@@ -647,7 +648,7 @@ test('activity bar: the views in order, each opened by a row of the shortcuts ta
   assert.doesNotMatch(html, /data-rail="files"/, 'the rail\'s Files and Servers buttons are gone (the views replace them)');
 });
 
-test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ for any kind; the inner page strip is gone', () => {
+test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ beside them; the inner page strip is gone', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.match(html, /class="pa-pages"/, 'a slot for page tabs in the group strip');
   assert.match(html, /data-pa="add"/, '＋ in the group strip');
@@ -659,8 +660,51 @@ test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ f
   for (const fn of ['function drawPageTabs(', 'function pageTabMenu(', 'function paneAddMenu(', 'function pageTabsRefresh(']) assert.ok(app.includes(fn), fn);
   const menu = app.slice(app.indexOf('function pageTabMenu('), app.indexOf('\n}\n', app.indexOf('function pageTabMenu(')));
   assert.match(menu, /Mute tab/); assert.match(menu, /Mute the agent's pages/); assert.match(menu, /Give to agent/);
-  const add = app.slice(app.indexOf('function paneAddMenu('), app.indexOf('\n}\n', app.indexOf('function paneAddMenu(')));
-  for (const k of ['New chat', 'Browser page', 'Terminal', 'Files', 'Plan', 'Steps', 'Settings']) assert.ok(add.includes(k), `＋ offers ${k}`);
+});
+
+test('＋ on the pane strip opens plans and files from the chat as tabs; what it used to offer is still reachable', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const body = (name) => app.slice(app.indexOf(name), app.indexOf('\n}\n', app.indexOf(name)));
+  // ＋ is a picker of this chat's plans and "From the chat" files, each opened as a kept tab in this group.
+  const items = body('function paneOpenItems(');
+  assert.match(items, /planArts\(c\)[\s\S]*artTabEntry\(a\)/, 'every plan is offered');
+  assert.match(items, /const files = chatFiles\(c\)/, 'every file from the chat is offered');
+  assert.match(body('function chatFiles('), /\.filter\(\(f\) => f\.kind !== 'art'\)/, 'plans once, under their own group');
+  assert.match(items, /openFileInPane\(c, x\.f, \{ into: area\?\.gid, keep: true \}\)/, 'a pick opens as a tab of its own here, not a preview the next pick replaces');
+  assert.match(items, /fileTabOf\(area\.gid, x\.f\.id\)/, 'what is already a tab here is ticked');
+  const add = body('function paneAddMenu(');
+  assert.match(add, /paneOpenItems\(c, area\)/);
+  assert.doesNotMatch(add, /newChat|openSettings|newBTab|openTerminal/, '＋ no longer offers a chat, Settings or the pane\'s own tabs');
+  assert.match(html, /data-pa="add"[^>]*title="Open a plan or file from this chat as a tab/);
+  assert.doesNotMatch(html, /Open a tab here: chat/);
+  assert.match(app, /class="wt-padd" data-pa="add"[^>]*title="Open a plan or file from this chat as a tab of its own"/, 'the Single strip\'s ＋ too');
+  // The old ＋ items: the pane's tabs moved to ⋯ (both strips share wsGroupMenu); a new chat and Settings have their
+  // own buttons.
+  const show = body('function paneShowItems(');
+  for (const k of ['Artifact', 'New browser page', "'⌨ Terminal'", 'New terminal', 'Files', 'Steps']) assert.ok(show.includes(k), `⋯ offers ${k}`);
+  assert.match(body('function wsGroupMenu('), /\.\.\.paneShowItems\(a\)/, '⋯ starts with them');
+  assert.match(app, /\$\('#newBtn'\)\.onclick = \(\) => newChat\(\)/, 'New chat stays in the chat area');
+  assert.match(app, /\$\('#settingsBtn'\)\.onclick = \(\) => openSettings\(\)/, 'Settings stays on the activity bar');
+  assert.match(html, /id="newBtn"/); assert.match(html, /id="settingsBtn"/);
+});
+
+test('plans open as tabs: several side by side, each drawn from the chat as it is now', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const body = (name) => app.slice(app.indexOf(name), app.indexOf('\n}\n', app.indexOf(name)));
+  assert.ok(app.includes("const artTabEntry = (a) => ({ id: `art:${a.id}`, kind: 'art', ref: a.id, name: a.title || 'Plan' });"), 'a plan tab is kept by its id, one tab per plan');
+  const open = body('function openFileInPane(');
+  assert.match(open, /f\?\.kind === 'art' && f\.ref/, 'openFileInPane takes a plan');
+  assert.match(open, /f\.kind in PANE_CARDS \|\| f\.kind === 'art' \? \{ id, name: f\.name, kind: f\.kind, run: f\.run, ref: f\.ref \}/, 'stored by reference, not a copy');
+  const draw = body('function drawPaneFile(');
+  assert.match(draw, /file\.kind === 'art'[\s\S]*planArts\(c\)\.find\(\(x\) => x\.id === file\.ref\)[\s\S]*\?v=\$\{a\.updated \|\| 0\}/, 'drawn from its newest version');
+  assert.match(draw, /no longer in the chat/, 'a plan that is gone says so');
+  const rp = body('function renderPaneNow() {');
+  assert.match(rp, /setUrlBar\(file\.kind === 'art' \? artTabUrl\(fc, file\)/, 'a plan tab shows its address');
+  assert.match(rp, /files = chatFiles\(c\)/, 'the dropdown lists a plan once, under its plans (chatFiles leaves plans out)');
+  assert.match(rp, /⧉ Open as tab[\s\S]*openFileInPane\(c, artTabEntry\(a\), \{ into: AREA\.gid, keep: true \}\)/, 'a plan in the dropdown has Open as tab too');
+  assert.match(app, /const fileTabName = \(f\) => \(f\.kind in PANE_CARDS \|\| f\.kind === 'art' \?/, 'a plan tab is named by its title, not cut at a slash');
+  assert.match(app, /codereview: '🔎', art: '📄' \}/, 'a plan tab has an icon');
 });
 
 test('Single: every tab in one row; the chat and its pane share the space; a project starts in it', () => {
@@ -847,4 +891,44 @@ test('Artifact dropdown: a file picked under "From the chat" shows in that pane,
   assert.match(rp, /const pf = files\.find\(\(x\) => x\.id === G\.view\.id\) \|\| \(!all\.length \? files\.at\(-1\) : null\)/, 'with no plans and nothing picked, the newest file shows (the dropdown never names a file the pane isn\'t showing)');
   assert.doesNotMatch(rp, /data-pf=/, 'no second list of the same files in an empty pane');
   assert.ok(app.includes('function drawPaneFile(c, file, body) {'), 'one viewer for a file tab and a picked file');
+});
+
+test('"From the chat": every file the replies made or wrote, oldest first, each once', () => {
+  const made = (id, p, name) => [{ t: 'tool', name: 'make_image', args: {} }, { t: 'tool_result', id, name: 'make_image', result: 'Saved', media: [{ path: p, kind: 'image', ...(name ? { name } : {}) }] }];
+  const wrote = (p, result = 'ok') => [{ t: 'tool', name: 'write_file', args: { path: p } }, { t: 'tool_result', name: 'write_file', result }];
+  const msgs = [
+    { role: 'user', content: 'go', docs: [{ rel: 'mine.png' }] },
+    { role: 'assistant', trace: [...made('a', 'pics/sunset.png'), ...wrote('notes.md'), ...wrote('bad.md', 'Error: no')] },
+    { role: 'assistant', trace: [{ t: 'tool_result', name: 'make_video', media: [{ art: 'v1', kind: 'video', name: 'Clip' }] }, ...made('b', 'pics/forest.png', 'Forest')] },
+    { role: 'assistant', trace: [...made('c', 'PICS/Sunset.png')] }, // made again: moves to the end, once
+    { role: 'assistant', trace: [{ ...made('d', 'helper.png')[1], by: 'reviewer' }] }, // a helper's work stays in the steps
+  ];
+  assert.deepEqual(chatMadeFiles(msgs), [
+    { path: 'notes.md' },
+    { art: 'v1', kind: 'video', name: 'Clip' },
+    { path: 'pics/forest.png', name: 'Forest' },
+    { path: 'PICS/Sunset.png' },
+  ]);
+  assert.deepEqual(chatMadeFiles([]), []);
+  assert.deepEqual(chatMadeFiles(null), []);
+});
+
+test('"From the chat" follows the disk: checked on open and after replies, deleted files drop out', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const body = (name) => app.slice(app.indexOf(name), app.indexOf('\n}\n', app.indexOf(name)));
+  const r = body('async function refreshChatFiles(');
+  assert.match(r, /chatMadeFiles\(c\.agent\.messages\)/, 'starts from what the replies made, not only what was opened');
+  assert.match(r, /postJ\('\/api\/paths\/check'/, 'asks the server what is on disk now');
+  assert.match(r, /if \(!r\?\.found\) return;/, 'a server that does not answer leaves the list alone');
+  assert.match(r, /const info = r\.media\?\.\[x\.path\]; if \(!info\) continue;/, 'a made file that is gone is left out');
+  assert.match(r, /savePaneFiles\(c\)/, 'a deleted file you opened is taken off your list too');
+  assert.match(r, /chatFilesChanged\(c\)/, 'the dropdowns showing it update');
+  const ch = body('function chatFilesChanged(');
+  assert.match(ch, /sel\.innerHTML = opts\.html/, 'options are replaced in place');
+  assert.match(ch, /else renderPane\(\)/, 'a file shown that is now gone gives way');
+  assert.match(app, /\$\('#artSelect'\)\.onpointerenter = fresh; \$\('#artSelect'\)\.onfocus = fresh; \$\('#artSelect'\)\.onmousedown = fresh;/, 'checked when the dropdown is pointed at or opened');
+  assert.match(body('async function drawMsgMedia('), /chatFilesSoon\(c\)/, 'checked again shortly after a reply\'s files change');
+  assert.match(body('async function paneAddMenu('), /await refreshChatFiles\(c\)/, '＋ lists what is there now');
+  assert.match(body('function paneOpenItems('), /chatFiles\(c\)/, '＋ and the dropdown share one list');
+  assert.match(body('function renderPaneNow() {'), /files = chatFiles\(c\)/);
 });

@@ -56,7 +56,7 @@ shows what this computer has (Git, Python, a browser, toolchains) and offers to 
   control, Extensions, Schedules and, at the bottom, Spending, ⟳ Restart the harness and ⚙ Settings. Click the open
   view again to hide the sidebar, and drag its edge to make it wider.
 - **In the middle:** the chats you have open, as tabs. With no chat open, Home shows your projects and recent chats.
-  Each chat's own tabs (Steps, Plan, Browser, Terminal, Files, Source control: changes, history and pull requests) open beside it; ＋ adds one.
+  Each chat's own tabs (Steps, Plan, Browser, Terminal, Files, Source control: changes, history and pull requests) open beside it; ＋ opens any of the chat's plans and files as a tab of its own, so several sit side by side, and ⋯ shows the others.
 - **Along the bottom:** the status bar, and a panel with the project's terminals, what's running and its servers.
 - **Settings** opens in its own window over the app. Esc, ✕ or a click beside it closes it.
 - **A window of its own** (desktop app): right-click a tab and choose Pop out, or drag it out of the window; Dock back

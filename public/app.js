@@ -460,7 +460,7 @@ async function contextText(list) {
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
 import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
-import { mediaKind, writtenMedia, stepMedia, madeMedia } from './chat-media.js';
+import { mediaKind, writtenMedia, stepMedia, madeMedia, chatMadeFiles } from './chat-media.js';
 import { scriptPaths } from './script-paths.js';
 
 // The message box's buttons: icons only, coloured by what they do.
@@ -3245,6 +3245,7 @@ function loadMdCard(item) {
 async function drawMsgMedia(c, m) {
   const el = m.el;
   if (!el || !c) return;
+  chatFilesSoon(c); // the side pane's "From the chat" list follows what the replies made or deleted
   // Media the reply's tools made, each labelled with its tool: an artifact straight away, a file once the server has
   // said it is there (below, with the files it wrote).
   const made = m.role === 'user' ? [] : madeMedia(m.trace), madeBy = new Map(made.filter((x) => x.path).map((x) => [x.path, x]));
@@ -8283,12 +8284,67 @@ function paneFiles(c) {
   return c._paneFiles;
 }
 function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.stringify(paneFiles(c))); } catch { /* this session only */ } }
+// "From the chat" (the Artifact tab's dropdown and ＋): every file the chat's replies made or wrote, and what you opened
+// in the pane, as it is on disk now. Checked again with the server whenever the dropdown is pointed at or focused, and
+// shortly after a reply's files change, so a new file shows at once and a deleted one drops out (also from what you
+// opened). Until the first check, what you opened. Plans have their own group, so they are left out here.
+function chatFiles(c) {
+  const pf = paneFiles(c), cf = c?._chatFiles;
+  // Opened since the last check: listed straight away, at the end.
+  return (cf ? [...cf, ...pf.filter((f) => !cf.some((x) => x.id === f.id))] : pf).filter((f) => f.kind !== 'art');
+}
+async function refreshChatFiles(c) {
+  if (!c?.agent || !G.open.has(c.id)) return;
+  if (c._cfBusy) { c._cfAgain = true; return; }
+  c._cfBusy = true; c._cfAt = Date.now();
+  try {
+    const made = chatMadeFiles(c.agent.messages), pid = spaceOf(c) || '';
+    const opened = paneFiles(c).filter((f) => f.kind !== 'art');
+    const onDisk = (f) => !(f.kind in PANE_CARDS) && !f.raw && f.full && !String(f.full).startsWith('art:') && !String(f.key || '').startsWith('art:') && !String(f.src || '').startsWith('/api/command-log');
+    const ask = [...new Set([...made.filter((x) => x.path).map((x) => x.path), ...opened.filter(onDisk).map((f) => f.full)])].slice(-200);
+    const r = ask.length ? await postJ('/api/paths/check', { projectId: pid, chatId: c.id, paths: ask }) : { found: {}, media: {} };
+    if (!r?.found) return; // the server didn't answer: keep the list as it was
+    // The chat's own cards get the same answer.
+    for (const p of ask) PATHS.seen.set(pathKey(pid, c.id, p), { kind: r.found[p] || '', media: r.media?.[p] || null, at: Date.now() });
+    const list = [];
+    for (const x of made) {
+      if (x.art) { const a = c.agent.artifacts?.[x.art]; if (a?.url) list.push({ id: `file:art:${x.art}`, key: `art:${x.art}`, name: x.name || a.title || x.art, src: a.url, kind: x.kind, full: x.name || a.title || x.art }); continue; }
+      const info = r.media?.[x.path]; if (!info) continue; // gone (or not something the pane can show)
+      const key = mediaKey(info.key || x.path);
+      list.push({ id: `file:${key}`, key, name: x.name || baseName(x.path), src: mediaSrc(c, x.path, info.v), kind: info.kind, full: onDiskPath(info.key) ? info.key : x.path, size: info.size || 0 });
+    }
+    const ids = new Set(list.map((f) => f.id));
+    const gone = (f) => (f.kind in PANE_CARDS ? !paneMsg(c, f) : onDisk(f) && ask.includes(f.full) && !r.found[f.full]);
+    const kept = opened.filter((f) => !gone(f));
+    if (kept.length !== opened.length) { const drop = new Set(opened.filter(gone).map((f) => f.id)); c._paneFiles = paneFiles(c).filter((f) => !drop.has(f.id)); savePaneFiles(c); }
+    const next = [...kept.filter((f) => !ids.has(f.id)), ...list];
+    const sig = JSON.stringify(next.map((f) => [f.id, f.src]));
+    c._chatFiles = next;
+    if (sig !== c._cfSig) { c._cfSig = sig; chatFilesChanged(c); }
+  } finally {
+    c._cfBusy = false;
+    if (c._cfAgain) { c._cfAgain = false; refreshChatFiles(c); }
+  }
+}
+// After a reply's files change: one check a moment later, not one per update while it streams.
+function chatFilesSoon(c, ms = 1200) { if (!c) return; clearTimeout(c._cfTimer); c._cfTimer = setTimeout(() => refreshChatFiles(c), ms); }
+// The list changed: the dropdowns showing this chat's Artifact tab take the new list in place (an open dropdown stays
+// open); one that was showing a file now gone draws the plan or the newest file instead.
+function chatFilesChanged(c) {
+  for (const a of PA.list) inArea(a, () => {
+    const sel = $('#artSelect');
+    if (!sel || sel.hidden || G.view.ftab || paneTab() !== 'art' || focused() !== c) return;
+    const cur = sel.value, opts = artOptions(c);
+    if (sel.innerHTML !== opts.html) { sel.innerHTML = opts.html; sel.disabled = !opts.any; }
+    if (opts.ids.includes(cur)) sel.value = cur; else renderPane();
+  });
+}
 // f: a file { key, name, label?, src, kind, full, size }, or a piece of a reply { id, name, kind, run, ref } (PANE_CARDS).
 // Opened again, it moves to the end (the newest). opts: { from: the group it was clicked in, keep: open it to stay }.
 function openFileInPane(c, f, opts = {}) {
-  if (!c || !(f?.src || f?.kind in PANE_CARDS)) return;
+  if (!c || !(f?.src || f?.kind in PANE_CARDS || (f?.kind === 'art' && f.ref))) return;
   const id = f.id || `file:${f.key || f.src}`, list = paneFiles(c).filter((x) => x.id !== id);
-  list.push(f.kind in PANE_CARDS ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), ...(f.raw ? { raw: true } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
+  list.push(f.kind in PANE_CARDS || f.kind === 'art' ? { id, name: f.name, kind: f.kind, run: f.run, ref: f.ref } : { id, name: f.name, ...(f.label ? { label: f.label } : {}), ...(f.raw ? { raw: true } : {}), src: f.src, kind: f.kind || previewKind(f.name), full: f.full || '', size: f.size || 0 });
   c._paneFiles = list.slice(-PANE_FILES_MAX); savePaneFiles(c);
   wsSeen('file', id, { chat: c.id });
   if (G.paneHidden) setPaneHidden(false);
@@ -9476,6 +9532,7 @@ function wsGroupMenu(e, a) {
   const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
   const hostCg = hostedIn(a.gid);
   popMenu(e, [
+    ...paneShowItems(a),
     ...(isPhone() || wsSingle() ? [] : hostCg ? [['💬 Give the chat its own group again', () => wsUnhost(hostCg)], null] : [['💬 Show the chat in this group', () => wsHostChatById(curId(), a.gid), { disabled: !curId(), title: 'The chat you use moves into this group: its tab sits before this group\'s tabs' }], null]),
     ['◫ Split right', () => paneSplitTab(a.gid, null, 'right'), capped],
     ['⊟ Split down', () => paneSplitTab(a.gid, null, 'bottom'), capped],
@@ -9494,7 +9551,7 @@ function wsGroupMenu(e, a) {
 function wsTabMenu(e, a, src) {
   if (POP) { const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null; return popMenu(e, [...(st?.preview ? [['Keep open', () => wsKeepFileTab(src.tid)]] : []), ...(st ? [['Close', () => wsCloseFileTab(src.tid)]] : []), ['⧉ Dock back into the main window', () => popCall('dock', POP.id)]]); }
   const cap = WS.groups(WK.lay).length >= WS.MAX_GROUPS, others = PA.list.filter((x) => x !== a), phone = isPhone();
-  const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null, name = st ? baseName(st.f?.label || st.f?.name || 'File') : PANE_TAB_NAMES[src.tab] || 'Tab';
+  const st = src.type === 'file' ? WK.tabs.get(src.tid)?.st : null, name = st ? fileTabName(st.f || {}) : PANE_TAB_NAMES[src.tab] || 'Tab';
   const capped = { disabled: cap || phone, title: cap ? CAP_TIP : '' };
   popMenu(e, [
     [`◫ Split right with ${name}`, () => wsDropAt(src, a.gid, 'right'), capped],
@@ -9599,7 +9656,7 @@ function drawFileTabs(box) {
   if (holder.dataset.sig === sig) return;
   holder.dataset.sig = sig;
   holder.innerHTML = ids.map((id) => {
-    const st = WK.tabs.get(id)?.st || {}, f = st.f || {}, label = f.kind in PANE_CARDS ? (f.label || f.name || 'From the chat') : baseName(f.label || f.name || 'File');
+    const st = WK.tabs.get(id)?.st || {}, f = st.f || {}, label = fileTabName(f);
     return `<button type="button" role="tab" class="pa-ftab ${id === cur ? 'on' : ''} ${st.preview ? 'preview' : ''}" data-ftab="${esc(id)}" draggable="true" aria-selected="${id === cur}" title="${esc(f.label || f.name || label)}${st.preview ? '\nPreview: the next file you open takes its place. Double-click to keep it open.' : ''}${st.chat && G.panes.length > 1 ? `\nFrom “${esc(chatTitle(st.chat))}”` : ''}\nRight-click to split or move it · middle-click to close">${st.chat && G.panes.length > 1 ? ownSq(st.chat) : ''}<span class="ft-ico" aria-hidden="true">${PV_ICON[f.kind] || '📄'}</span><span class="ft-name">${esc(label)}</span><span class="ft-x" role="button" aria-label="Close ${esc(label)}">×</span></button>`;
   }).join('');
 }
@@ -9773,19 +9830,18 @@ function renderPaneNow() {
   if (G.view.ftab && !ft?.st.f) G.view = paneView(c, 'art'); // closed meanwhile
   if (ft?.st.f) {
     const file = ft.st.f, fc = G.open.get(ft.st.chat) || c, tid = G.view.ftab;
-    setUrlBar(file.kind in PANE_CARDS || file.raw ? null : file.src); // a script read through QuorX has no address of its own
+    setUrlBar(file.kind === 'art' ? artTabUrl(fc, file) : file.kind in PANE_CARDS || file.raw ? null : file.src); // a script read through QuorX has no address of its own
     bar.hidden = false;
     bar.innerHTML = `${ft.st.preview ? '<button type="button" class="pv-btn pf-keep" title="A preview: the next file you open takes its place. Keep it as a tab of its own (or double-click its tab)">📌 Keep open</button>' : ''}<button type="button" class="pv-btn pf-close" title="Close this tab (the file stays where it is)">✕ Close</button>`;
     const kb = $('.pf-keep', bar); if (kb) kb.onclick = () => wsKeepFileTab(tid);
     $('.pf-close', bar).onclick = () => wsCloseFileTab(tid);
     return drawPaneFile(fc, file, body);
   }
-  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
-  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
-  sel.innerHTML = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
-    + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
-    || '<option>No plans yet</option>';
-  sel.disabled = !all.length && !files.length;
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = chatFiles(c);
+  const opts = artOptions(c);
+  sel.innerHTML = opts.html;
+  sel.disabled = !opts.any;
+  if (!c._chatFiles || Date.now() - (c._cfAt || 0) > 3000) refreshChatFiles(c); // what is on disk now
   // A file picked from "From the chat" shows right here, in place of the plan; ⧉ Open as tab gives it a tab of its own.
   // With no plans and nothing picked yet, the newest file shows (what the dropdown has selected).
   const pf = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
@@ -9806,19 +9862,11 @@ function renderPaneNow() {
   sel.value = a.id;
   setUrlBar(artifactUrl(c, a), { art: true });
   G.lastArt = a.id; // 🗂 opens on this one
-  const frame = (src, sandboxed) => {
-    body.innerHTML = '';
-    const f = document.createElement('iframe');
-    src = pageUrl(src);
-    if (sandboxed) f.setAttribute('sandbox', pageSandbox(src));
-    // Until the page has loaded, the pane shows a themed placeholder instead of the frame's blank white (motion.css).
-    body.classList.add('art-loading');
-    const done = () => body.classList.remove('art-loading');
-    f.addEventListener('load', done, { once: true }); setTimeout(done, 5000);
-    f.title = a.title; f.src = src; body.appendChild(f);
-    return f;
-  };
+  const frame = (src, sandboxed) => paneFrame(body, src, a.title, sandboxed);
   if (a.kind === 'html' || a.kind === 'md') {
+    bar.hidden = false;
+    bar.innerHTML = '<button type="button" class="pv-btn pf-tab" title="Open this plan as a tab of its own, beside the others (or pick from ＋ on the tab strip)">⧉ Open as tab</button>';
+    $('.pf-tab', bar).onclick = () => openFileInPane(c, artTabEntry(a), { into: AREA.gid, keep: true });
     frame(`/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}?v=${a.updated || 0}`, true);
   } else if (a.kind === 'site') {
     bar.hidden = false;
@@ -9837,9 +9885,43 @@ function renderPaneNow() {
     body.innerHTML = `<div class="media">${player}${cap}</div>`;
   }
 }
-// A file from the chat in the pane's body: a piece of a reply as its card, anything else in the Files tab's viewer.
+// The Artifact tab's dropdown: the chat's plans, then "From the chat" (chatFiles). { html, ids, any }.
+function artOptions(c) {
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = chatFiles(c);
+  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
+  const html = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
+    + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
+    || '<option>No plans yet</option>';
+  return { html, ids: [...all.map((a) => a.id), ...files.map((f) => f.id)], any: !!(all.length || files.length) };
+}
+// A page in a frame filling the pane's body (a plan, a site, an app).
+function paneFrame(body, src, title, sandboxed) {
+  body.innerHTML = '';
+  const f = document.createElement('iframe');
+  src = pageUrl(src);
+  if (sandboxed) f.setAttribute('sandbox', pageSandbox(src));
+  // Until the page has loaded, the pane shows a themed placeholder instead of the frame's blank white (motion.css).
+  body.classList.add('art-loading');
+  const done = () => body.classList.remove('art-loading');
+  f.addEventListener('load', done, { once: true }); setTimeout(done, 5000);
+  f.title = title; f.src = src; body.appendChild(f);
+  return f;
+}
+// A plan as a tab of its own: kept like a file from the chat ({ kind: 'art', ref: its id }), drawn from the chat as it
+// is now, so a plan the agent rewrites shows its newest version.
+const artTabEntry = (a) => ({ id: `art:${a.id}`, kind: 'art', ref: a.id, name: a.title || 'Plan' });
+function artTabUrl(c, f) { const a = planArts(c).find((x) => x.id === f.ref); return a ? artifactUrl(c, a) : null; }
+// A file tab's name: a piece of a reply or a plan by its title, a file by its file name.
+const fileTabName = (f) => (f.kind in PANE_CARDS || f.kind === 'art' ? (f.label || f.name || 'From the chat') : baseName(f.label || f.name || 'File'));
+// A file from the chat in the pane's body: a piece of a reply as its card, a plan in its frame, anything else in the
+// Files tab's viewer.
 function drawPaneFile(c, file, body) {
   if (file.kind in PANE_CARDS) return drawPaneCard(c, file, body);
+  if (file.kind === 'art') {
+    const a = planArts(c).find((x) => x.id === file.ref);
+    if (!a) { body.innerHTML = '<div class="empty">This plan is no longer in the chat.</div>'; return; }
+    return paneFrame(body, `/art/${encodeURIComponent(c.id)}/${encodeURIComponent(a.id)}?v=${a.updated || 0}`, a.title, true);
+  }
   body.innerHTML = '<div class="fview pane-file"></div>';
   G.filesProject = spaceOf(c);
   previewFile($('.pane-file', body), { name: file.name, src: file.src, size: file.size, full: file.full, kind: file.kind, raw: file.raw });
@@ -10547,7 +10629,7 @@ function wsSingleStrip() {
   const cur = front ? inArea(a, () => (G.view.ftab ? `f:${G.view.ftab}` : G.view.browser ? `p:${activeBTab(c)?.sid || ''}` : G.view.term ? `k:${t.filter || 'all'}` : `t:${paneTab()}`)) : '';
   const pages = browserTabs(c), terms = t.terms || [];
   // Only the tabs with something in them (and the one in front): a plain question shouldn't come with six empty tabs.
-  // ＋ opens any of the others.
+  // ⋯ opens any of the others.
   const has = {
     't:trace': chatHasSteps(c), 't:art': Object.keys(c.agent?.artifacts || {}).length > 0, 't:browser': false,
     'k:all': (t.order?.length || 0) > 0, 't:files': true,
@@ -10560,14 +10642,14 @@ function wsSingleStrip() {
     ['k:all', '⌨', 'Terminal', 'Project'],
     ...terms.map((u) => [`k:${u.id}`, '⌨', u.name || 'Terminal', 'yours', null, used(u)]),
     ['t:files', '📁', 'Files', 'Project'],
-    ...fileTabs(a.gid).map((id) => { const st = WK.tabs.get(id)?.st || {}, f = st.f || {}; return [`f:${id}`, '📄', baseName(f.label || f.name || 'File'), clip((G.open.get(st.chat) || c).title || owner, 22)]; }),
+    ...fileTabs(a.gid).map((id) => { const st = WK.tabs.get(id)?.st || {}, f = st.f || {}; return [`f:${id}`, PV_ICON[f.kind] || '📄', fileTabName(f), clip((G.open.get(st.chat) || c).title || owner, 22)]; }),
   ].filter(([k, , , , page, show]) => k === cur || page || k.startsWith('f:') || (show ?? has[k] ?? true));
   const sig = JSON.stringify([items.map((x) => x.slice(0, 4)), cur, DESK ? pages.map((x) => G.sound?.tabs?.[x.sid] || null) : 0]);
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   box.innerHTML = items.map(([k, ico, label, own, page]) => `<span class="wt-ptab ${k === cur ? 'on' : ''}" role="tab" aria-label="${esc(`${label} · ${own}`)}" tabindex="${k === cur ? 0 : -1}" aria-selected="${k === cur}" data-k="${esc(k)}" title="${esc(`${label} · ${own}`)}"><span class="wp-ico" aria-hidden="true">${ico}</span><span class="pp-name">${esc(clip(label, 26))}</span><span class="pp-own">· ${esc(own)}</span>${page && DESK ? sndMark(page) : ''}${page && !page.agent ? `<button type="button" class="pp-x" data-close="${esc(page.sid)}" tabindex="-1" aria-label="Close ${esc(label)}">×</button>` : ''}</span>`).join('')
     + '<button type="button" class="wt-pover" data-ovf hidden></button>'
-    + '<button type="button" class="wt-padd" data-pa="add" aria-haspopup="menu" title="Open a tab: chat, browser page, terminal, files, plan, Steps or Settings" aria-label="Open a tab">＋</button><button type="button" class="wt-pmore" data-pa="more" aria-haspopup="menu" title="Split, move, follow the agent, save the layout" aria-label="More for this group">⋯</button>';
+    + '<button type="button" class="wt-padd" data-pa="add" aria-haspopup="menu" title="Open a plan or file from this chat as a tab of its own" aria-label="Open a plan or file as a tab">＋</button><button type="button" class="wt-pmore" data-pa="more" aria-haspopup="menu" title="Show a browser page, terminal, files or Steps here; split, move, follow the agent, save the layout" aria-label="More for this group">⋯</button>';
   box.querySelector('.wt-ptab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   stripOverflow(box);
 }
@@ -11793,7 +11875,7 @@ const PREVIEW_KINDS = {
   binary: ['wasm', 'glb', 'zip', 'gz', 'tar', '7z', 'exe', 'dll', 'bin', 'so', 'dylib', 'class', 'jar', 'pyc'],
 };
 const previewKind = (name) => Object.keys(PREVIEW_KINDS).find((k) => PREVIEW_KINDS[k].includes(fileExt(name))) || 'text';
-const PV_ICON = { btw: '❔', image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪', plan: '🗺', reply: '💬', question: '❓', changes: '±', codereview: '🔎' };
+const PV_ICON = { btw: '❔', image: '🖼', video: '🎬', audio: '🎵', pdf: '📕', office: '📘', table: '📊', font: '🔤', md: '📝', html: '🌐', binary: '📦', text: '📄', review: '🧪', plan: '🗺', reply: '💬', question: '❓', changes: '±', codereview: '🔎', art: '📄' };
 const sizeText = (b) => (b == null ? '' : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 const durText = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '');
 // A small CSV / TSV reader (quotes and doubled quotes), enough for a preview.
@@ -16782,6 +16864,9 @@ function wireAreaChrome() {
     files.ondragstart = (e) => { const t = tabOf(e); if (!t) return; e.dataTransfer.setData('application/x-quorx-filetab', t.dataset.ftab); e.dataTransfer.effectAllowed = 'move'; wsDragStart({ type: 'file', tid: t.dataset.ftab }); };
     files.ondragend = wsDropHide;
   }
+  // Pointed at or focused, the dropdown checks its "From the chat" files with the server (new ones in, deleted ones out).
+  const fresh = () => { const c = focused(); if (c && Date.now() - (c._cfAt || 0) > 1000) refreshChatFiles(c); };
+  $('#artSelect').onpointerenter = fresh; $('#artSelect').onfocus = fresh; $('#artSelect').onmousedown = fresh;
   $('#artSelect').onchange = (e) => {
     const v = e.target.value;
     // A plan or a file from the chat shows here, below the dropdown (⧉ Open as tab gives a file a tab of its own).
@@ -16904,7 +16989,7 @@ function renderBrowser(c) {
 // tab's inner page strip; the page's address bar, back / forward, device size, lending and everything inside a page
 // are as they were. Each page tab says whose it is (the agent's page: its chat; your pages: the project), shows 🔊
 // while it plays sound (click: mute, 🔇) in the desktop app, and has Mute tab / Give to agent / Close on right-click.
-// With no page open, the Browser tab stands in for them. ＋ at the end of the strip opens any kind of tab here.
+// With no page open, the Browser tab stands in for them. ＋ at the end of the strip opens a plan or file from the chat as a tab; ⋯ shows the pane's other tabs here.
 const pageLabel = (x) => (x.agent ? (x.title || "Agent's page") : (x.title || (x.url ? x.url.replace(/^https?:\/\//, '').slice(0, 28) : 'New tab')));
 function pageOwner(c, x) {
   if (x.agent) { const ch = G.open.get(String(x.sid).replace(/^agent-/, '')) || c; return ch?.title || 'its chat'; }
@@ -16955,23 +17040,42 @@ function wirePageTabs(area) {
   // Drag one of your pages into a chat's message box (as before) to hand it over.
   holder.addEventListener('dragstart', (e) => { const t = tabOf(e); if (!t || t.classList.contains('agent')) return; e.dataTransfer.setData('application/x-quorx-tab', t.dataset.sid); e.dataTransfer.effectAllowed = 'link'; });
 }
-// ＋: any kind of tab, here (this group).
-function paneAddMenu(e, area) {
+// ＋: open one of this chat's plans or files from the chat as a tab of its own, here (this group), so several sit side by
+// side. The same list as the Artifact tab's dropdown; what is already a tab here is ticked (picked, it comes in front).
+// The pane's other tabs (browser page, terminal, files, Steps) are under ⋯ (paneShowItems).
+function paneOpenItems(c, area) {
+  if (!c) return [];
+  const plans = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)).map((a) => ({ f: artTabEntry(a), icon: ICON[a.kind] || '📄', label: a.title || 'Plan' }));
+  const files = chatFiles(c).map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return { f, icon: PV_ICON[f.kind] || '📄', label: f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : fileTabName(f)) }; });
+  const open = (x) => !!(area && fileTabOf(area.gid, x.f.id));
+  const row = (x) => [`${open(x) ? '✓ ' : ''}${x.icon} ${clip(x.label, 60)}`, () => openFileInPane(c, x.f, { into: area?.gid, keep: true }), { title: open(x) ? 'Already a tab here: brings it in front' : 'Open it as a tab of its own here' }];
+  return [
+    ...(plans.length ? [['Plans and reports', null, { disabled: true }], ...plans.map(row)] : []),
+    ...(plans.length && files.length ? [null] : []),
+    ...(files.length ? [['From the chat', null, { disabled: true }], ...files.reverse().map(row)] : []),
+  ];
+}
+async function paneAddMenu(e, area) {
   const c = focused();
+  e.preventDefault(); e.stopPropagation();
+  if (c && Date.now() - (c._cfAt || 0) > 1000) await refreshChatFiles(c); // what is on disk now
+  const items = paneOpenItems(c, area);
+  popMenu(e, items.length ? items : [['Nothing from this chat yet: plans and files it opens show here', null, { disabled: true }]]);
+}
+// What used to be under ＋: the pane's own tabs, shown in this group (from ⋯). A new chat is ＋ in the chat tabs or
+// the sidebar; Settings is ⚙ on the activity bar.
+function paneShowItems(area) {
+  const c = focused(); if (!c) return [];
   const here = (fn) => () => { inArea(area, fn); };
-  popMenu(e, [
-    ['💬 New chat', () => newChat(qfPid())],
-    ...(c ? [
-      ['🌐 Browser page', here(() => { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl')?.focus()); })],
-      ['⌨ Terminal', here(() => openTerminal(c, null, 'term'))],
-      ['⌨ New terminal', here(() => { const t = termState(spaceOf(c)), id = termNew(t); termSave(t); openTerminal(c, id, 'term'); })],
-      ['📁 Files', here(() => setPaneTab('files'))],
-      ['📄 Plan', here(() => setPaneTab('art'))],
-      ['🧭 Steps', here(() => setPaneTab('trace'))],
-    ] : []),
+  return [
+    ['📄 Artifact', here(() => setPaneTab('art'))],
+    ['🌐 New browser page', here(() => { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl')?.focus()); })],
+    ['⌨ Terminal', here(() => openTerminal(c, null, 'term'))],
+    ['⌨ New terminal', here(() => { const t = termState(spaceOf(c)), id = termNew(t); termSave(t); openTerminal(c, id, 'term'); })],
+    ['📁 Files', here(() => setPaneTab('files'))],
+    ['🧭 Steps', here(() => setPaneTab('trace'))],
     null,
-    ['⚙ Settings', () => openSettings()],
-  ]);
+  ];
 }
 // ---------- device sizes (the Browser tab's 📱 menu, public/devices.js) ----------
 // One of your tabs can show its page at a phone's, tablet's or laptop's size, or one of your own, turned sideways or
