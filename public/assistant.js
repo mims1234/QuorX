@@ -34,7 +34,7 @@ async function toggle(force) {
   const el = document.getElementById('qxa');
   el.hidden = !A.open;
   document.getElementById('qxaBtn').classList.toggle('on', A.open);
-  if (!A.open) { speechSynthesis?.cancel?.(); return; }
+  if (!A.open) { stopVoice(); return; }
   if (!A.state) {
     A.state = await H.getJ('/api/assistant');
     A.msgs = (A.state.history || []).map((m) => ({ role: m.role, text: m.content }));
@@ -52,9 +52,11 @@ function draw() {
   <header class="qxa-head">
     <div class="qxa-title"><span class="qxa-mark" aria-hidden="true">✦</span><b>QuorX assistant</b></div>
     <span class="qxa-tag" title="Talking with ${H.esc(s.models?.talk || '')}${s.auto?.talk ? ' (picked for value)' : ''}">${H.esc(shortModel(s.models?.talk))}</span>
+    <button class="qxa-icon ${A.view === 'settings' ? 'on' : ''}" data-a="settings" title="Assistant settings: models, voice, budget" aria-label="Assistant settings">⚙</button>
     <button class="qxa-icon" data-a="clear" title="Start a fresh conversation" aria-label="Start a fresh conversation">⟲</button>
     <button class="qxa-icon" data-a="close" title="Close (Esc)" aria-label="Close">✕</button>
   </header>
+  ${A.view === 'settings' ? settingsHTML() : ''}
   <div class="qxa-budget" title="The assistant's own budget for ${H.esc(b.month || '')}. It stops at the limit.">
     <span>Budget</span>
     <span class="qxa-meter" aria-hidden="true"><i style="width:${pct}%"></i></span>
@@ -72,8 +74,46 @@ function draw() {
       <button type="submit" class="qxa-btn primary" ${A.busy ? 'disabled' : ''}>Send</button>
     </div>
   </form>`;
+  el.classList.toggle('qxa-in-settings', A.view === 'settings');
   const log = el.querySelector('.qxa-log'); log.scrollTop = log.scrollHeight;
   wire(el);
+}
+
+// ---------- ⚙ its settings: each model it uses by default, its voice, its budget ----------
+function settingsHTML() {
+  const o = A.opts;
+  if (!o) return '<div class="qxa-set"><p class="qxa-dim">Loading models…</p></div>';
+  if (o.error) return `<div class="qxa-set"><p class="qxa-status err">${H.esc(o.error)}</p></div>`;
+  const f = A.form, list = (id, rows) => `<datalist id="${id}">${rows.slice(0, 600).map((r) => `<option value="${H.esc(r.id)}">${H.esc(r.price || '')}</option>`).join('')}</datalist>`;
+  const vm = o.voices.find((v) => v.id === f.voice), price = (rows, id) => rows.find((r) => r.id === id)?.price || '';
+  const field = (k, label, help, listId, ph) => `<label class="qxa-field"><span>${label}</span><input data-f="${k}" list="${listId}" value="${H.esc(f[k] || '')}" placeholder="${H.esc(ph || '')}" spellcheck="false"><small>${H.esc(help)}</small></label>`;
+  return `<div class="qxa-set">
+    ${list('qxaChatList', o.chat)}${list('qxaVoiceList', [{ id: 'pc', price: 'Windows voice, free' }, ...o.voices])}${list('qxaListenList', o.listen)}
+    ${field('talk', '🧠 Thinking', f.talk ? price(o.chat, f.talk) || 'your pick' : `Empty = best value now: ${shortModel(o.auto.talk)}`, 'qxaChatList', `auto · ${o.auto.talk}`)}
+    ${field('code', '🛠 Code changes to QuorX', f.code ? price(o.chat, f.code) || 'your pick' : `Empty = best value now: ${shortModel(o.auto.code)}`, 'qxaChatList', `auto · ${o.auto.code}`)}
+    ${field('voice', '🗣 Reply voice', f.voice === 'pc' ? 'Windows voice on this PC, free' : `${price(o.voices, f.voice) || ''} · reads replies when “Speak replies” is ticked`, 'qxaVoiceList', o.defaults.voice.model)}
+    ${vm?.voices?.length ? `<label class="qxa-field"><span>Voice</span><select data-f="voiceName">${vm.voices.map((v) => `<option ${v === f.voiceName ? 'selected' : ''}>${H.esc(v)}</option>`).join('')}</select></label>` : ''}
+    ${field('listen', '👂 Listening (speech to text)', price(o.listen, f.listen) || 'for 🎤 Talk', 'qxaListenList', o.defaults.listen)}
+    <label class="qxa-field"><span>💵 Monthly budget</span><input data-f="monthly" type="number" min="0.1" max="500" step="0.5" value="${H.esc(f.monthly)}"><small>It stops at the limit. Talk on a plan costs $0; voice and listening are paid per use.</small></label>
+    <div class="qxa-row"><button type="button" class="qxa-btn" data-a="try-voice">▶ Try the voice</button><button type="button" class="qxa-btn" data-a="defaults" title="Auto thinking and code models, Sarah on ElevenLabs v4 Turbo, the default listening model">Use defaults</button><button type="button" class="qxa-btn primary" data-a="save-settings">Save</button></div>
+    ${A.saved ? `<p class="qxa-status ${A.saved.err ? 'err' : 'yes'}">${H.esc(A.saved.err || '✓ Saved')}</p>` : ''}
+  </div>`;
+}
+async function openSettingsView() {
+  A.view = A.view === 'settings' ? 'chat' : 'settings'; A.saved = null;
+  if (A.view !== 'settings') return draw();
+  draw();
+  A.opts = await H.getJ('/api/assistant/options');
+  if (!A.opts.error) { const c = A.opts.current; A.form = { talk: A.opts.saved.talk, code: A.opts.saved.code, voice: c.voice, voiceName: c.voiceName, listen: c.listen, monthly: A.opts.monthly }; }
+  draw();
+}
+function readForm() { for (const i of document.querySelectorAll('#qxa [data-f]')) A.form[i.dataset.f] = i.value.trim(); }
+async function saveSettingsView() {
+  readForm();
+  const r = await H.postJ('/api/assistant/settings', A.form);
+  A.saved = r.error ? { err: r.error } : { ok: true };
+  if (!r.error) { A.state = await H.getJ('/api/assistant'); A.opts.current = A.state.models; }
+  draw();
 }
 
 function msgHTML(m, i) {
@@ -104,12 +144,18 @@ function wire(el) {
     if (a === 'money') { A.showMoney = !A.showMoney; return draw(); }
     if (a === 'clear') { await H.postJ('/api/assistant/clear', {}); A.msgs = []; return draw(); }
     if (a === 'mic') return mic();
+    if (a === 'settings') return openSettingsView();
+    if (a === 'save-settings') return saveSettingsView();
+    if (a === 'defaults') { Object.assign(A.form, { talk: '', code: '', voice: A.opts.defaults.voice.model, voiceName: A.opts.defaults.voice.voice, listen: A.opts.defaults.listen }); A.saved = null; return draw(); }
+    if (a === 'try-voice') { readForm(); const saved = await H.postJ('/api/assistant/settings', A.form); if (saved.error) { A.saved = { err: saved.error }; return draw(); } return say('Hi! This is how I sound when I read my replies to you.', true); }
     if (t.closest('[data-idea]')) return send(t.closest('[data-idea]').dataset.idea);
     const yes = t.closest('[data-yes]'), no = t.closest('[data-no]');
     if (no) { const m = A.msgs[no.dataset.no]; m.done = 'no'; H.postJ('/api/assistant/card', { title: m.card.title, outcome: 'no' }); return draw(); }
     if (yes) return confirm(A.msgs[yes.dataset.yes]);
   };
-  el.querySelector('[data-a="speak"]')?.addEventListener('change', (e) => { A.speak = e.target.checked; try { localStorage.setItem(SPEAK_KEY, A.speak ? '1' : '0'); } catch { /* no storage */ } if (!A.speak) speechSynthesis?.cancel?.(); });
+  // Picking another voice model redraws, so its own voices are offered.
+  el.querySelector('[data-f="voice"]')?.addEventListener('change', (e) => { readForm(); const vm = A.opts.voices.find((v) => v.id === e.target.value); A.form.voiceName = vm?.voices?.includes(A.form.voiceName) ? A.form.voiceName : vm?.voices?.[0] || ''; draw(); });
+  el.querySelector('[data-a="speak"]')?.addEventListener('change', (e) => { A.speak = e.target.checked; try { localStorage.setItem(SPEAK_KEY, A.speak ? '1' : '0'); } catch { /* no storage */ } if (!A.speak) stopVoice(); });
 }
 
 async function send(text) {
@@ -175,7 +221,7 @@ async function mic() {
       const samples = (await off.startRendering()).getChannelData(0);
       if (!H.heardSpeech(samples, 16000)) { A.hearing = false; A.msgs.push({ role: 'bot', text: "I didn't hear anything, so nothing was sent." }); return draw(); }
       const audio = (await H.asDataURL(H.encodeWav(samples, 16000))).split(',')[1];
-      const r = await H.postJ('/api/transcribe', { audio, model: H.G.settings.tools?.listen?.models?.[0] });
+      const r = await H.postJ('/api/transcribe', { audio, model: A.state?.models?.listen || H.G.settings.tools?.listen?.models?.[0] });
       A.hearing = false;
       if (r.error) throw new Error(r.error);
       if (String(r.text || '').trim()) return send(r.text);
@@ -184,7 +230,23 @@ async function mic() {
   };
   A.rec = rec; rec.start(); draw();
 }
-function say(text) {
+// Replies are read with its AI voice (⚙: ElevenLabs v4 Turbo, Sarah, by default); Windows' voice when that is chosen,
+// or when the AI voice can't (no OpenRouter key, budget used up, the model failed).
+let playing = null;
+function stopVoice() { playing?.pause(); playing = null; window.speechSynthesis?.cancel(); }
+async function say(text, trying = false) {
+  if (!text) return;
+  stopVoice();
+  const r = await H.postJ('/api/assistant/speak', { text: String(text).replace(/[*_`#]/g, '').slice(0, 2000) });
+  if (r.url) {
+    if (r.budget && A.state) { A.state.budget = r.budget; if (!trying) draw(); }
+    playing = new Audio(r.url); playing.play().catch(() => pcSay(text));
+    return;
+  }
+  if (trying && r.error) { A.saved = { err: `AI voice: ${r.error}. Using the Windows voice.` }; draw(); }
+  pcSay(text);
+}
+function pcSay(text) {
   if (!window.speechSynthesis || !text) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(String(text).replace(/[*_`#]/g, ''));

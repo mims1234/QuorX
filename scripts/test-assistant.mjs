@@ -60,3 +60,32 @@ test('API keys are never settable', async () => {
   const r = await A.assistantTurn({ text: 'set key', call });
   assert.equal(r.cards.length, 0);
 });
+
+test('settings search forgives wording: "image generation model" finds the pictures models', () => {
+  const keys = A.settingsFind({ query: 'image generation model' }).map((s) => s.key);
+  assert.ok(keys.includes('tools.image.models'), keys.join(', '));
+  assert.ok(A.settingsFind({ query: 'microphone' }).some((s) => s.key.startsWith('tools.listen')));
+});
+
+test('chats: an unknown project says which projects there are', async () => {
+  const r = await A.assistantTurn({ text: 'chats', call: scripted(['{"say":"","do":[{"tool":"chats","args":{"project":"nope-nothing"}}]}', '{"say":"No such project.","do":[]}']) });
+  assert.equal(r.steps[0], 'chats');
+});
+
+test('its settings: models, voice, listening and budget are saved; bad ids are refused; empty means auto', async () => {
+  A.saveAssistantSettings({ talk: 'opencode-go/claude-haiku-5-5', code: '', voice: 'elevenlabs/eleven-v4-turbo', voiceName: 'sarah', listen: 'google/gemini-3.1-flash-lite', monthly: 4 });
+  const s = A.load();
+  assert.equal(s.talkModel, 'opencode-go/claude-haiku-5-5');
+  assert.equal(s.codeModel, undefined);
+  assert.equal(s.voice, 'sarah');
+  assert.equal(s.monthly, 4);
+  assert.throws(() => A.saveAssistantSettings({ talk: 'not a model' }), /not a model id/);
+  A.saveAssistantSettings({ voice: 'pc' });
+  assert.deepEqual(await A.assistantSpeak({ text: 'hi' }), { pc: true });
+});
+
+test('a reply cut off mid-JSON still shows its words, not the JSON', () => {
+  const r = A.parseReply('{"say":"SFW18 has one chat: \\"Cosplay\\". The image model is chosen by');
+  assert.equal(r.say, 'SFW18 has one chat: "Cosplay". The image model is chosen by…');
+  assert.deepEqual(r.do, []);
+});

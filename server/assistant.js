@@ -13,9 +13,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { HOME, ROOT, currentKey, chat as orChat, runtime } from './openrouter.js';
+import { HOME, ROOT, currentKey, chat as orChat, runtime, chatModels, speechModels } from './openrouter.js';
+import { readAloudPiece, READ_ALOUD_MAX } from './readaloud.js';
 import { SOURCES, SOURCE_IDS, sourceOn, sourceOffWhy, sourceModels, chatAny, keyFor } from './sources.js';
-import { listProjects, saveProject, costSummary } from './store.js';
+import { listProjects, saveProject, costSummary, chatPage } from './store.js';
 import { SETTINGS, SETTINGS_BY_KEY, CATS, pageValue, show, checkValue, SECRET_KEY } from './quorxsettings.js';
 import { appKey } from './access.js';
 import { renameSoon } from './fsretry.js';
@@ -79,11 +80,51 @@ export async function recommended(models) {
     code: pickFrom(models, CODE_PREF, false) || (currentKey() ? OR_CODE : null) || OR_CODE,
   };
 }
+// Its voice: ElevenLabs v4 Turbo reads naturally and fast (~1¢ a reply); Sarah is a warm female voice. Listening uses
+// QuorX's own speech-to-text default, a cheap model that hears well. "pc" as the voice model means Windows' own voice.
+export const VOICE_DEFAULT = { model: 'elevenlabs/eleven-v4-turbo', voice: 'sarah' };
+export const LISTEN_DEFAULT = 'google/gemini-3.1-flash-lite';
 async function models() {
   const s = load();
-  if (s.talkModel && s.codeModel) return { talk: s.talkModel, code: s.codeModel };
-  const r = await recommended();
-  return { talk: s.talkModel || r.talk, code: s.codeModel || r.code };
+  const r = s.talkModel && s.codeModel ? {} : await recommended();
+  return { talk: s.talkModel || r.talk, code: s.codeModel || r.code, voice: s.voiceModel || VOICE_DEFAULT.model, voiceName: s.voice || (s.voiceModel && s.voiceModel !== VOICE_DEFAULT.model ? '' : VOICE_DEFAULT.voice), listen: s.listenModel || LISTEN_DEFAULT };
+}
+
+/** What the ⚙ view offers for each choice, with prices: $ per 1M tokens (talk, code, listen) or per 1M characters (voice). */
+export async function assistantOptions() {
+  const mine = await catalogue();
+  const or = currentKey() ? await chatModels().catch(() => []) : [];
+  const chatRows = [
+    ...mine.filter((m) => m.tools).map((m) => ({ id: m.id, price: m.marginal === 0 ? 'on your plan, $0' : `$${m.list[0]}/$${m.list[1]}`, zero: m.marginal === 0 })),
+    ...or.map((m) => ({ id: m.id, price: `$${(+m.price?.[0] || 0).toFixed(2)}/$${(+m.price?.[1] || 0).toFixed(2)}`, zero: false })),
+  ].sort((a, b) => b.zero - a.zero);
+  const voices = currentKey() ? (await speechModels().catch(() => [])).map((m) => ({ id: m.id, price: `$${m.price[0].toFixed(2)}/1M chars`, voices: m.voices })) : [];
+  const listen = or.filter((m) => (m.in || []).includes('audio')).map((m) => ({ id: m.id, price: `$${(+m.price?.[0] || 0).toFixed(3)}/1M` }));
+  return { current: await models(), saved: { talk: load().talkModel || '', code: load().codeModel || '' }, auto: await recommended(mine), defaults: { voice: VOICE_DEFAULT, listen: LISTEN_DEFAULT }, monthly: load().monthly, chat: chatRows, voices, listen };
+}
+
+/** The ⚙ view's Save: the user picked these themselves, so no card. Empty talk/code = pick for value again. */
+export function saveAssistantSettings(b = {}) {
+  const s = load(), id = (v) => String(v ?? '').trim();
+  const ok = (v) => !v || /^[\w.@:~-]+(\/[\w.@:~+-]+)+$/.test(v);
+  for (const [k, v] of [['talkModel', id(b.talk)], ['codeModel', id(b.code)], ['listenModel', id(b.listen)]]) { if (!ok(v)) throw new Error(`"${v}" is not a model id`); s[k] = v || undefined; }
+  const vm = id(b.voice);
+  if (vm && vm !== 'pc' && !ok(vm)) throw new Error(`"${vm}" is not a voice model`);
+  s.voiceModel = vm || undefined; s.voice = id(b.voiceName).slice(0, 80) || undefined;
+  if (b.monthly != null) { const n = Math.round(Number(b.monthly) * 100) / 100; if (!(n >= 0.1 && n <= 500)) throw new Error('a monthly budget from $0.10 to $500'); s.monthly = n; }
+  save();
+  return { ok: true };
+}
+
+/** A reply read aloud with its AI voice; the cost counts against its budget. */
+export async function assistantSpeak({ text } = {}) {
+  const m = await models();
+  if (m.voice === 'pc') return { pc: true };
+  if (budgetLeft() <= 0) return { error: 'my budget for this month is used up', pc: true };
+  const r = await readAloudPiece({ text: clip(String(text || ''), READ_ALOUD_MAX), model: m.voice, voice: m.voiceName || undefined });
+  if (r.error) return { ...r, pc: true };
+  const s = load(); s.spent[month()] = spentNow() + (r.cost || 0); save();
+  return { url: r.url, cost: r.cost, voice: r.voice, model: r.model, budget: budgetInfo() };
 }
 
 // ---------- what it can look at and do ----------
@@ -96,9 +137,18 @@ function providersReport(models) {
   return { openrouterKey: !!currentKey(), providers: rows };
 }
 
-function settingsFind({ query = '', category = '' }, prefs, defaults) {
-  const q = String(query).toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = SETTINGS.filter((s) => !SECRET_KEY.test(s.key) && (!category || s.cat === category) && q.every((w) => `${s.key} ${s.label} ${s.help || ''} ${CATS[s.cat] || ''}`.toLowerCase().includes(w)));
+// Words people say for what QuorX's settings call something else.
+const SAME = { image: ['picture', 'imagine'], picture: ['image'], photo: ['picture', 'image'], art: ['picture'], voice: ['speech', 'speak'], speech: ['voice'], tts: ['voice'],
+  listen: ['mic', 'transcri'], mic: ['listen'], microphone: ['listen'], dictation: ['listen'], stt: ['listen'], cost: ['budget', 'money'], money: ['budget'], spend: ['budget'],
+  yolo: ['approval'], strict: ['approval'], permission: ['approval'], font: ['text size'], video: ['video'], music: ['music'], song: ['music'] };
+const STOP = new Set(['the', 'a', 'an', 'for', 'of', 'to', 'in', 'on', 'my', 'setting', 'settings', 'which', 'what', 'is', 'and', 'generation', 'gen', 'default', 'current', 'quorx']);
+/** Settings matching any of the words (or what people call them), best matches first. */
+export function settingsFind({ query = '', category = '' }, prefs = {}, defaults = {}) {
+  const q = String(query).toLowerCase().split(/[^a-z0-9.]+/).filter((w) => w && !STOP.has(w));
+  const forms = (w) => { const b = w.replace(/s$/, ''); return [w, b, ...(SAME[w] || []), ...(SAME[b] || [])]; };
+  const score = (s) => { const hay = `${s.key} ${s.label} ${s.help || ''} ${CATS[s.cat] || ''}`.toLowerCase(); return q.reduce((n, w) => n + (forms(w).some((x) => hay.includes(x)) ? 1 : 0), 0); };
+  const pool = SETTINGS.filter((s) => !SECRET_KEY.test(s.key) && (!category || s.cat === category));
+  const hits = q.length ? pool.map((s) => [s, score(s)]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).map(([s]) => s) : pool;
   return hits.slice(0, 25).map((s) => ({ key: s.key, label: s.label, where: CATS[s.cat], now: show(s, pageValue(prefs, s, defaults)), type: s.type, ...(s.values ? { values: s.values.map(([k, l]) => `${k}=${l}`) } : {}), ...(s.min != null ? { min: s.min, max: s.max } : {}) }));
 }
 
@@ -107,6 +157,7 @@ const TOOLS = {
   providers: 'Every provider that is on or has a key: what it bills (plan = flat subscription, paid = per call, free, mixed), whether it works now, and how many of its models cost nothing more per call. Plus the models you recommend for talking and for code changes. args: {}',
   settings_find: 'Find QuorX settings and their values now. args: {"query": "words"} or {"category": one of ' + Object.keys(CATS).join(', ') + '}',
   settings_set: 'Propose a change to a QuorX setting; the user gets a card and decides. args: {"key": "...", "value": ...}',
+  chats: 'List or search chats, newest first, with id, title, project, model and when. args: {"project": "name or id" (optional), "query": "words in the title or text" (optional), "limit": up to 30}',
   open: 'Open a place in QuorX for the user, at once. args: {"where": a settings category (' + Object.keys(CATS).join(', ') + ') or "chat:<id>"}',
   budget_set: 'Propose a new monthly budget for you (the assistant) in dollars; the user decides. args: {"monthly": number}',
   model_set: 'Propose another model for talking or for code changes; the user decides. args: {"role": "talk" | "code", "model": "model id"}',
@@ -122,7 +173,7 @@ ${Object.entries(TOOLS).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
 Answer ONLY with one JSON object, no code fence:
 {"say": "what you tell the user", "do": [{"tool": "name", "args": {...}}]}
 - Put tools in "do" when you need facts or want to act; you will get their results and answer again. Use "do": [] when you are done.
-- Never guess numbers, settings or providers: look them up first.
+- Never guess numbers, settings, chats or providers: look them up first. To open a chat by name, find it with chats, then open "chat:<id>". If a search finds nothing, try a simpler word before giving up.
 - Changes are cards the user clicks; say you've put one up, never that it is done. Don't propose a card again that the user declined unless they ask.
 - Earlier replies show what you looked at (lookedAt) and proposed; trust them.
 - Money: prefer what the user already pays for (plans cost nothing more per call). Mention costs in dollars.
@@ -150,7 +201,18 @@ async function runTool(name, args, ctx) {
     const m = await catalogue();
     return { ...providersReport(m), recommended: await recommended(m), current: await models() };
   }
-  if (name === 'settings_find') return settingsFind(args || {}, prefs, defaults);
+  if (name === 'settings_find') {
+    const hits = settingsFind(args || {}, prefs, defaults);
+    return hits.length ? hits : { none: true, hint: 'no match: try one plain word (image, voice, budget, model) or a category', categories: Object.keys(CATS) };
+  }
+  if (name === 'chats') {
+    const ref = String(args?.project || '').trim().toLowerCase(), all = listProjects();
+    const p = ref ? all.find((x) => x.id.toLowerCase() === ref) || all.find((x) => x.name.toLowerCase() === ref) || all.find((x) => x.name.toLowerCase().includes(ref)) : null;
+    if (ref && !p) return { error: `no project "${args.project}"`, projects: all.map((x) => x.name) };
+    const page = chatPage({ project: p?.id || '', q: args?.query || '', limit: Math.min(30, Number(args?.limit) || 15) });
+    const names = Object.fromEntries(all.map((x) => [x.id, x.name]));
+    return { project: p?.name || 'all', total: page.total, chats: page.chats.map((c) => ({ id: c.id, title: c.title, project: names[c.projectId || 'scratch'] || 'Scratch', model: c.model || undefined, updated: c.updated ? new Date(c.updated).toISOString().slice(0, 16) : undefined })) };
+  }
   if (name === 'settings_set') {
     const s = SETTINGS_BY_KEY.get(String(args?.key || ''));
     if (!s || SECRET_KEY.test(s.key)) return { error: `no setting "${args?.key}"; use settings_find` };
@@ -199,6 +261,9 @@ export function parseReply(text) {
       return { say: String(j.say ?? ''), do: Array.isArray(j.do) ? j.do.filter((d) => d && typeof d.tool === 'string').slice(0, 6) : [] };
     } catch { /* not JSON after all */ }
   }
+  // A reply cut off mid-JSON (it ran out of room): keep the words it got to say.
+  const cut = body.match(/"say"\s*:\s*"((?:[^"\\]|\\.)*)/);
+  if (cut) { let t = cut[1]; try { t = JSON.parse(`"${t.replace(/\\$/, '')}"`); } catch { t = t.replace(/\\"/g, '"').replace(/\\n/g, '\n'); } return { say: `${t.trim()}${/"\s*[,}]/.test(body.slice(cut.index + cut[0].length, cut.index + cut[0].length + 3)) ? '' : '…'}`, do: [] }; }
   return { say: s, do: [] };
 }
 
@@ -215,7 +280,7 @@ export async function assistantTurn({ text, prefs = {}, defaults = {}, call } = 
     { role: 'user', content: said }];
   let cost = 0, plan = 0, reply = { say: '', do: [] }, used = m.talk, steps = [];
   for (let step = 0; step <= STEPS_MAX; step++) {
-    const r = await (call || ((b) => chatAny(b, undefined, { orChat })))({ model: m.talk, max_tokens: 700, temperature: 0.4, messages: msgs });
+    const r = await (call || ((b) => chatAny(b, undefined, { orChat })))({ model: m.talk, max_tokens: 1500, temperature: 0.4, messages: msgs });
     used = r.model || used;
     const c = Number(r.usage?.cost) || 0;
     cost += c;
