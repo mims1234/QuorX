@@ -130,7 +130,7 @@ test('its chat models: only chat ones, each maker from its owner, priced from it
 test('its picture, video and music lists, in the media catalogues’ shape', async () => {
   const img = await T.toapisImageModels(opts), vid = await T.toapisVideoModels(opts), mus = await T.toapisMusicModels(opts);
   assert.deepEqual(img.map((m) => [m.id, m.kind, m.out[0]]), [['toapis-api/gpt-image-2', 'image', 'image'], ['toapis-api/grok-image', 'image', 'image']]);
-  assert.deepEqual(vid.map((m) => [m.id, m.frames.join()]), [['toapis-api/seedance-2', 'first_frame'], ['toapis-api/seedance-2-ext', ''], ['toapis-api/grok-video-1.5', 'first_frame'], ['toapis-api/veo3.1-fast', 'first_frame']]);
+  assert.deepEqual(vid.map((m) => [m.id, m.frames.join()]), [['toapis-api/seedance-2', 'first_frame,last_frame'], ['toapis-api/seedance-2-ext', ''], ['toapis-api/grok-video-1.5', 'first_frame'], ['toapis-api/veo3.1-fast', 'first_frame,last_frame']]);
   assert.deepEqual(mus.map((m) => [m.id, m.perUse]), [['toapis-api/suno', 0.05]]);
   assert.ok([...img, ...vid, ...mus].every((m) => m.source === 'toapis-api'));
   // Prices from its public list, in the catalogues' own fields
@@ -169,6 +169,57 @@ test('a picture: shape as size (aspect_ratio for Grok), polled to done, download
   polls = {};
   await T.toapisImage({ model: 'toapis-api/grok-image', prompt: 'x', aspect_ratio: '1:1' }, sig(), opts);
   assert.equal(seen.findLast((x) => x.url === '/v1/images/generations' && x.method === 'POST').body.aspect_ratio, '1:1');
+});
+
+test('a picture from reference pictures: each uploaded, sent as image_urls up to the family’s count, with its size and quality fields', async () => {
+  const pic = `data:image/png;base64,${PNG.toString('base64')}`;
+  const refs = (n) => Array.from({ length: n }, () => ({ type: 'image_url', image_url: { url: pic } }));
+  const ups = () => seen.filter((x) => x.url === '/v1/uploads/images').length;
+  polls = {};
+  let before = ups();
+  await T.toapisImage({ model: 'toapis-api/gemini-3.1-flash-image-preview', prompt: 'the same cat, as a sticker', aspect_ratio: '1:1', resolution: '2K', input_references: refs(2) }, sig(), opts);
+  assert.equal(ups() - before, 2, 'each reference uploaded (ToAPIs takes links only)');
+  assert.deepEqual(seen.findLast((x) => x.url === '/v1/images/generations' && x.method === 'POST').body, { model: 'gemini-3.1-flash-image-preview', prompt: 'the same cat, as a sticker', n: 1, size: '1:1', metadata: { resolution: '2K' }, image_urls: [`${BASE}/files/start.png`, `${BASE}/files/start.png`] });
+  polls = {};
+  before = ups();
+  await T.toapisImage({ model: 'toapis-api/grok-image-2.0', prompt: 'x', quality: 'medium', resolution: '4K', input_references: refs(7) }, sig(), opts);
+  const grok = seen.findLast((x) => x.url === '/v1/images/generations' && x.method === 'POST').body;
+  assert.equal(grok.image_urls.length, 5, 'Grok takes 5');
+  assert.equal(grok.quality, 'medium');
+  assert.equal(grok.resolution, undefined, 'a size the family has no field for is left out');
+  // What each family takes, as imagine's options read it.
+  assert.deepEqual(T.imageFamily('toapis-api/gpt-image-2'), { refs: 10, res: { values: ['1k', '2k', '4k'], at: 'resolution' }, background: ['transparent', 'opaque'] });
+  assert.equal(T.imageFamily('toapis-api/doubao-seedream-5-0').res.values.join(), '2K,3K');
+  assert.equal(T.imageFamily('toapis-api/some-new-model').refs, 4);
+});
+
+test('a clip that ends on a picture, or follows reference pictures, in each family’s own fields', () => {
+  const B = (model, extra = {}) => ({ model: `toapis-api/${model}`, prompt: 'p', ...extra });
+  assert.deepEqual(T.toapisVideoBody(B('seedance-2'), 'https://x/a.png', 'https://x/b.png').image_with_roles, [{ url: 'https://x/a.png', role: 'first_frame' }, { url: 'https://x/b.png', role: 'last_frame' }]);
+  assert.deepEqual(T.toapisVideoBody(B('seedance-2'), null, null, ['https://x/r1.png', 'https://x/r2.png']).image_with_roles, [{ url: 'https://x/r1.png', role: 'reference_image' }, { url: 'https://x/r2.png', role: 'reference_image' }]);
+  assert.equal('image_urls' in T.toapisVideoBody(B('seedance-2'), 'https://x/a.png', 'https://x/b.png'), false, 'Seedance never mixes image_urls with roles');
+  assert.deepEqual(T.toapisVideoBody(B('kling-v3'), 'https://x/a.png', 'https://x/b.png').image_with_roles.map((r) => r.role), ['first_frame', 'last_frame']);
+  assert.deepEqual(T.toapisVideoBody(B('kling-v3'), null, null, ['https://x/r.png']).reference_images, ['https://x/r.png']);
+  const veo = T.toapisVideoBody(B('veo3.1-fast'), 'https://x/a.png', 'https://x/b.png');
+  assert.deepEqual([veo.image_urls, veo.metadata], [['https://x/a.png', 'https://x/b.png'], { generation_type: 'frame' }]);
+  assert.deepEqual(T.toapisVideoBody(B('veo3.1-lite'), null, null, ['1', '2', '3', '4']).metadata, { generation_type: 'reference' });
+  assert.deepEqual(T.toapisVideoBody(B('viduq3-pro'), 'https://x/a.png', 'https://x/b.png').image_urls, ['https://x/a.png', 'https://x/b.png']);
+  assert.deepEqual(T.toapisVideoBody(B('grok-video-1.0'), null, null, ['https://x/r.png']).reference_images, ['https://x/r.png']);
+  // References give way to a start picture; a seed goes to the families that take one.
+  const both = T.toapisVideoBody(B('kling-v3'), 'https://x/a.png', null, ['https://x/r.png']);
+  assert.equal('reference_images' in both, false);
+  assert.equal(T.toapisVideoBody(B('seedance-2', { seed: 7 })).seed, 7);
+  assert.equal(T.toapisVideoBody(B('kling-v3', { seed: 7 })).seed, undefined);
+});
+
+test('a Suno song in custom mode: lyrics, style, title and instrumental; the description alone otherwise', () => {
+  assert.deepEqual(T.sunoBody({ model: 'toapis-api/suno', prompt: 'a warm ballad', lyrics: '[Verse]\nHello', title: 'Hello', style: 'piano ballad, female vocals' }), { model: 'suno', custom: true, prompt: '[Verse]\nHello', style: 'piano ballad, female vocals', title: 'Hello' });
+  assert.deepEqual(T.sunoBody({ model: 'toapis-api/suno', prompt: 'calm study beats', style: 'lo-fi', instrumental: true }), { model: 'suno', custom: true, prompt: '', style: 'lo-fi', instrumental: true });
+  assert.deepEqual(T.sunoBody({ model: 'toapis-api/suno', prompt: 'an upbeat anthem', title: 'Go' }), { model: 'suno', custom: true, prompt: '', style: 'an upbeat anthem', title: 'Go', auto_lyrics: true }, 'no words given: Suno writes them');
+  assert.deepEqual(T.sunoBody({ model: 'toapis-api/suno', prompt: 'jazz', instrumental: true }), { model: 'suno', gpt_description: 'jazz', instrumental: true });
+  // Lyria takes it all as one text.
+  assert.equal(OR.lyriaPrompt({ prompt: 'a ballad', style: 'piano', lyrics: 'La la' }), 'a ballad\n\nStyle: piano\n\nLyrics:\nLa la');
+  assert.equal(OR.lyriaPrompt({ prompt: 'study beats', lyrics: 'ignored', instrumental: true }), 'study beats\n\nInstrumental only, no vocals.');
 });
 
 test('a video: the start picture uploaded first, each family’s own fields, the fallback link when the first fails', async () => {

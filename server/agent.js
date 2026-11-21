@@ -686,12 +686,18 @@ const takes = (lines) => (lines?.length ? ` What the models in use take: ${lines
 const mediaOptsParams = (cat, lines) => ({
   image: { resolution: { type: 'string', description: `Size, e.g. 1K, 2K or 4K (bigger costs more; default from ⚙ Settings).${takes(lines)}` },
     quality: { type: 'string', description: 'auto, low, medium, high… where the model offers it' }, output_format: { type: 'string', description: 'png, jpeg or webp, where offered' },
-    background: { type: 'string', description: 'transparent, opaque or auto, where offered (transparent for sprites and logos)' }, seed: { type: 'integer', description: 'The same seed and prompt give a similar picture again, where offered' } },
+    background: { type: 'string', description: 'transparent, opaque or auto, where offered (transparent for sprites and logos)' }, seed: { type: 'integer', description: 'The same seed and prompt give a similar picture again, where offered' },
+    output_compression: { type: 'integer', minimum: 0, maximum: 100, description: 'jpeg or webp compression, 0-100 (lower is a smaller file), where offered' } },
   video: { resolution: { type: 'string', description: `480p, 720p, 1080p… (higher costs more; default from ⚙ Settings).${takes(lines)}` },
     seed: { type: 'integer', description: 'Repeatable result, where offered' }, audio: { type: 'boolean', description: 'Sound in the clip, for models that make it (off is often cheaper)' } },
-  music: { seed: { type: 'integer', description: `Repeatable result.${takes(lines)}` } },
+  music: { seed: { type: 'integer', description: `Repeatable result.${takes(lines)}` },
+    lyrics: { type: 'string', description: 'The words to sing, with [Verse] / [Chorus] tags. Leave out for a song whose words the model writes' },
+    style: { type: 'string', description: 'Style tags: genre, mood, instruments, voice (e.g. "dreamy synth-pop, female vocals, 100 BPM")' },
+    title: { type: 'string', description: 'The song\'s name' },
+    instrumental: { type: 'boolean', description: 'No vocals' } },
   speech: { voice: { type: 'string', description: `The voice for this call (female, male, accent…): a name from the model's list. Default: the one ⚙ Settings give the model.${takes(lines)}` },
-    speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' } },
+    speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' },
+    style: { type: 'string', description: 'How to say it, in plain words (e.g. "warm and slow, like a bedtime story", "excited sports commentator"), for models that take directions' } },
 }[cat] || {});
 const modelParam = (choice) => (choice ? { model: { type: 'string', enum: choice.map((o) => o.model), description: `Which model to use: ${choice.map((o) => `${o.model} (≈$${o.est.toFixed(3)}, ${o.detail})`).join('; ')}` } } : {});
 // The desktop tool on macOS and Linux: what differs from Windows.
@@ -6347,7 +6353,8 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     if (cat === 'music') {
       const seed = Number.isInteger(Number(args.seed)) && args.seed !== '' && args.seed != null ? Number(args.seed) : undefined;
-      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed }, signal);
+      const song = { lyrics: args.lyrics, title: args.title, style: args.style, instrumental: args.instrumental };
+      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed, ...song }, signal);
       const cost = r.usage.cost ?? p.est;
       spend(cost, r.usage);
       const id = newId(`music ${clip(args.prompt, 30)}`);
@@ -6360,7 +6367,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (!can) return `Error: ${p.model} can't speak in a voice from a recording. ${cloneModelsLine()} Nothing was charged.`;
       references = speechRefs(inputs.samples, args.voice_sample_text, can);
     }
-    const r = await (deps.synthesize || synthesize)({ model: p.model, input: clip(args.text, 1500), voice: p.voice, speed: p.speed, references }, signal);
+    const r = await (deps.synthesize || synthesize)({ model: p.model, input: clip(args.text, 1500), voice: p.voice, speed: p.speed, references, ...(args.style ? { instructions: clip(String(args.style), 500) } : {}) }, signal);
     // The speech endpoint returns audio, not a bill, so the estimate is the cost.
     spend(p.est);
     const id = newId(`voice ${clip(args.text, 24)}`);

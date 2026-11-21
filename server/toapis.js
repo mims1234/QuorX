@@ -138,6 +138,26 @@ const owner = (m) => (typeof m.owned_by === 'string' && m.owned_by ? ` · ${m.ow
 const fromToapis = { source: TOAPIS_ID, created: 0, ctx: null, price: [0, 0] };
 const known = (ok) => (ok ? {} : { priceUnknown: true });
 
+// What each picture family takes (docs.toapis.com, per model page), in the shape of OpenRouter's supported_parameters
+// so imagine's options and references work the same way: refs = reference pictures (image_urls), res = the sizes and
+// where they go (resolution, or metadata.resolution), quality and background where documented.
+export function imageFamily(model) {
+  const m = isToapisModel(model) ? bare(model) : String(model || '');
+  if (/^gpt-image/i.test(m)) return { refs: 10, res: { values: ['1k', '2k', '4k'], at: 'resolution' }, background: ['transparent', 'opaque'] };
+  if (/^gemini-.*image/i.test(m)) return { refs: 6, res: { values: ['0.5K', '1K', '2K', '4K'], at: 'metadata' } };
+  if (/^(doubao-)?seedream-5/i.test(m)) return { refs: 10, res: { values: ['2K', '3K'], at: 'metadata' } };
+  if (/^grok-image-2/i.test(m)) return { refs: 5, quality: ['low', 'medium'] };
+  if (/^grok-image/i.test(m)) return { refs: 5 };
+  // Other families take image_urls too (the common field); how many isn't documented, so a few.
+  return { refs: 4 };
+}
+const familyParams = (f) => ({
+  input_references: { type: 'range', min: 0, max: f.refs },
+  ...(f.res ? { resolution: { type: 'enum', values: f.res.values } } : {}),
+  ...(f.quality ? { quality: { type: 'enum', values: f.quality } } : {}),
+  ...(f.background ? { background: { type: 'enum', values: f.background } } : {}),
+});
+
 /** Its picture models, in the shape of OpenRouter's image catalogue (openrouter.js imageModels), with its prices. */
 export async function toapisImageModels(opts) {
   const [list, prices] = await Promise.all([listOf('image', opts), toapisPrices(opts.base)]);
@@ -147,12 +167,15 @@ export async function toapisImageModels(opts) {
     const perImage = p?.per === 'call' ? p.usd : null, price = p?.per === 'token' ? [p.in, p.out] : [0, 0];
     return {
       ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'image', created: createdOf(m, p), price, perImage, ...known(perImage || price[1]),
-      in: ['text', 'image'], out: ['image'], params: {}, desc: `Pictures on ToAPIs${owner(m)}. Billed by ToAPIs ${perImage ? 'per picture' : 'per token'}.`,
+      in: ['text', 'image'], out: ['image'], params: familyParams(imageFamily(m.id)), desc: `Pictures on ToAPIs${owner(m)}. Billed by ToAPIs ${perImage ? 'per picture' : 'per token'}.`,
     };
   });
 }
 // Families whose clips start from a picture, and how they take it. The -ext Seedance models take reference pictures only.
 const NO_FRAME = /^seedance-2(-fast)?-ext$|^seedance-2[.-]5-ext$/i;
+// Families that can also end on a picture, and those that take a seed (each family's docs page).
+const LAST_FRAME = /^(seedance-2(-fast|-mini)?$|kling-v3$|veo3\.1-(fast|lite)$|viduq3-(pro|turbo)$|wan3)/i;
+const SEEDED = /^(seedance-2(-fast|-mini)?$|wan2\.6|viduq3)/i;
 /** Its price as the video catalogue's skus (agent.js videoPrice, the picker's videoRate read them), or {}. */
 function videoSkus(p) {
   if (p?.per === 'second') return { duration_seconds: String(p.usd) };
@@ -168,7 +191,7 @@ export async function toapisVideoModels(opts) {
     return {
       ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'video', created: createdOf(m, p), ...known(Object.keys(skus).length),
       in: ['text', 'image'], out: ['video'], skus, resolutions: [], durations: [], aspects: [],
-      frames: NO_FRAME.test(m.id) ? [] : ['first_frame'], audio: false, seed: false,
+      frames: NO_FRAME.test(m.id) ? [] : LAST_FRAME.test(m.id) ? ['first_frame', 'last_frame'] : ['first_frame'], audio: false, seed: SEEDED.test(m.id),
       desc: `Videos on ToAPIs${owner(m)}. Billed by ToAPIs ${p?.per === 'second' ? 'per second' : p?.per === 'call' ? 'per clip' : p?.per === 'token' ? 'per video token' : 'per clip'}.`,
     };
   });
@@ -194,6 +217,14 @@ export async function toapisImage(body, signal, { key, base }) {
   const t = Date.now(), model = bare(body.model);
   const req = { model, prompt: String(body.prompt || ''), n: 1 };
   if (/^\d+:\d+$/.test(String(body.aspect_ratio || ''))) req[/^grok-image/i.test(model) ? 'aspect_ratio' : 'size'] = body.aspect_ratio;
+  // The size, quality and background the family documents (imageFamily), where agent.js set them from its params.
+  const f = imageFamily(model);
+  if (body.resolution && f.res?.values.includes(body.resolution)) { if (f.res.at === 'metadata') (req.metadata ||= {}).resolution = body.resolution; else req.resolution = body.resolution; }
+  if (body.quality && f.quality?.includes(body.quality)) req.quality = body.quality;
+  if (body.background === 'transparent' && f.background) req.background = 'transparent';
+  // Reference pictures: ToAPIs takes links only, so each is uploaded first.
+  const refs = (body.input_references || []).map((r) => r?.image_url?.url).filter(Boolean).slice(0, f.refs);
+  if (refs.length) req.image_urls = await Promise.all(refs.map((u) => toapisUpload(u, signal, { key, base })));
   const job = await call(`${base}/images/generations`, { key, method: 'POST', body: req, signal });
   const id = job.id || job.task_id || job.data?.id;
   const st = job.status === 'completed' && job.result ? job : await untilDone(`${base}/images/generations/${encodeURIComponent(id)}`, { key, signal, every: 3000, limit: 6 * 60e3, what: 'the picture' });
@@ -208,7 +239,7 @@ export async function toapisImage(body, signal, { key, base }) {
 export async function toapisUpload(url, signal, { key, base }) {
   if (/^https:\/\//i.test(url)) return url;
   const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(String(url || ''));
-  if (!m) throw new Error('ToAPIs: the start picture must be a PNG, JPEG, WebP or GIF');
+  if (!m) throw new Error('ToAPIs: a picture must be a PNG, JPEG, WebP or GIF');
   const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }[m[1]] || 'png';
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(m[2], 'base64')], { type: m[1] }), `start.${ext}`);
@@ -219,7 +250,8 @@ export async function toapisUpload(url, signal, { key, base }) {
 // Families with no top-level resolution field (they take a mode, or put it in metadata).
 const NO_RES = /^(kling-v2-6|kling-v3|kling-v3-omni|kling-video-o1|sora|veo3\.1-(fast|lite)$|doubao-seedance-1-5)/i;
 /** The request body ToAPIs takes for one clip: the fields each family documents. firstUrl: an https start picture. */
-export function toapisVideoBody(body, firstUrl) {
+// lastUrl: an https end picture; refUrls: https reference pictures (each family's own field, where it has one).
+export function toapisVideoBody(body, firstUrl, lastUrl, refUrls = []) {
   const model = bare(body.model), req = { model, prompt: String(body.prompt || '') };
   const ext = NO_FRAME.test(model), secs = Math.round(Number(body.duration)) || undefined, shape = /^\d+:\d+$/.test(String(body.aspect_ratio || '')) ? body.aspect_ratio : undefined;
   if (ext) { if (secs) req.seconds = secs; if (shape) req.size = shape; } else {
@@ -228,10 +260,22 @@ export function toapisVideoBody(body, firstUrl) {
   }
   if (body.resolution && !NO_RES.test(model)) req.resolution = String(body.resolution);
   if (typeof body.generate_audio === 'boolean' && /^seedance-2/i.test(model) && !ext) req.generate_audio = body.generate_audio;
-  if (firstUrl) {
+  if (Number.isInteger(body.seed) && SEEDED.test(model)) req.seed = body.seed;
+  const roles = /^(wan3|kling-v2-6|kling-v3$)/i.test(model) || (lastUrl && /^seedance-2/i.test(model)) || (refUrls.length && /^seedance-2/i.test(model));
+  if (firstUrl || lastUrl) {
     if (/^grok-(imagine-)?video/i.test(model)) req.image = firstUrl;
-    else if (/^(wan3|kling-v2-6|kling-v3$)/i.test(model)) req.image_with_roles = [{ url: firstUrl, role: 'first_frame' }];
-    else req.image_urls = [firstUrl];
+    else if (roles) req.image_with_roles = [...(firstUrl ? [{ url: firstUrl, role: 'first_frame' }] : []), ...(lastUrl ? [{ url: lastUrl, role: 'last_frame' }] : [])];
+    else {
+      req.image_urls = [firstUrl, lastUrl].filter(Boolean);
+      // Veo takes start and end as a pair of frames.
+      if (lastUrl && /^veo3/i.test(model)) (req.metadata ||= {}).generation_type = 'frame';
+    }
+  } else if (refUrls.length) {
+    // Reference pictures for the look, where the family documents them (a start or end picture takes their place).
+    if (/^seedance-2/i.test(model)) req.image_with_roles = refUrls.slice(0, 9).map((url) => ({ url, role: 'reference_image' }));
+    else if (/^(kling-v3|grok-(imagine-)?video)/i.test(model)) req.reference_images = refUrls.slice(0, /^kling/i.test(model) ? 4 : 7);
+    else if (/^veo3/i.test(model)) { req.image_urls = refUrls.slice(0, 3); (req.metadata ||= {}).generation_type = 'reference'; }
+    else if (/^viduq3$/i.test(model) || NO_FRAME.test(model)) req.image_urls = refUrls.slice(0, 7);
   }
   return req;
 }
@@ -241,9 +285,11 @@ export function toapisVideoBody(body, firstUrl) {
  */
 export async function toapisVideo(body, signal, onStatus, { key, base }) {
   const t = Date.now();
-  const frame = body.frame_images?.find((f) => f.frame_type === 'first_frame')?.image_url?.url;
-  const firstUrl = frame ? await toapisUpload(frame, signal, { key, base }) : null;
-  const job = await call(`${base}/videos/generations`, { key, method: 'POST', body: toapisVideoBody(body, firstUrl), signal });
+  const frame = (type) => body.frame_images?.find((f) => f.frame_type === type)?.image_url?.url;
+  const up = (u) => (u ? toapisUpload(u, signal, { key, base }) : null);
+  const [firstUrl, lastUrl] = await Promise.all([up(frame('first_frame')), up(frame('last_frame'))]);
+  const refUrls = await Promise.all((body.input_references || []).map((r) => r?.image_url?.url).filter(Boolean).slice(0, 9).map(up));
+  const job = await call(`${base}/videos/generations`, { key, method: 'POST', body: toapisVideoBody(body, firstUrl, lastUrl, refUrls), signal });
   const id = job.id || job.task_id;
   // Seedance reviews start pictures before it begins, which can take several minutes on a first use.
   const st = await untilDone(`${base}/videos/generations/${encodeURIComponent(id)}`, { key, signal, every: 5000, limit: 20 * 60e3, what: 'the video', onStatus: (s, ms) => onStatus?.(s, ms) });
@@ -255,9 +301,24 @@ export async function toapisVideo(body, signal, onStatus, { key, base }) {
 
 // ---------- music ----------
 /** One song with Suno. Returns what composeMusic in openrouter.js returns: { url, text, usage, ms }. */
-export async function toapisMusic({ model, prompt }, signal, { key, base }) {
+// lyrics / title / style / instrumental: Suno's custom mode (the words sung, the song's name, its style tags, no vocals).
+// With none of them, the description alone (gpt_description) is Suno's own pick.
+export function sunoBody({ model, prompt, lyrics, title, style, instrumental }) {
+  const req = { model: bare(model) || 'suno' };
+  const custom = !!(String(lyrics || '').trim() || String(title || '').trim() || String(style || '').trim());
+  if (custom) {
+    req.custom = true;
+    req.prompt = String(lyrics || '').trim().slice(0, 5000);
+    req.style = String(style || prompt || '').trim().slice(0, 1000);
+    if (String(title || '').trim()) req.title = String(title).trim().slice(0, 120);
+  } else req.gpt_description = String(prompt || '').slice(0, 3000);
+  if (instrumental === true) req.instrumental = true;
+  else if (custom && !req.prompt) req.auto_lyrics = true; // a title or a style with no words: Suno writes them
+  return req;
+}
+export async function toapisMusic(args, signal, { key, base }) {
   const t = Date.now();
-  const job = await call(`${base}/music/generations/generation`, { key, method: 'POST', body: { model: bare(model) || 'suno', gpt_description: String(prompt || '').slice(0, 3000) }, signal });
+  const job = await call(`${base}/music/generations/generation`, { key, method: 'POST', body: sunoBody(args), signal });
   const id = job.task_id || job.id;
   const st = await untilDone(`${base}/music/tasks/${encodeURIComponent(id)}`, { key, signal, every: 5000, limit: 10 * 60e3, what: 'the song' });
   const song = (st.result?.music || []).find((x) => x?.audio_url);

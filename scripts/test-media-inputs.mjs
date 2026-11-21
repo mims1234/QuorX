@@ -120,12 +120,13 @@ test('speak copies a voice from a recording in the project with a model that clo
   {
     const sent = [];
     const wav = Buffer.from('RIFF-fake-wav');
-    const { bodies, events } = await run((body, i) => [reply('', [['speak', { text: 'Welcome back.', why: 'narration', voice_sample: ['audio/me.wav'], voice_sample_text: 'This is me talking.' }]]), reply('Done.')][i],
+    const { bodies, events } = await run((body, i) => [reply('', [['speak', { text: 'Welcome back.', why: 'narration', voice_sample: ['audio/me.wav'], voice_sample_text: 'This is me talking.', style: 'warm and slow' }]]), reply('Done.')][i],
       { settings: speechSettings('test/tts-clone'), prep: (d) => { fs.mkdirSync(path.join(d, 'audio')); fs.writeFileSync(path.join(d, 'audio', 'me.wav'), wav); },
         synthesize: async (b) => { sent.push(b); return { url: 'data:audio/mpeg;base64,AA', ms: 5 }; } });
     assert.equal(sent.length, 1);
     assert.deepEqual(sent[0].references, [{ type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${wav.toString('base64')}` } }, { type: 'text', text: 'This is me talking.' }]);
     assert.match(toolResults(bodies[1]).at(-1), /in the voice of audio\/me\.wav/);
+    assert.equal(sent[0].instructions, 'warm and slow', 'the style direction goes as instructions');
     assert.match(of(events, 'approval')[0].detail, /in the voice of audio\/me\.wav/);
     assert.match(bodies[0].tools.find((t) => t.function.name === 'speak').function.parameters.properties.voice_sample.description, /test\/tts-clone/);
   }

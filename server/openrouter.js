@@ -387,8 +387,14 @@ export async function synthesize({ model, input, voice, instructions, speed, ref
 }
 
 // Lyria answers a streamed chat request with base64 audio chunks.
-export async function composeMusic({ model, prompt, seed }, signal) {
+/** Lyria takes one text: the description, with the style, the song's name, the words sung and "no vocals" folded in. */
+export function lyriaPrompt({ prompt, lyrics, title, style, instrumental }) {
+  return [String(prompt || '').trim(), style && `Style: ${String(style).trim()}`, title && `Title: ${String(title).trim()}`,
+    instrumental === true ? 'Instrumental only, no vocals.' : lyrics && `Lyrics:\n${String(lyrics).trim()}`].filter(Boolean).join('\n\n');
+}
+export async function composeMusic({ model, prompt, seed, lyrics, title, style, instrumental }, signal) {
   const t = Date.now();
+  prompt = lyriaPrompt({ prompt, lyrics, title, style, instrumental });
   const r = await fetch(`${BASE}/api/v1/chat/completions`, { method: 'POST', headers: headers(), signal,
     body: JSON.stringify({ model, stream: true, modalities: ['text', 'audio'], audio: { format: 'mp3' }, ...(Number.isInteger(seed) ? { seed } : {}), messages: [{ role: 'user', content: prompt }] }) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`);
