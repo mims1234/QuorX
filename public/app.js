@@ -20,6 +20,7 @@ import * as SM from './settings-map.js';
 // Phones (and the desktop app shrunk beside an app for computer use) get the phone layout below this width; any
 // wider window keeps the desktop shell, folding its parts as it narrows (see "narrow windows"). CSS uses the same 720px.
 const PHONE_MQ = '(max-width: 720px)';
+import { initAssistant } from './assistant.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -18975,3 +18976,6 @@ function newsClick(e) {
 initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TOOL_NAME, listFilter, flashTip, ago, clip, savePrefs, showChat,
   closeWindows: () => { for (const id of ['permsDlg']) document.getElementById(id)?.close?.(); if (ST.host === 'page') closeSettings({ force: true }); }, 
   yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });
+
+// ✦ The QuorX assistant's drawer (public/assistant.js) uses the page's own helpers too.
+initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar });

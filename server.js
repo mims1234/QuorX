@@ -35,6 +35,7 @@ import { startLogin as mcpStartLogin, finishLogin as mcpFinishLogin, signOut as 
 import { CHECKS } from './server/harness-checks.js';
 import { startRun, getRun, stopRun, follow, runStatus, activeRuns, validRunId, scorecard, readLog, runEvents, recordRun, onRunEvent } from './server/runs.js';
 import { setBudget, budgetState, projectSpend, defaultBudget, setDefaultBudget } from './server/budget.js';
+import { assistantTurn, assistantState, confirmCard, clearHistory, noteCard } from './server/assistant.js';
 import { shellRun, shellClose, shellInfo } from './server/shell.js';
 import { ptyAvailable, ptyOpen, ptyWrite, ptyResize, ptyFollow, ptyClose, ptyList } from './server/pty.js';
 import { gitInfo, createWorktree, worktreeOf, folderIdFor, worktreeStatus, removeWorktree, staleWorktrees, listWorktrees, spaceInfo } from './server/worktrees.js';
@@ -264,6 +265,12 @@ const server = http.createServer(async (req, res) => {
     }
     // Suggested next steps under a finished reply: one short helper-model call, asked for by the page only when the
     // setting is on.
+    // ✦ The QuorX assistant (server/assistant.js): talk, its state, a confirmed card, a fresh conversation.
+    if (url.pathname === '/api/assistant' && req.method === 'GET') return json(res, 200, await assistantState());
+    if (url.pathname === '/api/assistant' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, await assistantTurn({ text: b.text, prefs: b.prefs || {}, defaults: DEFAULTS })); } catch (e) { return json(res, 200, { error: e.message }); } }
+    if (url.pathname === '/api/assistant/confirm' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); try { return json(res, 200, await confirmCard(b.card)); } catch (e) { return json(res, 200, { error: e.message }); } }
+    if (url.pathname === '/api/assistant/clear' && req.method === 'POST') return json(res, 200, clearHistory());
+    if (url.pathname === '/api/assistant/card' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 4e3) || '{}'); return json(res, 200, noteCard(b)); }
     if (url.pathname === '/api/next-steps' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 4e4) || '{}'); try { return json(res, 200, await nextStepsFor({ request: b.request, reply: b.reply, model: b.model, chatModel: b.chatModel })); } catch (e) { return json(res, 400, { error: e.message }); } }
     // /btw: a side question on the chat so far, with no tools, never added to the chat. Its cost goes to the ledger and
     // the chat's spend like a review's.
