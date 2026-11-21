@@ -361,6 +361,7 @@ function pcmToWav(pcm, rate = 24000) {
 }
 
 // A speech model's endpoints: which of them copy a voice from a recording (supports_voice_cloning and friends).
+// (Video models use the same endpoints list: each endpoint's tag names the provider for provider.options.)
 export const speechEndpoints = (id) => cached(`speech-ep:${id}`, async () => {
   const j = await (await fetch(`${BASE}/api/v1/models/${String(id).split('/').map(encodeURIComponent).join('/')}/endpoints`)).json();
   return j.data?.endpoints || [];
@@ -428,6 +429,8 @@ export const videoModels = () => cached('videos', async () => {
     aspects: m.supported_aspect_ratios || [],
     // first_frame / last_frame: the pictures it can start (or end) a clip from; audio: whether it makes sound.
     frames: m.supported_frame_images || [], audio: m.generate_audio === true, seed: m.seed === true,
+    // Settings its providers take beyond OpenRouter's own fields (negative prompt, watermark…): provider.options.<tag>.
+    passthrough: m.allowed_passthrough_parameters || [],
   }));
 });
 

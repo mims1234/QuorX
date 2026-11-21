@@ -56,11 +56,13 @@ const server = http.createServer((req, res) => {
     }
     // Uploads (multipart) and videos
     if (req.method === 'POST' && req.url === '/v1/uploads/images') return json(200, { success: true, data: { id: 'up1', url: `${BASE}/files/start.png`, mime_type: 'image/png', size: 30 } });
+    if (req.method === 'POST' && req.url === '/v1/uploads/videos') return json(200, { success: true, data: { id: 'up2', url: `${BASE}/files/ref.mp4`, mime_type: 'video/mp4', size: 30 } });
+    if (req.method === 'POST' && req.url === '/v1/uploads/audios') return json(200, { success: true, data: { id: 'up3', url: `${BASE}/files/ref.mp3`, mime_type: 'audio/mpeg', size: 30 } });
     if (req.method === 'POST' && req.url === '/v1/videos/generations') return json(200, { id: 'vid_1', object: 'generation.task', status: 'queued' });
     if (req.url === '/v1/videos/generations/vid_1') return json(200, { id: 'vid_1', status: 'completed', result: { type: 'video', data: [{ url: `${BASE}/files/gone.mp4`, fallback_url: `${BASE}/files/clip.mp4` }] }, billing: { status: 'settled', cost_usd: '0.6' } });
     if (req.method === 'POST' && req.url === '/v1/videos/generations/fail') return json(200, {});
     // Suno
-    if (req.method === 'POST' && req.url === '/v1/music/generations/generation') return json(200, { task_id: 'tsk_aud_1', status: 'submitted' });
+    if (req.method === 'POST' && /^\/v1\/music\/generations\/(generation|uploadCover|uploadExtend)$/.test(req.url)) return json(200, { task_id: 'tsk_aud_1', status: 'submitted' });
     if (req.url === '/v1/music/tasks/tsk_aud_1') return json(200, { id: 'tsk_aud_1', status: 'completed', cost: 0.05, result: { music: [{ audio_url: `${BASE}/files/song.mp3`, title: 'Rain', tags: 'lo-fi jazz', duration: 120 }, { audio_url: `${BASE}/files/song2.mp3` }] } });
     if (req.url === '/files/pic.png' || req.url === '/files/start.png') return file('image/png');
     if (req.url === '/files/clip.mp4') return file('video/mp4');
@@ -220,6 +222,33 @@ test('a Suno song in custom mode: lyrics, style, title and instrumental; the des
   // Lyria takes it all as one text.
   assert.equal(OR.lyriaPrompt({ prompt: 'a ballad', style: 'piano', lyrics: 'La la' }), 'a ballad\n\nStyle: piano\n\nLyrics:\nLa la');
   assert.equal(OR.lyriaPrompt({ prompt: 'study beats', lyrics: 'ignored', instrumental: true }), 'study beats\n\nInstrumental only, no vocals.');
+});
+
+test('Seedance follows reference clips and sounds: each uploaded to its own endpoint, sent with its role; never with frames, a sound never alone', async () => {
+  const B = (extra = {}) => ({ model: 'toapis-api/seedance-2', prompt: 'p', ...extra });
+  const body = T.toapisVideoBody(B(), null, null, ['https://x/r.png'], ['https://x/v.mp4'], ['https://x/a.mp3']);
+  assert.deepEqual(body.video_with_roles, [{ url: 'https://x/v.mp4', role: 'reference_video' }]);
+  assert.deepEqual(body.audio_with_roles, [{ url: 'https://x/a.mp3', role: 'reference_audio' }]);
+  assert.equal('audio_with_roles' in T.toapisVideoBody(B(), null, null, [], [], ['https://x/a.mp3']), false, 'a sound alone is not sent');
+  assert.equal('video_with_roles' in T.toapisVideoBody(B(), 'https://x/f.png', null, [], ['https://x/v.mp4']), false, 'frames and references never mix');
+  assert.equal('video_with_roles' in T.toapisVideoBody({ ...B(), model: 'toapis-api/kling-v3' }, null, null, [], ['https://x/v.mp4']), false, 'only Seedance 2');
+  // Through toapisVideo: the clip and the sound go up first, each to its own uploads endpoint.
+  const vid = `data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`, snd = `data:audio/mpeg;base64,${Buffer.from('mp3').toString('base64')}`;
+  await T.toapisVideo(B({ duration: 5, reference_videos: [vid], reference_audios: [snd] }), sig(), () => {}, opts);
+  assert.ok(seen.some((x) => x.url === '/v1/uploads/videos') && seen.some((x) => x.url === '/v1/uploads/audios'));
+  const sent = seen.findLast((x) => x.url === '/v1/videos/generations').body;
+  assert.deepEqual([sent.video_with_roles, sent.audio_with_roles], [[{ url: `${BASE}/files/ref.mp4`, role: 'reference_video' }], [{ url: `${BASE}/files/ref.mp3`, role: 'reference_audio' }]]);
+  await assert.rejects(T.toapisUpload('data:text/plain;base64,AA', sig(), opts, 'video'), /reference clip must be an MP4/);
+});
+
+test('Suno covers or continues a recording: uploaded, then uploadCover or uploadExtend', async () => {
+  assert.deepEqual(T.sunoRequest({ model: 'toapis-api/suno', prompt: 'as a jazz trio', cover: 'data:...' }, 'https://x/a.mp3'), { op: 'uploadCover', body: { model: 'suno', audio_url: 'https://x/a.mp3', custom: false, gpt_description: 'as a jazz trio' } });
+  assert.deepEqual(T.sunoRequest({ model: 'toapis-api/suno', prompt: 'p', style: 'rock', lyrics: 'La', cover: 'x' }, 'https://x/a.mp3').body, { model: 'suno', audio_url: 'https://x/a.mp3', custom: true, prompt: 'La', style: 'rock' });
+  assert.deepEqual(T.sunoRequest({ model: 'toapis-api/suno', prompt: 'keep going, bigger chorus', extend: 'x', continue_at: 42 }, 'https://x/a.mp3'), { op: 'uploadExtend', body: { model: 'suno', audio_url: 'https://x/a.mp3', continue_at: 42, style: 'keep going, bigger chorus' } });
+  assert.equal(T.sunoRequest({ model: 'toapis-api/suno', prompt: 'new' }).op, 'generation');
+  const snd = `data:audio/mpeg;base64,${Buffer.from('mp3').toString('base64')}`;
+  await T.toapisMusic({ model: 'toapis-api/suno', prompt: 'more', extend: snd, continue_at: 30 }, sig(), opts);
+  assert.deepEqual(seen.findLast((x) => x.url === '/v1/music/generations/uploadExtend').body, { model: 'suno', audio_url: `${BASE}/files/ref.mp3`, continue_at: 30, style: 'more' });
 });
 
 test('a video: the start picture uploaded first, each family’s own fields, the fallback link when the first fails', async () => {

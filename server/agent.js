@@ -78,7 +78,7 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
-import { mediaInputs, imageRefMax, voiceClone, speechRefs, pictureRefs, AUDIO_TYPES, VOICE_SAMPLE_MAX } from './mediainputs.js';
+import { mediaInputs, imageRefMax, voiceClone, speechRefs, pictureRefs, passthroughBody, AUDIO_TYPES, VOICE_SAMPLE_MAX, VIDEO_TYPES, REF_VIDEO_MAX } from './mediainputs.js';
 import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine, offered } from './mediaopts.js';
 import { execFileSync } from 'node:child_process';
 import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
@@ -694,7 +694,10 @@ const mediaOptsParams = (cat, lines) => ({
     lyrics: { type: 'string', description: 'The words to sing, with [Verse] / [Chorus] tags. Leave out for a song whose words the model writes' },
     style: { type: 'string', description: 'Style tags: genre, mood, instruments, voice (e.g. "dreamy synth-pop, female vocals, 100 BPM")' },
     title: { type: 'string', description: 'The song\'s name' },
-    instrumental: { type: 'boolean', description: 'No vocals' } },
+    instrumental: { type: 'boolean', description: 'No vocals' },
+    cover: { type: 'string', description: 'A recording in the project (mp3, wav, m4a) to make a new version of, in the style asked for. Only models that edit songs' },
+    extend: { type: 'string', description: 'A recording in the project (mp3, wav, m4a) to continue. Only models that edit songs' },
+    continue_at: { type: 'number', minimum: 0, description: 'extend: the second the continuation starts from (the end of the part to keep)' } },
   speech: { voice: { type: 'string', description: `The voice for this call (female, male, accent…): a name from the model's list. Default: the one ⚙ Settings give the model.${takes(lines)}` },
     speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' },
     style: { type: 'string', description: 'How to say it, in plain words (e.g. "warm and slow, like a bedtime story", "excited sports commentator"), for models that take directions' } },
@@ -978,6 +981,10 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
       ...(choices.videoStart?.length ? { start_image: { type: 'string', description: `A picture to start the clip from (its first frame): a project path such as assets/generated/frame.png, artifact:<id>, or attached:1. Only these models take one: ${choices.videoStart.join(', ')}.` } } : {}),
       ...(choices.videoEnd?.length ? { end_image: { type: 'string', description: `A picture for the clip to end on (its last frame), same forms as start_image. Only these models take one: ${choices.videoEnd.join(', ')}.` } } : {}),
       references: { type: 'array', maxItems: 4, items: { type: 'string' }, description: 'Pictures that guide the look or the subject (reference-to-video), when the clip should not start from one: attached:1, a project path or artifact:<id>. Only some models use them; a start or end picture takes their place.' },
+      ...(choices.videoRefMedia?.length ? {
+        reference_video: { type: 'array', maxItems: 3, items: { type: 'string' }, description: `Clips in the project (mp4, webm, mov; up to 50 MB) whose motion, camera or style the new clip follows. Not with start_image or end_image. Only these models take them: ${choices.videoRefMedia.join(', ')}.` },
+        reference_audio: { type: 'array', maxItems: 3, items: { type: 'string' }, description: `Sounds in the project (mp3, wav, m4a) for the clip's audio: music to move to, a voice to lip-sync. Only together with reference_video or references. Same models as reference_video.` } } : {}),
+      ...(Object.keys(choices.videoSettings || {}).length ? { provider_options: { type: 'object', additionalProperties: true, description: `Settings a model's provider takes beyond the fields above, as {"name": value}. Only the names listed for the model are sent: ${Object.entries(choices.videoSettings).map(([m, k]) => `${m}: ${k.join(', ')}`).join('; ')}.` } } : {}),
       ...modelParam(choices.video) } } } }] : []),
   ...(code && cats.length ? [{ type: 'function', function: { name: 'edit_video', description: 'Join video clips and pictures (in order), a voice-over and music into one finished .mp4 in the project, with ffmpeg on this computer (free; it runs as a shell command, so the usual command rules and approval apply). The clips\' own sound is left out; the voice and the music run to the end of the picture.', parameters: {
     type: 'object', required: ['clips', 'out'], properties: {
@@ -1403,7 +1410,7 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
   // What the models in use take besides the prompt (server/mediainputs.js): reference pictures, start and end pictures,
   // a voice to copy. The tools offer those inputs, naming the models that use them.
-  const inputLists = { images: () => (deps.mediaCatalogue?.image ? Promise.resolve(deps.mediaCatalogue.image) : imageModels()), videos: () => (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()), speechEndpoints: deps.speechEndpoints || speechEndpoints };
+  const inputLists = { images: () => (deps.mediaCatalogue?.image ? Promise.resolve(deps.mediaCatalogue.image) : imageModels()), videos: () => (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()), music: () => (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()), speechEndpoints: deps.speechEndpoints || speechEndpoints };
   Object.assign(choices, await mediaInputs(cats, T, inputLists), { inputsFor: cats.join() });
   choices.opts = await mediaOptionLines(cats, T, deps);
   const fileList = root ? listFiles(root, 60).map((f) => f.path) : [];
@@ -5717,7 +5724,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const what = cat === 'speech' ? clip(args.text, 200) : clip(args.prompt, 300);
     // Every model in the category with its price, so the user can switch before approving.
     const options = await Promise.all(T[cat].models.map((m) => estimateFor(cat, m, args, T)));
-    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}${cat === 'video' && args.end_image ? `, ending on ${clip(args.end_image, 120)}` : ''}${(cat === 'image' || cat === 'video') && Array.isArray(args.references) && args.references.length ? `, working from ${clip(args.references.join(', '), 160)}` : ''}${cat === 'speech' && args.voice_sample ? `, in the voice of ${clip([].concat(args.voice_sample).join(', '), 120)}` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
+    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}${cat === 'video' && args.end_image ? `, ending on ${clip(args.end_image, 120)}` : ''}${(cat === 'image' || cat === 'video') && Array.isArray(args.references) && args.references.length ? `, working from ${clip(args.references.join(', '), 160)}` : ''}${cat === 'speech' && args.voice_sample ? `, in the voice of ${clip([].concat(args.voice_sample).join(', '), 120)}` : ''}${cat === 'video' && args.reference_video ? `, following ${clip([].concat(args.reference_video).join(', '), 120)}` : ''}${cat === 'video' && args.reference_audio ? `, with the sound of ${clip([].concat(args.reference_audio).join(', '), 120)}` : ''}${cat === 'music' && args.cover ? `, a cover of ${clip(String(args.cover), 120)}` : ''}${cat === 'music' && args.extend ? `, continuing ${clip(String(args.extend), 120)} from ${Number(args.continue_at) || 0} s` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
       pickedBy: T[cat].pick === 'agent' && T[cat].models.length > 1 ? 'agent' : 'settings', options: options.map(({ model, est, basis, detail }) => ({ model, est, basis, detail })) };
     // The chat's budget (with its allowance for finishing work) is the only limit on paid media.
     const pb = chatId ? budgetState(chatId) : null;
@@ -6341,7 +6348,20 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       if (vb.error) return `Error: ${vb.error}. Nothing was charged.`; // the user switched to a model without picture input
       const extra = videoExtras(spec, args);
       const body = { ...vb.body, ...extra.body };
-      vb.note = `${vb.note}${p.note || ''}${extra.note}`;
+      if (inputs.videos?.length || inputs.audios?.length) {
+        if (!spec?.refMedia?.length) return `Error: ${p.model} can't follow reference clips or sounds. Nothing was charged.`;
+        if (inputs.videos.length) body.reference_videos = inputs.videos;
+        if (inputs.audios.length) body.reference_audios = inputs.audios;
+      }
+      // The provider's own settings (allowed_passthrough_parameters), under each of its endpoints' tags.
+      let passNote = '';
+      if (args.provider_options && typeof args.provider_options === 'object') {
+        const tags = spec?.passthrough?.length ? (await (deps.speechEndpoints || speechEndpoints)(p.model).catch(() => [])).map((e) => e.tag) : [];
+        const pt = passthroughBody(args.provider_options, spec?.passthrough || [], tags);
+        if (pt.provider) body.provider = pt.provider;
+        passNote = pt.note;
+      }
+      vb.note = `${vb.note}${p.note || ''}${extra.note}${passNote}`;
       emit({ t: 'note', level: 'info', msg: `Video job started on ${short(p.model)} (${p.detail}${firstFrame ? ', from a picture' : ''}); this usually takes 30 seconds to a few minutes.`, at: at() });
       const r = await (deps.generateVideo || generateVideo)(body, signal, (status, ms) => emit({ t: 'media_status', tool: name, status, ms, at: at() }));
       const cost = r.usage.cost ?? p.est;
@@ -6353,7 +6373,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     if (cat === 'music') {
       const seed = Number.isInteger(Number(args.seed)) && args.seed !== '' && args.seed != null ? Number(args.seed) : undefined;
-      const song = { lyrics: args.lyrics, title: args.title, style: args.style, instrumental: args.instrumental };
+      if (inputs.song && !(await (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()).catch(() => [])).find((m) => m.id === p.model)?.edits) return `Error: ${p.model} can't cover or continue a recording. Nothing was charged.`;
+      const song = { lyrics: args.lyrics, title: args.title, style: args.style, instrumental: args.instrumental,
+        ...(inputs.song ? { [args.cover ? 'cover' : 'extend']: inputs.song, continue_at: Number(args.continue_at) || 0 } : {}) };
       const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed, ...song }, signal);
       const cost = r.usage.cost ?? p.est;
       spend(cost, r.usage);
@@ -6403,6 +6425,33 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       out.lastFrame = await startPicture(String(args.end_image));
       if (!out.lastFrame) return { error: `Error: no picture at ${clip(args.end_image, 120)}. Give a PNG, JPEG or WebP in the project, artifact:<id> of a picture, or attached:1.` };
     }
+    if (cat === 'video' && (list(args.reference_video).length || list(args.reference_audio).length)) {
+      const spec = (await (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()).catch(() => [])).find((m) => m.id === model);
+      if (!spec?.refMedia?.length) return { error: `Error: ${model} can't follow reference clips or sounds.${choices.videoRefMedia?.length ? ` These models can: ${choices.videoRefMedia.join(', ')}.` : ' None of the video models in use can; leave out reference_video and reference_audio.'}` };
+      if (args.start_image || args.end_image) return { error: 'Error: reference clips and sounds can\'t go with a start or end picture (the model works either from frames or from references). Use references for pictures instead.' };
+      if (list(args.reference_audio).length && !list(args.reference_video).length && !list(args.references).length) return { error: 'Error: a reference sound needs a reference clip or reference pictures with it.' };
+      out.videos = [];
+      for (const r of list(args.reference_video).slice(0, 3)) {
+        const u = fileData(r, VIDEO_TYPES, REF_VIDEO_MAX, 'clip');
+        if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp4, webm or mov file in the project.` };
+        out.videos.push(u);
+      }
+      out.audios = [];
+      for (const r of list(args.reference_audio).slice(0, 3)) {
+        const u = fileData(r, AUDIO_TYPES, REF_VIDEO_MAX, 'sound');
+        if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp3, wav or m4a file in the project.` };
+        out.audios.push(u);
+      }
+    }
+    if (cat === 'music' && (args.cover || args.extend)) {
+      const spec = (await (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()).catch(() => [])).find((m) => m.id === model);
+      if (!spec?.edits) return { error: `Error: ${model} can't cover or continue a recording.${choices.musicEdit?.length ? ` These models can: ${choices.musicEdit.join(', ')}.` : ' None of the music models in use can (Suno on ToAPIs can); leave out cover and extend.'}` };
+      if (args.cover && args.extend) return { error: 'Error: give cover or extend, not both.' };
+      if (args.extend && !(Number(args.continue_at) > 0)) return { error: 'Error: extend needs continue_at: the second the continuation starts from.' };
+      const u = fileData(String(args.cover || args.extend), AUDIO_TYPES, REF_VIDEO_MAX, 'recording');
+      if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp3, wav or m4a file in the project.` };
+      out.song = u;
+    }
     if (cat === 'speech' && list(args.voice_sample).length) {
       if (!(choices.voiceClone?.[model] || await voiceCloneOf(model))) return { error: `Error: ${model} can't speak in a voice from a recording. ${cloneModelsLine()}` };
       out.samples = [];
@@ -6415,19 +6464,22 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     return out;
   }
   // A voice sample as a data URL: an audio file in the project, or a voice artifact. Otherwise why not, in words.
-  function voiceSample(ref) {
+  function voiceSample(ref) { return fileData(ref, AUDIO_TYPES, VOICE_SAMPLE_MAX, 'recording'); }
+  // A file the call works from, as a data URL: a file in the project of one of `types`, or (for sounds) an audio
+  // artifact. Otherwise why not, in words.
+  function fileData(ref, types, max, noun) {
     if (ref.startsWith('artifact:')) {
       const a = arts.get(ref.slice(9));
-      if (a?.kind !== 'audio' || !a.url) return `artifact ${ref.slice(9)} is not a recording`;
+      if (types !== AUDIO_TYPES || a?.kind !== 'audio' || !a.url) return `artifact ${ref.slice(9)} is not a ${noun}`;
       return (a.url.startsWith('/blob/') ? blobData(a.url) : a.url) || `artifact ${ref.slice(9)} could not be read`;
     }
     if (!root) return 'the project folder is switched off';
     const rel = ref.replace(/^file:/, '').replace(/^[/\\]+/, '');
-    const type = AUDIO_TYPES[rel.split('.').pop().toLowerCase()];
-    if (!type) return `${clip(rel, 120)} is not a sound file`;
+    const type = types[rel.split('.').pop().toLowerCase()];
+    if (!type) return `${clip(rel, 120)} is not a ${noun} file`;
     let full; try { full = safePath(root, rel); } catch (e) { return e.message; }
-    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return `no recording at ${clip(rel, 120)}`;
-    if (fs.statSync(full).size > VOICE_SAMPLE_MAX) return `${clip(rel, 120)} is over 15 MB; cut a shorter sample`;
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return `no ${noun} at ${clip(rel, 120)}`;
+    if (fs.statSync(full).size > max) return `${clip(rel, 120)} is over ${Math.round(max / 1048576)} MB; use a shorter one`;
     return `data:${type};base64,${fs.readFileSync(full).toString('base64')}`;
   }
 

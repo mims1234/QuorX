@@ -25,7 +25,7 @@ export const voiceClone = (endpoints) => {
  * voiceClone: { id: { multi, image } } }. lists: { images(), videos(), speechEndpoints(id) }, each async.
  */
 export async function mediaInputs(cats, T, lists) {
-  const out = { imageRefs: {}, videoStart: [], videoEnd: [], voiceClone: {} };
+  const out = { imageRefs: {}, videoStart: [], videoEnd: [], voiceClone: {}, videoSettings: {}, videoRefMedia: [], musicEdit: [] };
   if (cats.includes('image')) {
     for (const m of await lists.images().catch(() => [])) if (T.image?.models?.includes(m.id) && imageRefMax(m)) out.imageRefs[m.id] = imageRefMax(m);
   }
@@ -34,7 +34,12 @@ export async function mediaInputs(cats, T, lists) {
       if (!T.video?.models?.includes(m.id)) continue;
       if (videoFrames(m).includes('first_frame')) out.videoStart.push(m.id);
       if (videoFrames(m).includes('last_frame')) out.videoEnd.push(m.id);
+      if (m.passthrough?.length) out.videoSettings[m.id] = m.passthrough;
+      if (m.refMedia?.length) out.videoRefMedia.push(m.id);
     }
+  }
+  if (cats.includes('music') && lists.music) {
+    for (const m of await lists.music().catch(() => [])) if (T.music?.models?.includes(m.id) && m.edits) out.musicEdit.push(m.id);
   }
   if (cats.includes('speech')) {
     for (const id of T.speech?.models || []) {
@@ -57,3 +62,26 @@ export function speechRefs(samples, transcript, { multi = false } = {}) {
 }
 /** input_references for pictures (image or video calls): data or https URLs. */
 export const pictureRefs = (urls) => urls.map((url) => ({ type: 'image_url', image_url: { url } }));
+
+// Video files a reference clip may be (ToAPIs takes MP4, WebM and MOV, up to 50 MB).
+export const VIDEO_TYPES = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+export const REF_VIDEO_MAX = 50 * 1024 * 1024;
+
+/**
+ * A video model's provider settings (its catalogue's allowed_passthrough_parameters) as OpenRouter's request field:
+ * provider.options.<endpoint tag>, nested under `parameters` for Google's Veo (google-vertex), as the docs show.
+ * Returns { provider, note }: settings the model doesn't list are left out, and the note says which.
+ */
+export function passthroughBody(opts, allowed, tags) {
+  const want = opts && typeof opts === 'object' && !Array.isArray(opts) ? opts : {};
+  const ok = {}, skipped = [];
+  for (const [k, v] of Object.entries(want)) {
+    if (v === undefined || v === null || v === '') continue;
+    const hit = (allowed || []).find((a) => a.toLowerCase() === k.toLowerCase());
+    if (hit) ok[hit] = v; else skipped.push(k);
+  }
+  const note = skipped.length ? ` The model doesn't take ${skipped.join(', ')}${allowed?.length ? ` (it takes ${allowed.join(', ')})` : ''}, so ${skipped.length > 1 ? 'they were' : 'it was'} left out.` : '';
+  const list = [...new Set((tags || []).filter(Boolean))];
+  if (!Object.keys(ok).length || !list.length) return { provider: null, note: note || (Object.keys(ok).length ? ' Its provider settings were left out: QuorX could not tell which provider runs it.' : '') };
+  return { provider: { options: Object.fromEntries(list.map((t) => [t, t === 'google-vertex' ? { parameters: ok } : ok])) }, note };
+}

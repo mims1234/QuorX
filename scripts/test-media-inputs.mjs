@@ -9,7 +9,7 @@ import path from 'node:path';
 import { reply, run, toolResults, of } from './agent-harness.mjs';
 import { primeCatalogue } from '../server/openrouter.js';
 import { videoBody } from '../server/video.js';
-import { imageRefMax, voiceClone, speechRefs, pictureRefs, mediaInputs } from '../server/mediainputs.js';
+import { imageRefMax, voiceClone, speechRefs, pictureRefs, mediaInputs, passthroughBody } from '../server/mediainputs.js';
 
 const PNG = (s) => `data:image/png;base64,${Buffer.from(s).toString('base64')}`;
 const IMG_REF = { id: 'test/img-ref', name: 'Ref', kind: 'image', in: ['text', 'image'], out: ['image'], price: [0, 0], perImage: 0.02, params: { input_references: { type: 'range', min: 0, max: 2 } } };
@@ -41,7 +41,41 @@ test('what each model takes, from the catalogues', async () => {
     images: async () => [IMG_REF, IMG_TEXT], videos: async () => [{ id: 'v/both', frames: ['first_frame', 'last_frame'] }, { id: 'v/start', frames: ['first_frame'] }, { id: 'v/unused', frames: ['last_frame'] }],
     speechEndpoints: async (id) => (id === 'test/tts-clone' ? [{ supports_voice_cloning: true }] : []),
   });
-  assert.deepEqual(got, { imageRefs: { 'test/img-ref': 2 }, videoStart: ['v/both', 'v/start'], videoEnd: ['v/both'], voiceClone: { 'test/tts-clone': { multi: false, image: false } } });
+  assert.deepEqual(got, { imageRefs: { 'test/img-ref': 2 }, videoStart: ['v/both', 'v/start'], videoEnd: ['v/both'], voiceClone: { 'test/tts-clone': { multi: false, image: false } }, videoSettings: {}, videoRefMedia: [], musicEdit: [] });
+});
+
+test("a video model's provider settings go under each provider's tag, Veo's nested in parameters, unknown ones left out", () => {
+  const veo = passthroughBody({ negativePrompt: 'blur', personGeneration: 'allow', colour: 'red' }, ['personGeneration', 'negativePrompt'], ['google-vertex']);
+  assert.deepEqual(veo.provider, { options: { 'google-vertex': { parameters: { negativePrompt: 'blur', personGeneration: 'allow' } } } });
+  assert.match(veo.note, /doesn't take colour \(it takes personGeneration, negativePrompt\)/);
+  assert.deepEqual(passthroughBody({ Watermark: false }, ['watermark'], ['seed', 'seed']).provider, { options: { seed: { watermark: false } } }, 'the catalogue spelling, one entry per provider');
+  assert.equal(passthroughBody({ x: 1 }, [], ['a']).provider, null);
+  assert.match(passthroughBody({ watermark: false }, ['watermark'], []).note, /could not tell which provider/);
+  assert.equal(passthroughBody(undefined, ['a'], ['t']).provider, null);
+});
+
+test('make_video sends provider settings and Seedance reference clips through the tool; models that cannot are refused before paying', async () => {
+  const VO = { id: 'test/veo', name: 'Veo', kind: 'video', skus: { duration_seconds_480p: 0.02 }, resolutions: ['480p'], durations: [5], aspects: ['16:9'], frames: ['first_frame'], passthrough: ['negativePrompt'] };
+  const SD = { ...VO, id: 'test/seed', passthrough: [], refMedia: ['video', 'audio'] };
+  primeCatalogue('videos', [VO, SD]);
+  primeCatalogue('speech-ep:test/veo', [{ tag: 'google-vertex' }]);
+  const settings = (m) => ({ mediaEnabled: true, yoloCheck: false, tools: { browser: { on: false }, image: { on: false }, music: { on: false }, speech: { on: false }, video: { on: true, pick: 'fixed', models: [m], resolution: '480p', seconds: 5 } } });
+  const sent = [];
+  const fake = async (b) => { sent.push(b); return { url: 'data:video/mp4;base64,AA', usage: { cost: 0.1 }, ms: 5 }; };
+  const r1 = await run((body, i) => [reply('', [['make_video', { prompt: 'a calm sea', why: 'x', provider_options: { negativePrompt: 'people' } }]]), reply('Done.')][i], { settings: settings('test/veo'), generateVideo: fake });
+  assert.deepEqual(sent[0].provider, { options: { 'google-vertex': { parameters: { negativePrompt: 'people' } } } });
+  assert.match(r1.bodies[0].tools.find((t) => t.function.name === 'make_video').function.parameters.properties.provider_options.description, /test\/veo: negativePrompt/);
+  const prep = (d) => { fs.mkdirSync(path.join(d, 'clips')); fs.writeFileSync(path.join(d, 'clips', 'dance.mp4'), 'mp4'); fs.writeFileSync(path.join(d, 'clips', 'beat.mp3'), 'mp3'); fs.writeFileSync(path.join(d, 'x.png'), 'png'); };
+  const r2 = await run((body, i) => [reply('', [['make_video', { prompt: 'the same dance', why: 'x', reference_video: ['clips/dance.mp4'], reference_audio: ['clips/beat.mp3'] }]]), reply('Done.')][i], { settings: settings('test/seed'), prep, generateVideo: fake });
+  assert.deepEqual([sent[1].reference_videos, sent[1].reference_audios], [[`data:video/mp4;base64,${Buffer.from('mp4').toString('base64')}`], [`data:audio/mpeg;base64,${Buffer.from('mp3').toString('base64')}`]]);
+  assert.match(of(r2.events, 'approval')[0].detail, /following clips\/dance\.mp4, with the sound of clips\/beat\.mp3/);
+  // Refused before approval: a model without them, a sound alone, references with a start picture.
+  for (const [model, args, why] of [['test/veo', { reference_video: ['clips/dance.mp4'] }, /can't follow reference clips/], ['test/seed', { reference_audio: ['clips/beat.mp3'] }, /needs a reference clip or reference pictures/], ['test/seed', { reference_video: ['clips/dance.mp4'], start_image: 'x.png' }, /can't go with a start or end picture/]]) {
+    const r = await run((body, i) => [reply('', [['make_video', { prompt: 'p', why: 'x', ...args }]]), reply('Done.')][i], { settings: settings(model), prep, generateVideo: fake });
+    assert.match(toolResults(r.bodies[1]).at(-1), why);
+    assert.equal(of(r.events, 'approval').length, 0);
+  }
+  assert.equal(sent.length, 2);
 });
 
 test('a clip can end on a picture and be guided by reference pictures; the frames win when both are given', () => {

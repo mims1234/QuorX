@@ -176,6 +176,7 @@ const NO_FRAME = /^seedance-2(-fast)?-ext$|^seedance-2[.-]5-ext$/i;
 // Families that can also end on a picture, and those that take a seed (each family's docs page).
 const LAST_FRAME = /^(seedance-2(-fast|-mini)?$|kling-v3$|veo3\.1-(fast|lite)$|viduq3-(pro|turbo)$|wan3)/i;
 const SEEDED = /^(seedance-2(-fast|-mini)?$|wan2\.6|viduq3)/i;
+const REF_MEDIA = /^seedance-2(-fast|-mini)?$/i;
 /** Its price as the video catalogue's skus (agent.js videoPrice, the picker's videoRate read them), or {}. */
 function videoSkus(p) {
   if (p?.per === 'second') return { duration_seconds: String(p.usd) };
@@ -192,6 +193,8 @@ export async function toapisVideoModels(opts) {
       ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'video', created: createdOf(m, p), ...known(Object.keys(skus).length),
       in: ['text', 'image'], out: ['video'], skus, resolutions: [], durations: [], aspects: [],
       frames: NO_FRAME.test(m.id) ? [] : LAST_FRAME.test(m.id) ? ['first_frame', 'last_frame'] : ['first_frame'], audio: false, seed: SEEDED.test(m.id),
+      // Seedance 2 also follows reference clips and sounds (video_with_roles / audio_with_roles).
+      refMedia: REF_MEDIA.test(m.id) ? ['video', 'audio'] : [],
       desc: `Videos on ToAPIs${owner(m)}. Billed by ToAPIs ${p?.per === 'second' ? 'per second' : p?.per === 'call' ? 'per clip' : p?.per === 'token' ? 'per video token' : 'per clip'}.`,
     };
   });
@@ -203,7 +206,7 @@ export async function toapisMusicModels(opts) {
     const p = prices.get(m.id), perUse = p?.per === 'call' ? p.usd : null;
     return {
       ...fromToapis, id: PREFIX + m.id, name: nice(m.id), kind: 'music', created: createdOf(m, p), in: ['text'], out: ['audio'], perUse, ...known(perUse),
-      length: 'full song', desc: `Suno songs on ToAPIs${perUse ? `: $${perUse} a call` : ''} (two versions per call; QuorX keeps the first).`,
+      length: 'full song', edits: true, desc: `Suno songs on ToAPIs${perUse ? `: $${perUse} a call` : ''} (two versions per call; QuorX keeps the first).`,
     };
   });
 }
@@ -236,22 +239,29 @@ export async function toapisImage(body, signal, { key, base }) {
 
 // ---------- videos ----------
 /** Uploads a picture (a data URL) so a job can use it; an https URL is used as it is. */
-export async function toapisUpload(url, signal, { key, base }) {
+// A clip or a sound goes the same way, to its own uploads endpoint (videos: MP4, WebM, MOV; audios: MP3, WAV, M4A).
+const UPLOADS = {
+  image: { at: 'images', what: 'a picture must be a PNG, JPEG, WebP or GIF', ext: { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' } },
+  video: { at: 'videos', what: 'a reference clip must be an MP4, WebM or MOV', ext: { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' } },
+  audio: { at: 'audios', what: 'a sound must be an MP3, WAV or M4A', ext: { 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a' } },
+};
+export async function toapisUpload(url, signal, { key, base }, kind = 'image') {
   if (/^https:\/\//i.test(url)) return url;
-  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(String(url || ''));
-  if (!m) throw new Error('ToAPIs: a picture must be a PNG, JPEG, WebP or GIF');
-  const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }[m[1]] || 'png';
+  const u = UPLOADS[kind] || UPLOADS.image;
+  const m = /^data:([\w-]+\/[\w.+-]+);base64,(.+)$/s.exec(String(url || ''));
+  if (!m || !u.ext[m[1]]) throw new Error(`ToAPIs: ${u.what}`);
   const form = new FormData();
-  form.append('file', new Blob([Buffer.from(m[2], 'base64')], { type: m[1] }), `start.${ext}`);
-  const j = await call(`${base}/uploads/images`, { key, method: 'POST', form, signal, ms: 120000 });
-  if (!j?.data?.url) throw new Error('ToAPIs: the picture upload returned no URL');
+  form.append('file', new Blob([Buffer.from(m[2], 'base64')], { type: m[1] }), `${kind}.${u.ext[m[1]]}`);
+  const j = await call(`${base}/uploads/${u.at}`, { key, method: 'POST', form, signal, ms: 300000 });
+  if (!j?.data?.url) throw new Error(`ToAPIs: the ${kind === 'image' ? 'picture' : kind === 'video' ? 'clip' : 'sound'} upload returned no URL`);
   return j.data.url;
 }
 // Families with no top-level resolution field (they take a mode, or put it in metadata).
 const NO_RES = /^(kling-v2-6|kling-v3|kling-v3-omni|kling-video-o1|sora|veo3\.1-(fast|lite)$|doubao-seedance-1-5)/i;
 /** The request body ToAPIs takes for one clip: the fields each family documents. firstUrl: an https start picture. */
 // lastUrl: an https end picture; refUrls: https reference pictures (each family's own field, where it has one).
-export function toapisVideoBody(body, firstUrl, lastUrl, refUrls = []) {
+// videoUrls / audioUrls: https reference clips and sounds (Seedance 2 only; reference mode, never with frames).
+export function toapisVideoBody(body, firstUrl, lastUrl, refUrls = [], videoUrls = [], audioUrls = []) {
   const model = bare(body.model), req = { model, prompt: String(body.prompt || '') };
   const ext = NO_FRAME.test(model), secs = Math.round(Number(body.duration)) || undefined, shape = /^\d+:\d+$/.test(String(body.aspect_ratio || '')) ? body.aspect_ratio : undefined;
   if (ext) { if (secs) req.seconds = secs; if (shape) req.size = shape; } else {
@@ -277,6 +287,12 @@ export function toapisVideoBody(body, firstUrl, lastUrl, refUrls = []) {
     else if (/^veo3/i.test(model)) { req.image_urls = refUrls.slice(0, 3); (req.metadata ||= {}).generation_type = 'reference'; }
     else if (/^viduq3$/i.test(model) || NO_FRAME.test(model)) req.image_urls = refUrls.slice(0, 7);
   }
+  if (REF_MEDIA.test(model) && !firstUrl && !lastUrl) {
+    const few = 3;
+    if (videoUrls.length) req.video_with_roles = videoUrls.slice(0, few).map((url) => ({ url, role: 'reference_video' }));
+    // A sound goes only with a picture or a clip to go with it (ToAPIs refuses it alone).
+    if (audioUrls.length && (videoUrls.length || refUrls.length)) req.audio_with_roles = audioUrls.slice(0, few).map((url) => ({ url, role: 'reference_audio' }));
+  }
   return req;
 }
 /**
@@ -289,7 +305,10 @@ export async function toapisVideo(body, signal, onStatus, { key, base }) {
   const up = (u) => (u ? toapisUpload(u, signal, { key, base }) : null);
   const [firstUrl, lastUrl] = await Promise.all([up(frame('first_frame')), up(frame('last_frame'))]);
   const refUrls = await Promise.all((body.input_references || []).map((r) => r?.image_url?.url).filter(Boolean).slice(0, 9).map(up));
-  const job = await call(`${base}/videos/generations`, { key, method: 'POST', body: toapisVideoBody(body, firstUrl, lastUrl, refUrls), signal });
+  const upAs = (kind) => (u) => toapisUpload(u, signal, { key, base }, kind);
+  const videoUrls = await Promise.all((body.reference_videos || []).slice(0, 3).map(upAs('video')));
+  const audioUrls = await Promise.all((body.reference_audios || []).slice(0, 3).map(upAs('audio')));
+  const job = await call(`${base}/videos/generations`, { key, method: 'POST', body: toapisVideoBody(body, firstUrl, lastUrl, refUrls, videoUrls, audioUrls), signal });
   const id = job.id || job.task_id;
   // Seedance reviews start pictures before it begins, which can take several minutes on a first use.
   const st = await untilDone(`${base}/videos/generations/${encodeURIComponent(id)}`, { key, signal, every: 5000, limit: 20 * 60e3, what: 'the video', onStatus: (s, ms) => onStatus?.(s, ms) });
@@ -316,9 +335,28 @@ export function sunoBody({ model, prompt, lyrics, title, style, instrumental }) 
   else if (custom && !req.prompt) req.auto_lyrics = true; // a title or a style with no words: Suno writes them
   return req;
 }
+/**
+ * The request for a cover of a recording (uploadCover) or a continuation of one (uploadExtend), with the recording's
+ * https link: { op, body }. Otherwise a new song: { op: 'generation', body: sunoBody(args) }.
+ */
+export function sunoRequest(args, audioUrl) {
+  const song = sunoBody(args);
+  if (args.cover && audioUrl) {
+    const { model, custom, prompt, style, gpt_description: desc, instrumental } = song;
+    return { op: 'uploadCover', body: { model, audio_url: audioUrl, custom: !!custom, ...(custom ? { prompt, style } : { gpt_description: desc }), ...(instrumental ? { instrumental } : {}) } };
+  }
+  if (args.extend && audioUrl) {
+    const at = Math.max(0, Number(args.continue_at) || 0);
+    return { op: 'uploadExtend', body: { model: song.model, audio_url: audioUrl, continue_at: at, ...(song.custom ? { prompt: song.prompt } : {}), style: song.style || String(args.prompt || '').slice(0, 1000) } };
+  }
+  return { op: 'generation', body: song };
+}
 export async function toapisMusic(args, signal, { key, base }) {
   const t = Date.now();
-  const job = await call(`${base}/music/generations/generation`, { key, method: 'POST', body: sunoBody(args), signal });
+  // A recording to cover or to continue goes up first (ToAPIs takes links only).
+  const audioUrl = args.cover || args.extend ? await toapisUpload(args.cover || args.extend, signal, { key, base }, 'audio') : null;
+  const { op, body } = sunoRequest(args, audioUrl);
+  const job = await call(`${base}/music/generations/${op}`, { key, method: 'POST', body, signal });
   const id = job.task_id || job.id;
   const st = await untilDone(`${base}/music/tasks/${encodeURIComponent(id)}`, { key, signal, every: 5000, limit: 10 * 60e3, what: 'the song' });
   const song = (st.result?.music || []).find((x) => x?.audio_url);
