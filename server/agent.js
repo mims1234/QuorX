@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { chat, chatStream, routeLimits, generationCost, chatModels, speechModels, synthesize, HOME } from './openrouter.js';
+import { chat, chatStream, routeLimits, generationCost, chatModels, speechModels, synthesize, speechEndpoints, HOME } from './openrouter.js';
 import { imageModels, generateImage, composeMusic, musicModels, videoModels, generateVideo } from './mediacat.js';
 import { ensemble, GATE } from './decisions.js';
 import { runtime, knownProviders, currentKey } from './openrouter.js';
@@ -78,6 +78,7 @@ import { modelNotes } from './modelcards.js';
 import { ownAddresses } from './access.js';
 import { safeFetch } from './safefetch.js';
 import { videoBody, canStartFromImage, editCommand, ffmpegMajor } from './video.js';
+import { mediaInputs, imageRefMax, voiceClone, speechRefs, pictureRefs, passthroughBody, AUDIO_TYPES, VOICE_SAMPLE_MAX, VIDEO_TYPES, REF_VIDEO_MAX } from './mediainputs.js';
 import { pickVoice, pickSpeed, imageSize, videoSize, imageExtras, videoExtras, optionsLine, offered } from './mediaopts.js';
 import { execFileSync } from 'node:child_process';
 import { mapMusic, pickWindows, fitPlan, writeFit } from './musicmap.js';
@@ -685,12 +686,21 @@ const takes = (lines) => (lines?.length ? ` What the models in use take: ${lines
 const mediaOptsParams = (cat, lines) => ({
   image: { resolution: { type: 'string', description: `Size, e.g. 1K, 2K or 4K (bigger costs more; default from ⚙ Settings).${takes(lines)}` },
     quality: { type: 'string', description: 'auto, low, medium, high… where the model offers it' }, output_format: { type: 'string', description: 'png, jpeg or webp, where offered' },
-    background: { type: 'string', description: 'transparent, opaque or auto, where offered (transparent for sprites and logos)' }, seed: { type: 'integer', description: 'The same seed and prompt give a similar picture again, where offered' } },
+    background: { type: 'string', description: 'transparent, opaque or auto, where offered (transparent for sprites and logos)' }, seed: { type: 'integer', description: 'The same seed and prompt give a similar picture again, where offered' },
+    output_compression: { type: 'integer', minimum: 0, maximum: 100, description: 'jpeg or webp compression, 0-100 (lower is a smaller file), where offered' } },
   video: { resolution: { type: 'string', description: `480p, 720p, 1080p… (higher costs more; default from ⚙ Settings).${takes(lines)}` },
     seed: { type: 'integer', description: 'Repeatable result, where offered' }, audio: { type: 'boolean', description: 'Sound in the clip, for models that make it (off is often cheaper)' } },
-  music: { seed: { type: 'integer', description: `Repeatable result.${takes(lines)}` } },
+  music: { seed: { type: 'integer', description: `Repeatable result.${takes(lines)}` },
+    lyrics: { type: 'string', description: 'The words to sing, with [Verse] / [Chorus] tags. Leave out for a song whose words the model writes' },
+    style: { type: 'string', description: 'Style tags: genre, mood, instruments, voice (e.g. "dreamy synth-pop, female vocals, 100 BPM")' },
+    title: { type: 'string', description: 'The song\'s name' },
+    instrumental: { type: 'boolean', description: 'No vocals' },
+    cover: { type: 'string', description: 'A recording in the project (mp3, wav, m4a) to make a new version of, in the style asked for. Only models that edit songs' },
+    extend: { type: 'string', description: 'A recording in the project (mp3, wav, m4a) to continue. Only models that edit songs' },
+    continue_at: { type: 'number', minimum: 0, description: 'extend: the second the continuation starts from (the end of the part to keep)' } },
   speech: { voice: { type: 'string', description: `The voice for this call (female, male, accent…): a name from the model's list. Default: the one ⚙ Settings give the model.${takes(lines)}` },
-    speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' } },
+    speed: { type: 'number', minimum: 0.5, maximum: 2, description: '1 = normal; 0.8 slower, 1.2 faster' },
+    style: { type: 'string', description: 'How to say it, in plain words (e.g. "warm and slow, like a bedtime story", "excited sports commentator"), for models that take directions' } },
 }[cat] || {});
 const modelParam = (choice) => (choice ? { model: { type: 'string', enum: choice.map((o) => o.model), description: `Which model to use: ${choice.map((o) => `${o.model} (≈$${o.est.toFixed(3)}, ${o.detail})`).join('; ')}` } } : {});
 // The desktop tool on macOS and Linux: what differs from Windows.
@@ -960,6 +970,7 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
     type: 'object', required: ['prompt', 'why'], properties: {
       prompt: { type: 'string', description: 'Vivid visual description' }, why: { type: 'string', description: 'One plain sentence: why this picture is worth it' },
       aspect_ratio: { type: 'string', enum: ['1:1', '16:9', '21:9', '9:16', '4:3', '3:4', '3:2', '2:3'], description: 'The shape, to fit where the picture goes: 16:9 or 21:9 for hero banners and desktop backgrounds, 9:16 for phone screens, 3:4 or 2:3 for portrait cards and posters, 1:1 square (default)' },
+      ...(Object.keys(choices.imageRefs || {}).length ? { references: { type: 'array', maxItems: Math.max(...Object.values(choices.imageRefs)), items: { type: 'string' }, description: `Pictures to work from (image-to-image): edit the user's photo, keep a character, product or style the same, or combine several. Each is attached:1 (the user's first attached picture), a project path such as assets/generated/hero.png, or artifact:<id>. Say in the prompt what to do with them. Models that take them, with how many: ${Object.entries(choices.imageRefs).map(([m, n]) => `${m} (${n})`).join(', ')}.` } } : {}),
       ...mediaOptsParams('image', choices.opts?.image), ...modelParam(choices.image) } } } }] : []),
   ...(cats.includes('video') ? [{ type: 'function', function: { name: 'make_video', description: `Generate a short video clip (paid, usually the most expensive tool; takes 30 seconds to a few minutes; needs approval). It opens as a video artifact. For a film of several clips: make the key pictures first${choices.videoStart?.length ? ' and start each clip from one (start_image), so characters and style stay the same from shot to shot' : ''}; then join the clips, the voice-over and the music into one file${code ? ' with edit_video' : ''}.`, parameters: {
     type: 'object', required: ['prompt', 'why'], properties: {
@@ -968,6 +979,12 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
       aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'], description: '16:9 (default) for widescreen, 9:16 for phones' },
       ...mediaOptsParams('video', choices.opts?.video),
       ...(choices.videoStart?.length ? { start_image: { type: 'string', description: `A picture to start the clip from (its first frame): a project path such as assets/generated/frame.png, artifact:<id>, or attached:1. Only these models take one: ${choices.videoStart.join(', ')}.` } } : {}),
+      ...(choices.videoEnd?.length ? { end_image: { type: 'string', description: `A picture for the clip to end on (its last frame), same forms as start_image. Only these models take one: ${choices.videoEnd.join(', ')}.` } } : {}),
+      references: { type: 'array', maxItems: 4, items: { type: 'string' }, description: 'Pictures that guide the look or the subject (reference-to-video), when the clip should not start from one: attached:1, a project path or artifact:<id>. Only some models use them; a start or end picture takes their place.' },
+      ...(choices.videoRefMedia?.length ? {
+        reference_video: { type: 'array', maxItems: 3, items: { type: 'string' }, description: `Clips in the project (mp4, webm, mov; up to 50 MB) whose motion, camera or style the new clip follows. Not with start_image or end_image. Only these models take them: ${choices.videoRefMedia.join(', ')}.` },
+        reference_audio: { type: 'array', maxItems: 3, items: { type: 'string' }, description: `Sounds in the project (mp3, wav, m4a) for the clip's audio: music to move to, a voice to lip-sync. Only together with reference_video or references. Same models as reference_video.` } } : {}),
+      ...(Object.keys(choices.videoSettings || {}).length ? { provider_options: { type: 'object', additionalProperties: true, description: `Settings a model's provider takes beyond the fields above, as {"name": value}. Only the names listed for the model are sent: ${Object.entries(choices.videoSettings).map(([m, k]) => `${m}: ${k.join(', ')}`).join('; ')}.` } } : {}),
       ...modelParam(choices.video) } } } }] : []),
   ...(code && cats.length ? [{ type: 'function', function: { name: 'edit_video', description: 'Join video clips and pictures (in order), a voice-over and music into one finished .mp4 in the project, with ffmpeg on this computer (free; it runs as a shell command, so the usual command rules and approval apply). The clips\' own sound is left out; the voice and the music run to the end of the picture.', parameters: {
     type: 'object', required: ['clips', 'out'], properties: {
@@ -981,7 +998,11 @@ const TOOLS = ({ artifacts, decide, cats, choices, code, browser, skills, ask, d
       prompt: { type: 'string', description: 'Genre, mood, instruments, tempo; lyrics for a song with words' }, why: { type: 'string' }, ...mediaOptsParams('music', choices.opts?.music), ...modelParam(choices.music) } } } }] : []),
   ...(cats.includes('speech') ? [{ type: 'function', function: { name: 'speak', description: 'Read text aloud with an AI voice (paid; needs approval). It opens as an audio artifact.', parameters: {
     type: 'object', required: ['text', 'why'], properties: {
-      text: { type: 'string', description: 'What to say (plain text, under 1500 characters)' }, why: { type: 'string' }, ...mediaOptsParams('speech', choices.opts?.speech), ...modelParam(choices.speech) } } } }] : []),
+      text: { type: 'string', description: 'What to say (plain text, under 1500 characters)' }, why: { type: 'string' }, ...mediaOptsParams('speech', choices.opts?.speech),
+      ...(Object.keys(choices.voiceClone || {}).length ? {
+        voice_sample: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string' }, description: `Speak in the voice of a recording (voice cloning): an audio file in the project (mp3, wav, ogg, m4a, flac; files the user attached are in the project too) or artifact:<id> of a voice made earlier. Only with the person's consent to copy their voice. A clean 10 to 60 seconds works best. It replaces the voice name. Models that take one: ${Object.entries(choices.voiceClone).map(([m, v]) => `${m}${v.multi ? ' (up to 3)' : ''}`).join(', ')}.${Object.keys(choices.voiceClone).some((m) => /seed-audio/.test(m)) ? ' With bytedance-seed/seed-audio, name each sample in the text as @Audio1, @Audio2, @Audio3 (every sample must be named).' : ''}` },
+        voice_sample_text: { type: 'string', description: 'What the voice sample says, word for word, when you know it (helps some models copy the voice)' } } : {}),
+      ...modelParam(choices.speech) } } } }] : []),
 ];
 
 // Turns the agent's compact questions into decider questions, keeping its guess for comparison.
@@ -1387,8 +1408,10 @@ async function runAgentInner(req, emit, signal, cleanups, deps, spent = {}) {
   // When the agent picks the model, its tool lists each option with an estimated price.
   const choices = {};
   for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
-  // The video models in use that can start a clip from a picture (the catalogue lists a first-frame input).
-  if (cats.includes('video')) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+  // What the models in use take besides the prompt (server/mediainputs.js): reference pictures, start and end pictures,
+  // a voice to copy. The tools offer those inputs, naming the models that use them.
+  const inputLists = { images: () => (deps.mediaCatalogue?.image ? Promise.resolve(deps.mediaCatalogue.image) : imageModels()), videos: () => (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()), music: () => (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()), speechEndpoints: deps.speechEndpoints || speechEndpoints };
+  Object.assign(choices, await mediaInputs(cats, T, inputLists), { inputsFor: cats.join() });
   choices.opts = await mediaOptionLines(cats, T, deps);
   const fileList = root ? listFiles(root, 60).map((f) => f.path) : [];
   const helpersOn = !!root && S.helpers !== false && projectSize(root) >= Math.max(0, Number(S.helperMinFiles ?? DEFAULTS.helperMinFiles) || 0);
@@ -5701,7 +5724,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     const what = cat === 'speech' ? clip(args.text, 200) : clip(args.prompt, 300);
     // Every model in the category with its price, so the user can switch before approving.
     const options = await Promise.all(T[cat].models.map((m) => estimateFor(cat, m, args, T)));
-    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
+    const card = { id, tool, cat, model: plan.model, est: plan.est, basis: plan.basis, detail: `${plan.detail}${cat === 'video' && args.start_image ? `, from the picture ${clip(args.start_image, 120)}` : ''}${cat === 'video' && args.end_image ? `, ending on ${clip(args.end_image, 120)}` : ''}${(cat === 'image' || cat === 'video') && Array.isArray(args.references) && args.references.length ? `, working from ${clip(args.references.join(', '), 160)}` : ''}${cat === 'speech' && args.voice_sample ? `, in the voice of ${clip([].concat(args.voice_sample).join(', '), 120)}` : ''}${cat === 'video' && args.reference_video ? `, following ${clip([].concat(args.reference_video).join(', '), 120)}` : ''}${cat === 'video' && args.reference_audio ? `, with the sound of ${clip([].concat(args.reference_audio).join(', '), 120)}` : ''}${cat === 'music' && args.cover ? `, a cover of ${clip(String(args.cover), 120)}` : ''}${cat === 'music' && args.extend ? `, continuing ${clip(String(args.extend), 120)} from ${Number(args.continue_at) || 0} s` : ''}`, what, why: clip(args.why, 200), mode: S.approval,
       pickedBy: T[cat].pick === 'agent' && T[cat].models.length > 1 ? 'agent' : 'settings', options: options.map(({ model, est, basis, detail }) => ({ model, est, basis, detail })) };
     // The chat's budget (with its allowance for finishing work) is the only limit on paid media.
     const pb = chatId ? budgetState(chatId) : null;
@@ -5781,7 +5804,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   // The paid tools offered to the model follow the kinds switched on, after enable_media turns one on mid-reply.
   async function refreshMediaTools() {
     for (const c of cats) if (T[c].pick === 'agent' && T[c].models.length > 1 && !choices[c]) choices[c] = await Promise.all(T[c].models.map((m) => estimateFor(c, m, {}, T)));
-    if (cats.includes('video') && !choices.videoStart) choices.videoStart = (await videoModels().catch(() => [])).filter((m) => T.video.models.includes(m.id) && canStartFromImage(m)).map((m) => m.id);
+    if (!choices.inputsFor || choices.inputsFor !== cats.join()) Object.assign(choices, await mediaInputs(cats, T, inputLists), { inputsFor: cats.join() });
     choices.opts = await mediaOptionLines(cats, T, deps);
     const fresh = TOOLS({ artifacts: T.artifacts.on, decide: decidersOn && setup.decide !== 'off', cats, choices, code: !!root, browser: browserOn, skills: skills.length > 0, ask: askOn, docs: docsOn, helpers: helpersOn, plan: goal });
     const media = new Set(['media_plan', 'edit_video', ...Object.values(MEDIA).map((m) => m.tool)]);
@@ -5850,7 +5873,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     if (!m || !T[m[1]]) return false;
     T[m[1]][m[2]] = m[2] === 'models' ? [...value] : m[2] === 'voices' ? { ...value } : value;
     if (m[2] === 'models' || m[2] === 'pick') delete choices[m[1]];
-    if (m[2] === 'models') delete choices.videoStart;
+    if (m[2] === 'models') delete choices.inputsFor;
     if (cats.includes(m[1])) await refreshMediaTools();
     return true;
   }
@@ -6275,6 +6298,9 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       firstFrame = await startPicture(String(args.start_image));
       if (!firstFrame) return `Error: no picture at ${clip(args.start_image, 120)}. Give a PNG, JPEG or WebP in the project (e.g. assets/generated/frame.png), artifact:<id> of a picture, or attached:1.`;
     }
+    // Reference pictures, an end picture and a voice sample: read, and the model checked, before anyone pays.
+    const inputs = await mediaInputsFor(cat, args, plan.model);
+    if (inputs.error) return inputs.error;
     const ans = await approve(cat, args, plan);
     if (!ans.approve) {
       const who = ans.by === 'user' ? 'The user' : ans.by === 'budget' ? 'The budget check' : 'The automatic approval check';
@@ -6288,6 +6314,14 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       // Size, format, background, quality and seed: what the call asked for, as far as this model takes it.
       const extra = imageExtras(spec, args);
       const body = { model: p.model, prompt: String(args.prompt || ''), ...extra.body };
+      let refNote = '';
+      if (inputs.pictures?.length) {
+        // The user may have switched to a model that takes fewer (or none): send what it takes, or stop before paying.
+        const max = imageRefMax(spec);
+        if (!max) return `Error: ${p.model} can't work from pictures. ${refModelsLine()} Nothing was charged.`;
+        body.input_references = pictureRefs(inputs.pictures.slice(0, max));
+        refNote = inputs.pictures.length > max ? ` ${short(p.model)} takes ${max} reference picture${max > 1 ? 's' : ''}, so only the first ${max} were used.` : ` Worked from ${inputs.pictures.length} reference picture${inputs.pictures.length > 1 ? 's' : ''}.`;
+      }
       if (spec?.params?.resolution?.type === 'enum') body.resolution = p.res;
       // The shape the agent asked for, or the model's nearest one (some models offer fewer ratios).
       let ratioNote = '';
@@ -6306,15 +6340,28 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       const id = newId(`image ${clip(args.prompt, 30)}`);
       notes.push(`made picture ${id}`);
       const used = [p.res && `size ${p.res}`, ...['output_format', 'background', 'quality', 'seed'].filter((k) => extra.body[k] != null).map((k) => `${k} ${extra.body[k]}`)].filter(Boolean).join(', ');
-      return deliverMedia(id, r.images[0], 'png', { id, kind: 'image', title: clip(args.prompt, 40), url: r.images[0], v: 1, cost, ms: r.ms, model: p.model }, `Picture made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms${used ? `, ${used}` : ''}).${ratioNote}${p.note || ''}${extra.note}${switched}`);
+      return deliverMedia(id, r.images[0], 'png', { id, kind: 'image', title: clip(args.prompt, 40), url: r.images[0], v: 1, cost, ms: r.ms, model: p.model }, `Picture made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms${used ? `, ${used}` : ''}).${ratioNote}${refNote}${p.note || ''}${extra.note}${switched}`);
     }
     if (cat === 'video') {
       const spec = (await videoModels().catch(() => [])).find((m) => m.id === p.model);
-      const vb = videoBody({ model: p.model, prompt: args.prompt, secs: p.secs, res: p.res, spec, aspect: args.aspect_ratio, firstFrame });
+      const vb = videoBody({ model: p.model, prompt: args.prompt, secs: p.secs, res: p.res, spec, aspect: args.aspect_ratio, firstFrame, lastFrame: inputs.lastFrame, references: inputs.pictures });
       if (vb.error) return `Error: ${vb.error}. Nothing was charged.`; // the user switched to a model without picture input
       const extra = videoExtras(spec, args);
       const body = { ...vb.body, ...extra.body };
-      vb.note = `${vb.note}${p.note || ''}${extra.note}`;
+      if (inputs.videos?.length || inputs.audios?.length) {
+        if (!spec?.refMedia?.length) return `Error: ${p.model} can't follow reference clips or sounds. Nothing was charged.`;
+        if (inputs.videos.length) body.reference_videos = inputs.videos;
+        if (inputs.audios.length) body.reference_audios = inputs.audios;
+      }
+      // The provider's own settings (allowed_passthrough_parameters), under each of its endpoints' tags.
+      let passNote = '';
+      if (args.provider_options && typeof args.provider_options === 'object') {
+        const tags = spec?.passthrough?.length ? (await (deps.speechEndpoints || speechEndpoints)(p.model).catch(() => [])).map((e) => e.tag) : [];
+        const pt = passthroughBody(args.provider_options, spec?.passthrough || [], tags);
+        if (pt.provider) body.provider = pt.provider;
+        passNote = pt.note;
+      }
+      vb.note = `${vb.note}${p.note || ''}${extra.note}${passNote}`;
       emit({ t: 'note', level: 'info', msg: `Video job started on ${short(p.model)} (${p.detail}${firstFrame ? ', from a picture' : ''}); this usually takes 30 seconds to a few minutes.`, at: at() });
       const r = await (deps.generateVideo || generateVideo)(body, signal, (status, ms) => emit({ t: 'media_status', tool: name, status, ms, at: at() }));
       const cost = r.usage.cost ?? p.est;
@@ -6326,19 +6373,114 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
     }
     if (cat === 'music') {
       const seed = Number.isInteger(Number(args.seed)) && args.seed !== '' && args.seed != null ? Number(args.seed) : undefined;
-      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed }, signal);
+      if (inputs.song && !(await (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()).catch(() => [])).find((m) => m.id === p.model)?.edits) return `Error: ${p.model} can't cover or continue a recording. Nothing was charged.`;
+      const song = { lyrics: args.lyrics, title: args.title, style: args.style, instrumental: args.instrumental,
+        ...(inputs.song ? { [args.cover ? 'cover' : 'extend']: inputs.song, continue_at: Number(args.continue_at) || 0 } : {}) };
+      const r = await composeMusic({ model: p.model, prompt: String(args.prompt || ''), seed, ...song }, signal);
       const cost = r.usage.cost ?? p.est;
       spend(cost, r.usage);
       const id = newId(`music ${clip(args.prompt, 30)}`);
       notes.push(`composed music ${id}`);
       return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: clip(args.prompt, 40), url: r.url, v: 1, cost, ms: r.ms, model: p.model }, `Music made with ${p.model} ($${cost.toFixed(4)}, ${r.ms} ms).${switched}`);
     }
-    const r = await (deps.synthesize || synthesize)({ model: p.model, input: clip(args.text, 1500), voice: p.voice, speed: p.speed }, signal);
+    let references = null;
+    if (inputs.samples?.length) {
+      const can = choices.voiceClone?.[p.model] || await voiceCloneOf(p.model);
+      if (!can) return `Error: ${p.model} can't speak in a voice from a recording. ${cloneModelsLine()} Nothing was charged.`;
+      references = speechRefs(inputs.samples, args.voice_sample_text, can);
+    }
+    const r = await (deps.synthesize || synthesize)({ model: p.model, input: clip(args.text, 1500), voice: p.voice, speed: p.speed, references, ...(args.style ? { instructions: clip(String(args.style), 500) } : {}) }, signal);
     // The speech endpoint returns audio, not a bill, so the estimate is the cost.
     spend(p.est);
     const id = newId(`voice ${clip(args.text, 24)}`);
     notes.push(`spoke audio ${id}`);
-    return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: `Voice: ${clip(args.text, 34)}`, url: r.url, v: 1, cost: p.est, ms: r.ms, model: p.model }, `Speech made with ${p.model} (≈$${p.est.toFixed(4)}, ${r.ms} ms${p.voice ? `, voice ${p.voice}` : ''}${p.speed ? `, speed ${p.speed}×` : ''}).${p.note || ''}${switched}`);
+    return deliverMedia(id, r.url, 'mp3', { id, kind: 'audio', title: `Voice: ${clip(args.text, 34)}`, url: r.url, v: 1, cost: p.est, ms: r.ms, model: p.model }, `Speech made with ${p.model} (≈$${p.est.toFixed(4)}, ${r.ms} ms${references ? `, in the voice of ${clip([].concat(args.voice_sample).join(', '), 120)}` : p.voice ? `, voice ${p.voice}` : ''}${p.speed ? `, speed ${p.speed}×` : ''}).${p.note || ''}${switched}`);
+  }
+
+  // What a call gives besides its prompt, read before it is approved: { pictures, lastFrame, samples } or { error }.
+  // `model` is the one it would use; the call checks again if the user switches.
+  function refModelsLine() { const m = Object.entries(choices.imageRefs || {}); return m.length ? `These models can: ${m.map(([id, n]) => `${id} (${n})`).join(', ')}${T.image.pick === 'agent' ? ' (pass one as model)' : ' (the user can make one the first choice in the picture settings)'}.` : 'None of the picture models in use can; leave out references.'; }
+  function cloneModelsLine() { const m = Object.keys(choices.voiceClone || {}); return m.length ? `These can: ${m.join(', ')}${T.speech.pick === 'agent' ? ' (pass one as model)' : ' (the user can make one the first choice in the voice settings)'}.` : 'None of the voice models in use can; leave out voice_sample.'; }
+  async function voiceCloneOf(model) {
+    try { return voiceClone(await (deps.speechEndpoints || speechEndpoints)(model)); } catch { return null; }
+  }
+  async function mediaInputsFor(cat, args, model) {
+    const out = {};
+    const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
+    if ((cat === 'image' || cat === 'video') && list(args.references).length) {
+      if (cat === 'image') {
+        const spec = (await (deps.mediaCatalogue?.image ? Promise.resolve(deps.mediaCatalogue.image) : imageModels()).catch(() => [])).find((m) => m.id === model);
+        if (!imageRefMax(spec)) return { error: `Error: ${model} can't work from pictures. ${refModelsLine()}` };
+      }
+      out.pictures = [];
+      for (const r of list(args.references).slice(0, 16)) {
+        const u = await startPicture(r);
+        if (!u) return { error: `Error: no picture at ${clip(r, 120)}. Give a PNG, JPEG or WebP in the project (e.g. assets/generated/hero.png), artifact:<id> of a picture, or attached:1 for the user's first attached picture.` };
+        out.pictures.push(u);
+      }
+    }
+    if (cat === 'video' && args.end_image) {
+      const spec = (await (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()).catch(() => [])).find((m) => m.id === model);
+      if (!(spec?.frames || []).includes('last_frame')) return { error: `Error: ${model} can't end on a picture.${choices.videoEnd?.length ? ` These models can: ${choices.videoEnd.join(', ')}.` : ' None of the video models in use can; leave out end_image.'}` };
+      out.lastFrame = await startPicture(String(args.end_image));
+      if (!out.lastFrame) return { error: `Error: no picture at ${clip(args.end_image, 120)}. Give a PNG, JPEG or WebP in the project, artifact:<id> of a picture, or attached:1.` };
+    }
+    if (cat === 'video' && (list(args.reference_video).length || list(args.reference_audio).length)) {
+      const spec = (await (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()).catch(() => [])).find((m) => m.id === model);
+      if (!spec?.refMedia?.length) return { error: `Error: ${model} can't follow reference clips or sounds.${choices.videoRefMedia?.length ? ` These models can: ${choices.videoRefMedia.join(', ')}.` : ' None of the video models in use can; leave out reference_video and reference_audio.'}` };
+      if (args.start_image || args.end_image) return { error: 'Error: reference clips and sounds can\'t go with a start or end picture (the model works either from frames or from references). Use references for pictures instead.' };
+      if (list(args.reference_audio).length && !list(args.reference_video).length && !list(args.references).length) return { error: 'Error: a reference sound needs a reference clip or reference pictures with it.' };
+      out.videos = [];
+      for (const r of list(args.reference_video).slice(0, 3)) {
+        const u = fileData(r, VIDEO_TYPES, REF_VIDEO_MAX, 'clip');
+        if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp4, webm or mov file in the project.` };
+        out.videos.push(u);
+      }
+      out.audios = [];
+      for (const r of list(args.reference_audio).slice(0, 3)) {
+        const u = fileData(r, AUDIO_TYPES, REF_VIDEO_MAX, 'sound');
+        if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp3, wav or m4a file in the project.` };
+        out.audios.push(u);
+      }
+    }
+    if (cat === 'music' && (args.cover || args.extend)) {
+      const spec = (await (deps.mediaCatalogue?.music ? Promise.resolve(deps.mediaCatalogue.music) : musicModels()).catch(() => [])).find((m) => m.id === model);
+      if (!spec?.edits) return { error: `Error: ${model} can't cover or continue a recording.${choices.musicEdit?.length ? ` These models can: ${choices.musicEdit.join(', ')}.` : ' None of the music models in use can (Suno on ToAPIs can); leave out cover and extend.'}` };
+      if (args.cover && args.extend) return { error: 'Error: give cover or extend, not both.' };
+      if (args.extend && !(Number(args.continue_at) > 0)) return { error: 'Error: extend needs continue_at: the second the continuation starts from.' };
+      const u = fileData(String(args.cover || args.extend), AUDIO_TYPES, REF_VIDEO_MAX, 'recording');
+      if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp3, wav or m4a file in the project.` };
+      out.song = u;
+    }
+    if (cat === 'speech' && list(args.voice_sample).length) {
+      if (!(choices.voiceClone?.[model] || await voiceCloneOf(model))) return { error: `Error: ${model} can't speak in a voice from a recording. ${cloneModelsLine()}` };
+      out.samples = [];
+      for (const r of list(args.voice_sample).slice(0, 3)) {
+        const u = voiceSample(r);
+        if (!u.startsWith('data:')) return { error: `Error: ${u}. Give an mp3, wav, ogg, m4a or flac file in the project, or artifact:<id> of a voice made earlier.` };
+        out.samples.push(u);
+      }
+    }
+    return out;
+  }
+  // A voice sample as a data URL: an audio file in the project, or a voice artifact. Otherwise why not, in words.
+  function voiceSample(ref) { return fileData(ref, AUDIO_TYPES, VOICE_SAMPLE_MAX, 'recording'); }
+  // A file the call works from, as a data URL: a file in the project of one of `types`, or (for sounds) an audio
+  // artifact. Otherwise why not, in words.
+  function fileData(ref, types, max, noun) {
+    if (ref.startsWith('artifact:')) {
+      const a = arts.get(ref.slice(9));
+      if (types !== AUDIO_TYPES || a?.kind !== 'audio' || !a.url) return `artifact ${ref.slice(9)} is not a ${noun}`;
+      return (a.url.startsWith('/blob/') ? blobData(a.url) : a.url) || `artifact ${ref.slice(9)} could not be read`;
+    }
+    if (!root) return 'the project folder is switched off';
+    const rel = ref.replace(/^file:/, '').replace(/^[/\\]+/, '');
+    const type = types[rel.split('.').pop().toLowerCase()];
+    if (!type) return `${clip(rel, 120)} is not a ${noun} file`;
+    let full; try { full = safePath(root, rel); } catch (e) { return e.message; }
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return `no ${noun} at ${clip(rel, 120)}`;
+    if (fs.statSync(full).size > max) return `${clip(rel, 120)} is over ${Math.round(max / 1048576)} MB; use a shorter one`;
+    return `data:${type};base64,${fs.readFileSync(full).toString('base64')}`;
   }
 
   // make_video's start picture as a data URL: a project file, a picture artifact, or one the user attached.
