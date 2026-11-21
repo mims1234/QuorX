@@ -68,7 +68,7 @@ function draw() {
     <textarea rows="2" placeholder="Talk to QuorX… (Enter to send)" ${A.busy ? 'disabled' : ''}></textarea>
     <div class="qxa-row">
       <label class="qxa-check"><input type="checkbox" data-a="speak" ${A.speak ? 'checked' : ''}><span class="box" aria-hidden="true"></span>Speak replies</label>
-      ${hasMic() ? `<button type="button" class="qxa-btn ${A.rec ? 'rec' : ''}" data-a="mic" title="${A.rec ? 'Stop listening' : 'Talk instead of typing'}">${A.rec ? '■ Listening' : '🎤 Talk'}</button>` : ''}
+      ${hasMic() ? `<button type="button" class="qxa-btn ${A.rec ? 'rec' : ''}" data-a="mic" ${A.hearing ? 'disabled' : ''} title="${A.rec ? 'Stop and send' : 'Talk instead of typing'}">${A.rec ? '■ Stop' : A.hearing ? 'Hearing…' : '🎤 Talk'}</button>` : ''}
       <button type="submit" class="qxa-btn primary" ${A.busy ? 'disabled' : ''}>Send</button>
     </div>
   </form>`;
@@ -154,16 +154,34 @@ async function confirm(m) {
 }
 
 // ---------- voice ----------
-const SR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
-const hasMic = () => !!SR();
-function mic() {
+// Talk: records with QuorX's own mic (the chat's 🎤: same consent, same silence check) and transcribes on QuorX's
+// server, so it works in the desktop app too, where the browser's own speech recognition can't reach its servers.
+const hasMic = () => !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+async function mic() {
   if (A.rec) { A.rec.stop(); return; }
-  const rec = new (SR())();
-  rec.lang = navigator.language || 'en-US'; rec.interimResults = true; rec.continuous = false;
-  let heard = '';
-  rec.onresult = (e) => { heard = [...e.results].map((x) => x[0].transcript).join(' '); const ta = document.querySelector('#qxa textarea'); if (ta) ta.value = heard; };
-  rec.onend = () => { A.rec = null; draw(); if (heard.trim()) send(heard); };
-  rec.onerror = (e) => { A.rec = null; A.msgs.push({ role: 'bot', text: `⚠ I couldn't hear you (${e.error}). Typing works too.` }); draw(); };
+  if (!(await H.micAllowed())) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { A.msgs.push({ role: 'bot', text: `⚠ The microphone isn't available (${e.message}). Typing works too.` }); return draw(); }
+  const rec = new MediaRecorder(stream), chunks = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    A.rec = null; A.hearing = true; draw();
+    try {
+      const decoded = await new AudioContext().decodeAudioData(await new Blob(chunks).arrayBuffer());
+      const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+      const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+      const samples = (await off.startRendering()).getChannelData(0);
+      if (!H.heardSpeech(samples, 16000)) { A.hearing = false; A.msgs.push({ role: 'bot', text: "I didn't hear anything, so nothing was sent." }); return draw(); }
+      const audio = (await H.asDataURL(H.encodeWav(samples, 16000))).split(',')[1];
+      const r = await H.postJ('/api/transcribe', { audio, model: H.G.settings.tools?.listen?.models?.[0] });
+      A.hearing = false;
+      if (r.error) throw new Error(r.error);
+      if (String(r.text || '').trim()) return send(r.text);
+      draw();
+    } catch (e) { A.hearing = false; A.msgs.push({ role: 'bot', text: `⚠ I couldn't turn that into text (${e.message}). Typing works too.` }); draw(); }
+  };
   A.rec = rec; rec.start(); draw();
 }
 function say(text) {

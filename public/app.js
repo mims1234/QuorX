@@ -19041,4 +19041,4 @@ initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TO
   yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });
 
 // ✦ The QuorX assistant's drawer (public/assistant.js) uses the page's own helpers too.
-initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar });
+initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar, micAllowed, heardSpeech, encodeWav, asDataURL });
