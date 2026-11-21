@@ -87,43 +87,35 @@ export const LISTEN_DEFAULT = 'google/gemini-3.1-flash-lite';
 async function models() {
   const s = load();
   const r = s.talkModel && s.codeModel ? {} : await recommended();
-  return { talk: s.talkModel || r.talk, code: s.codeModel || r.code, voice: s.voiceModel || VOICE_DEFAULT.model, voiceName: s.voice || (s.voiceModel && s.voiceModel !== VOICE_DEFAULT.model ? '' : VOICE_DEFAULT.voice), listen: s.listenModel || LISTEN_DEFAULT };
+  return { talk: s.talkModel || r.talk, code: s.codeModel || r.code, voice: s.voiceWith === 'pc' ? 'pc' : s.voiceModel || VOICE_DEFAULT.model, voiceName: s.voice || (s.voiceModel && s.voiceModel !== VOICE_DEFAULT.model ? '' : VOICE_DEFAULT.voice), listen: s.listenModel || LISTEN_DEFAULT };
 }
-
-/** What the ⚙ view offers for each choice, with prices: $ per 1M tokens (talk, code, listen) or per 1M characters (voice). */
-export async function assistantOptions() {
-  const mine = await catalogue();
-  const or = currentKey() ? await chatModels().catch(() => []) : [];
-  const chatRows = [
-    ...mine.filter((m) => m.tools).map((m) => ({ id: m.id, price: m.marginal === 0 ? 'on your plan, $0' : `$${m.list[0]}/$${m.list[1]}`, zero: m.marginal === 0 })),
-    ...or.map((m) => ({ id: m.id, price: `$${(+m.price?.[0] || 0).toFixed(2)}/$${(+m.price?.[1] || 0).toFixed(2)}`, zero: false })),
-  ].sort((a, b) => b.zero - a.zero);
-  const voices = currentKey() ? (await speechModels().catch(() => [])).map((m) => ({ id: m.id, price: `$${m.price[0].toFixed(2)}/1M chars`, voices: m.voices })) : [];
-  const listen = or.filter((m) => (m.in || []).includes('audio')).map((m) => ({ id: m.id, price: `$${(+m.price?.[0] || 0).toFixed(3)}/1M` }));
-  return { current: await models(), saved: { talk: load().talkModel || '', code: load().codeModel || '' }, auto: await recommended(mine), defaults: { voice: VOICE_DEFAULT, listen: LISTEN_DEFAULT }, monthly: load().monthly, chat: chatRows, voices, listen };
+// ⚙ Settings → Assistant lives with the page's settings, like every setting; each request brings them, and this
+// keeps a copy so its budget, voice and self-edits use them too.
+const PREF_KEYS = ['talkModel', 'codeModel', 'voiceWith', 'voiceModel', 'voice', 'listenModel'];
+export function syncPrefs(prefs) {
+  const a = prefs?.assistant;
+  if (!a || typeof a !== 'object') return;
+  const s = load(); let changed = false;
+  for (const k of PREF_KEYS) { const v = String(a[k] ?? '').trim() || undefined; if (s[k] !== v) { s[k] = v; changed = true; } }
+  const n = Number(a.monthly);
+  if (a.monthly != null && n >= 0.1 && n <= 500 && s.monthly !== n) { s.monthly = n; changed = true; }
+  if (changed) save();
 }
-
-/** The ⚙ view's Save: the user picked these themselves, so no card. Empty talk/code = pick for value again. */
-export function saveAssistantSettings(b = {}) {
-  const s = load(), id = (v) => String(v ?? '').trim();
-  const ok = (v) => !v || /^[\w.@:~-]+(\/[\w.@:~+-]+)+$/.test(v);
-  for (const [k, v] of [['talkModel', id(b.talk)], ['codeModel', id(b.code)], ['listenModel', id(b.listen)]]) { if (!ok(v)) throw new Error(`"${v}" is not a model id`); s[k] = v || undefined; }
-  const vm = id(b.voice);
-  if (vm && vm !== 'pc' && !ok(vm)) throw new Error(`"${vm}" is not a voice model`);
-  s.voiceModel = vm || undefined; s.voice = id(b.voiceName).slice(0, 80) || undefined;
-  if (b.monthly != null) { const n = Math.round(Number(b.monthly) * 100) / 100; if (!(n >= 0.1 && n <= 500)) throw new Error('a monthly budget from $0.10 to $500'); s.monthly = n; }
-  save();
-  return { ok: true };
-}
+// A change to one of its own settings is a card like any setting change: the page applies and saves it.
+const settingCard = (key, label, from, to, value) => ({ id: crypto.randomUUID(), kind: 'setting', key, value, title: `Change ${label}`, from, to, where: CATS.assistant });
 
 /** A reply read aloud with its AI voice; the cost counts against its budget. */
-export async function assistantSpeak({ text } = {}) {
+export async function assistantSpeak({ text, prefs } = {}) {
+  // "Try the voice" in ⚙ Settings plays what the page shows, saved or not, without keeping it.
+  const s = load(), keep = { ...s };
+  if (prefs?.assistant) syncPrefs(prefs);
   const m = await models();
+  if (prefs?.try) { for (const k of [...PREF_KEYS, 'monthly']) s[k] = keep[k]; save(); }
   if (m.voice === 'pc') return { pc: true };
   if (budgetLeft() <= 0) return { error: 'my budget for this month is used up', pc: true };
   const r = await readAloudPiece({ text: clip(String(text || ''), READ_ALOUD_MAX), model: m.voice, voice: m.voiceName || undefined });
   if (r.error) return { ...r, pc: true };
-  const s = load(); s.spent[month()] = spentNow() + (r.cost || 0); save();
+  s.spent[month()] = spentNow() + (r.cost || 0); save();
   return { url: r.url, cost: r.cost, voice: r.voice, model: r.model, budget: budgetInfo() };
 }
 
@@ -231,14 +223,14 @@ async function runTool(name, args, ctx) {
   if (name === 'budget_set') {
     const n = Math.round(Number(args?.monthly) * 100) / 100;
     if (!(n >= 0.1 && n <= 500)) return { error: 'a monthly budget from $0.10 to $500' };
-    ctx.cards.push({ id: crypto.randomUUID(), kind: 'budget', value: n, title: 'Change the assistant\'s monthly budget', from: `$${load().monthly.toFixed(2)}`, to: `$${n.toFixed(2)}` });
+    ctx.cards.push(settingCard('assistant.monthly', 'the assistant\'s monthly budget', `$${load().monthly.toFixed(2)}`, `$${n.toFixed(2)}`, n));
     return { proposed: true };
   }
   if (name === 'model_set') {
     const role = args?.role === 'code' ? 'code' : 'talk', id = String(args?.model || '').trim();
     if (!/^[\w.@:~-]+(\/[\w.@:~+-]+)+$/.test(id)) return { error: 'a model id like opencode-go/claude-haiku-5-5' };
     const cur = await models();
-    ctx.cards.push({ id: crypto.randomUUID(), kind: 'model', role, value: id, title: `Use another model for ${role === 'code' ? 'code changes' : 'talking'}`, from: cur[role], to: id });
+    ctx.cards.push(settingCard(role === 'code' ? 'assistant.codeModel' : 'assistant.talkModel', `the assistant's ${role === 'code' ? 'model for code changes' : 'thinking model'}`, cur[role], id, id));
     return { proposed: true };
   }
   if (name === 'self_edit') {
@@ -269,10 +261,11 @@ export function parseReply(text) {
 
 /** One turn: the user said `text`. Returns what to say, cards to confirm, page actions, cost and budget. */
 export async function assistantTurn({ text, prefs = {}, defaults = {}, call } = {}) {
+  syncPrefs(prefs);
   const s = load();
   const said = clip(String(text || '').trim(), 4000);
   if (!said) throw new Error('Say something first.');
-  if (budgetLeft() <= 0) return { say: `I've used my $${s.monthly.toFixed(2)} for ${month()}. Raise my budget below, or wait for next month.`, cards: [{ id: crypto.randomUUID(), kind: 'budget', value: Math.round(s.monthly * 2 * 100) / 100, title: 'Raise the assistant\'s monthly budget', from: `$${s.monthly.toFixed(2)}`, to: `$${(s.monthly * 2).toFixed(2)}` }], actions: [], cost: 0, budget: budgetInfo() };
+  if (budgetLeft() <= 0) return { say: `I've used my $${s.monthly.toFixed(2)} for ${month()}. Raise my budget below, or wait for next month.`, cards: [settingCard('assistant.monthly', 'the assistant\'s monthly budget', `$${s.monthly.toFixed(2)}`, `$${(s.monthly * 2).toFixed(2)}`, Math.min(500, Math.round(s.monthly * 2 * 100) / 100))], actions: [], cost: 0, budget: budgetInfo() };
   const m = await models();
   const ctx = { prefs, defaults, cards: [], actions: [] };
   const msgs = [{ role: 'system', content: systemPrompt(snapshot(prefs)) },
@@ -306,10 +299,11 @@ export async function assistantTurn({ text, prefs = {}, defaults = {}, call } = 
 export function budgetInfo() { const s = load(); return { monthly: s.monthly, spent: spentNow(), left: budgetLeft(), month: month() }; }
 export async function assistantState() {
   const s = load();
-  return { models: await models(), auto: { talk: !s.talkModel, code: !s.codeModel }, budget: budgetInfo(), history: s.history.filter((h) => !h.note).slice(-40).map(({ role, content, at }) => ({ role, content, at })) };
+  return { models: await models(), auto: { talk: !s.talkModel, code: !s.codeModel }, recommended: await recommended(), budget: budgetInfo(), history: s.history.filter((h) => !h.note).slice(-40).map(({ role, content, at }) => ({ role, content, at })) };
 }
 /** The user answered a card: the assistant hears it on its next turn, so it doesn't propose it again. */
-export function noteCard({ title = '', outcome = '' } = {}) {
+export function noteCard({ title = '', outcome = '', prefs } = {}) {
+  syncPrefs(prefs);
   const words = outcome === 'yes' ? 'accepted' : outcome === 'no' ? 'declined' : 'could not apply';
   load().history.push({ role: 'user', content: `(On the card "${clip(title, 120)}", I ${words} it.)`, at: Date.now(), note: true });
   save();
@@ -318,10 +312,8 @@ export function noteCard({ title = '', outcome = '' } = {}) {
 export function clearHistory() { load().history = []; save(); return { ok: true }; }
 
 // ---------- what a confirmed card does (settings cards are applied by the page, like the agent's) ----------
-export async function confirmCard(card = {}) {
-  const s = load();
-  if (card.kind === 'budget') { const n = Number(card.value); if (!(n >= 0.1 && n <= 500)) throw new Error('bad budget'); s.monthly = n; save(); return { ok: true, budget: budgetInfo() }; }
-  if (card.kind === 'model') { s[card.role === 'code' ? 'codeModel' : 'talkModel'] = String(card.value); save(); return { ok: true, models: await models() }; }
+export async function confirmCard(card = {}, prefs) {
+  syncPrefs(prefs);
   if (card.kind === 'self_edit') return selfEdit(card);
   throw new Error('nothing to do for that card');
 }

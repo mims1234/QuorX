@@ -23,7 +23,7 @@ const NEW_CHAT_TOOLS = { image: false, video: false, music: false, speech: false
 export const CATS = {
   appearance: '🎨 Appearance', notifications: '🔔 Notifications', privacy: '🕶 Privacy & display', providers: '🔌 Providers (defaults)',
   newchats: '✨ New chats', loop: '🔁 Agent loop', deciders: '⚖️ Deciders', tools: '🧰 Tools & media', safety: '🛡 Approvals & safety',
-  budget: '💵 Budget', video: '🎬 Video', code: '💻 Code & servers', mcp: '🧲 MCP servers', schedules: '⏰ Schedules', keys: '🔑 API keys',
+  budget: '💵 Budget', assistant: '✦ Assistant', video: '🎬 Video', code: '💻 Code & servers', mcp: '🧲 MCP servers', schedules: '⏰ Schedules', keys: '🔑 API keys',
 };
 
 // type: bool · enum (values: [value, words]) · int / num (min, max) · money ($, min, max) · model (a model id) · models (up to 3) · text
@@ -137,6 +137,14 @@ export const SETTINGS = [
   E('videoStoryboard', 'video', 'Storyboard before paid media', 'bool'),
   E('videoReview', 'video', 'Review the film', 'bool'),
   E('debugger', 'code', 'Debugger for Node and Python', 'enum', { values: [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']] }),
+  // ✦ The QuorX assistant (server/assistant.js): the models it uses, its voice and its own monthly budget.
+  E('assistant.talkModel', 'assistant', 'Assistant: thinking model', 'model', { empty: 'Auto (best value)', dflt: '', help: 'The model it talks and acts with. Empty: the best value now, a plan you already pay for first.' }),
+  E('assistant.codeModel', 'assistant', 'Assistant: model for changes to QuorX\'s code', 'model', { empty: 'Auto (best value)', dflt: '', help: 'The model QuorX\'s agent uses when the assistant changes QuorX itself, in a branch of its own.' }),
+  E('assistant.voiceWith', 'assistant', 'Assistant: reads replies with', 'enum', { values: [['ai', 'AI voice'], ['pc', 'PC voice (free)']], dflt: 'ai', help: 'When "Speak replies" is ticked in the assistant.' }),
+  E('assistant.voiceModel', 'assistant', 'Assistant: voice model', 'model', { empty: 'elevenlabs/eleven-v4-turbo', dflt: '' }),
+  E('assistant.voice', 'assistant', 'Assistant: voice', 'text', { empty: 'sarah', dflt: '', help: 'A voice of the voice model, like sarah, alice or lily for ElevenLabs.' }),
+  E('assistant.listenModel', 'assistant', 'Assistant: speech-to-text model', 'model', { empty: 'google/gemini-3.1-flash-lite', dflt: '', help: 'Turns what you say with 🎤 Talk into text.' }),
+  E('assistant.monthly', 'assistant', 'Assistant: monthly budget', 'money', { min: 0.1, max: 500, dflt: 2, guard: true, help: 'It stops at the limit. Talk on a plan costs $0; its voice and listening are paid per use.' }),
 ];
 export const SETTINGS_BY_KEY = new Map(SETTINGS.map((s) => [s.key, s]));
 

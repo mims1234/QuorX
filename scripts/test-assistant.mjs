@@ -42,8 +42,9 @@ test('open is done at once; unknown places are refused', async () => {
 
 test('its budget: a card to change it, and at the limit it stops without calling a model', async () => {
   const r = await A.assistantTurn({ text: 'budget 0.01', call: scripted(['{"say":"","do":[{"tool":"budget_set","args":{"monthly":0.1}}]}', '{"say":"Card is up.","do":[]}']) });
-  assert.equal(r.cards[0].kind, 'budget');
-  await A.confirmCard(r.cards[0]);
+  assert.equal(r.cards[0].kind, 'setting');
+  assert.equal(r.cards[0].key, 'assistant.monthly');
+  A.syncPrefs({ assistant: { monthly: r.cards[0].value } }); // the page applies the card and its prefs come back
   assert.equal(A.budgetInfo().monthly, 0.1);
   const spend = scripted(['{"say":"ok","do":[]}'], 0.2);
   await A.assistantTurn({ text: 'spend it', call: spend });
@@ -51,7 +52,7 @@ test('its budget: a card to change it, and at the limit it stops without calling
   const stop = await A.assistantTurn({ text: 'again', call: none });
   assert.equal(none.seen.length, 0);
   assert.match(stop.say, /used my \$0\.10/);
-  assert.equal(stop.cards[0].kind, 'budget');
+  assert.equal(stop.cards[0].key, 'assistant.monthly');
 });
 
 test('API keys are never settable', async () => {
@@ -72,16 +73,24 @@ test('chats: an unknown project says which projects there are', async () => {
   assert.equal(r.steps[0], 'chats');
 });
 
-test('its settings: models, voice, listening and budget are saved; bad ids are refused; empty means auto', async () => {
-  A.saveAssistantSettings({ talk: 'opencode-go/claude-haiku-5-5', code: '', voice: 'elevenlabs/eleven-v4-turbo', voiceName: 'sarah', listen: 'google/gemini-3.1-flash-lite', monthly: 4 });
+test('its settings come from ⚙ Settings (the page prefs): empty means auto, PC voice costs nothing', async () => {
+  A.syncPrefs({ assistant: { talkModel: 'opencode-go/claude-haiku-5-5', codeModel: '', voiceModel: 'elevenlabs/eleven-v4-turbo', voice: 'sarah', listenModel: 'google/gemini-3.1-flash-lite', monthly: 4 } });
   const s = A.load();
   assert.equal(s.talkModel, 'opencode-go/claude-haiku-5-5');
   assert.equal(s.codeModel, undefined);
   assert.equal(s.voice, 'sarah');
   assert.equal(s.monthly, 4);
-  assert.throws(() => A.saveAssistantSettings({ talk: 'not a model' }), /not a model id/);
-  A.saveAssistantSettings({ voice: 'pc' });
+  A.syncPrefs({ assistant: { monthly: 9999 } });
+  assert.equal(A.load().monthly, 4, 'out-of-range budgets are ignored');
+  A.syncPrefs({ assistant: { voiceWith: 'pc' } });
   assert.deepEqual(await A.assistantSpeak({ text: 'hi' }), { pc: true });
+});
+
+test('⚙ Settings knows every assistant setting, in its own category', async () => {
+  const { SETTINGS, CATS } = await import('../server/quorxsettings.js');
+  assert.ok(CATS.assistant);
+  const keys = SETTINGS.filter((s) => s.cat === 'assistant').map((s) => s.key);
+  for (const k of ['assistant.talkModel', 'assistant.codeModel', 'assistant.voiceWith', 'assistant.voiceModel', 'assistant.voice', 'assistant.listenModel', 'assistant.monthly']) assert.ok(keys.includes(k), k);
 });
 
 test('a reply cut off mid-JSON still shows its words, not the JSON', () => {

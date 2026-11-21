@@ -60,14 +60,3 @@
 .qxa-check input:checked + .box { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #031317); }
 .qxa-check input:checked + .box::after { content: '✓'; }
 .qxa-check input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* ⚙ its settings: replaces the conversation while open */
-.qxa-icon.on { color: var(--accent); border-color: var(--line-strong); }
-.qxa.qxa-in-settings .qxa-budget, .qxa.qxa-in-settings .qxa-log, .qxa.qxa-in-settings .qxa-compose { display: none; }
-.qxa-set { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
-.qxa-field { display: flex; flex-direction: column; gap: 4px; }
-.qxa-field > span { font-weight: 600; font-size: 12.5px; }
-.qxa-field input, .qxa-field select { height: 30px; box-sizing: border-box; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); padding: 0 9px; font: 12.5px var(--font-mono, monospace); }
-.qxa-field input:focus, .qxa-field select:focus { outline: none; border-color: var(--accent); }
-.qxa-field small, .qxa-dim { color: var(--muted); font-size: 11.5px; margin: 0; }
-.qxa-set .qxa-row { flex-wrap: wrap; }
