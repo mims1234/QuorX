@@ -14,7 +14,7 @@ export const isScope = (s) => SCOPES.some(([k]) => k === s);
 // MCP servers, Skills and Usage & costs stay here until their places in the shell take them over.
 export const SETTINGS_NAV = [
   ['General', [['setup', '🧪', 'Setup check'], ['appearance', '🎨', 'Appearance'], ['privacy', '🕶', 'Privacy & display'], ['window', '🪟', 'Window & layout']]],
-  ['Models', [['providers', '🔌', 'Providers & keys'], ['limits', '🛟', 'Fallbacks & limits']]],
+  ['Models', [['providers', '🔌', 'Providers & keys'], ['limits', '🛟', 'Fallbacks & limits'], ['assistant', '✦', 'Assistant']]],
   ['Agent', [['newchats', '✨', 'New chats'], ['loop', '🔁', 'Agent loop'], ['deciders', '⚖️', 'Deciders'], ['tools', '🧰', 'Tools & media'], ['video', '🎬', 'Video'], ['memory', '📌', 'Memory'], ['skills', '🧩', 'Skills'], ['mcp', '🧲', 'MCP servers']]],
   ['Safety', [['safety', '🛡', 'Approvals & safety'], ['perms', '🔐', 'Permissions'], ['letthrough', '⚡', 'Let through in YOLO'], ['budget', '💵', 'Budget']]],
   ['Workspace', [['projects', '📁', 'Projects'], ['servers', '🖥', 'Servers & pages'], ['terminal', '⌨', 'Terminal'], ['browser', '🌐', 'Browser'], ['docs', '📎', 'Documents'], ['design', '🖌', 'Design system']]],

@@ -20,6 +20,7 @@ import * as SM from './settings-map.js';
 // Phones (and the desktop app shrunk beside an app for computer use) get the phone layout below this width; any
 // wider window keeps the desktop shell, folding its parts as it narrows (see "narrow windows"). CSS uses the same 720px.
 const PHONE_MQ = '(max-width: 720px)';
+import { initAssistant, showAssistant } from './assistant.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -124,6 +125,8 @@ const CODE_FILE = /\.(m?[jt]sx?|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|
 const REVIEW_CHEAP = 'openai/gpt-6-luna', REVIEW_STRONG = 'anthropic/claude-sonnet-5.5', HELPER_DEFAULT = 'qwen/qwen3.7-flash', LOOK_DEFAULT = 'openai/gpt-6-luna-decisions';
 const reviewerModel = () => G.settings.reviewModel || (G.settings.reviewTier === 'strong' ? REVIEW_STRONG : REVIEW_CHEAP);
 const helperModel = () => G.settings.helperModel || HELPER_DEFAULT;
+// ✦ The assistant's voice and speech-to-text when ⚙ Settings → Assistant leaves them empty (server/assistant.js too).
+const ASST_VOICE = { model: 'elevenlabs/eleven-v4-turbo', voice: 'sarah' }, ASST_LISTEN = 'google/gemini-3.1-flash-lite';
 const lookModel = () => (Array.isArray(G.settings.lookVoters) && G.settings.lookVoters[0]) || LOOK_DEFAULT;
 const enhancerModel = () => G.settings.enhancerModel || helperModel();
 const freshModel = () => G.settings.freshEyesModel || (G.settings.freshEyesTier === 'strong' ? REVIEW_STRONG : helperModel());
@@ -12677,6 +12680,29 @@ function settingsPanels(S) {
       stCard('The questions, word for word', 'Every answer is logged with its screenshot, so <code>node scripts/checks.mjs</code> can score each question and try new wording on past screenshots. Untick one to stop asking it; blank wording uses the built-in one.', '<div id="checkList"></div>'),
     ]],
     tools: ['Tools & media', 'Up to 3 models per tool, and who picks the model for each call. Each chat turns tools on in its 🧰 menu.', ['<div id="catEditors" class="sx-media"></div>']],
+    // ✦ The QuorX assistant (public/assistant.js, server/assistant.js): the models it uses, its voice, its budget.
+    assistant: ['Assistant', 'The ✦ assistant at the bottom right (Ctrl+Shift+K): you talk to it about QuorX, it looks things up, changes settings when you click its cards, and changes QuorX’s own code in a branch you test first. These are the models it uses, its voice and its own budget.', (() => {
+      const A = S.assistant || {}, auto = ST.asstAuto || {}, vm = A.voiceModel || ASST_VOICE.model;
+      const autoNote = (id) => (id ? `Empty: the best value now, <b>${esc(short(id))}</b>${G.byId?.get(id)?.price?.[1] === 0 || /^(opencode-go|commandcode|claude-local)\//.test(id) ? ' (on a plan you pay for, $0 a call)' : ''}.` : 'Empty: the best value now, a plan you already pay for first.');
+      const voices = G.byId?.get(vm)?.voices || [];
+      return [
+        stCard('✦ Assistant', '', stRow('Show the assistant', 'Adds the ✦ button at the bottom right (Ctrl+Shift+K opens it). Off: no button, no shortcut, and it makes no calls.', stSwitch('assistant.on', A.on === true))),
+        stCard('Access', 'What it does by itself. API keys, secrets and sign-ins stay yours in every mode.', stRow('It may', 'Does it: acts at once on what you ask, like you clicking it yourself, and asks first only before deleting or clearing anything, raising its own budget, or safety settings (approvals, budgets, permissions, hooks). Does everything: no asking at all. Asks first: every change is a card you click.', stSeg('assistant.access', [['auto', '✅ Does it, asks before risky'], ['full', '⚡ Does everything'], ['ask', '🔒 Asks first']], A.access || 'auto'), { cls: 'sx-row-wide' })),
+        stCard(`${stNum(1)} Models`, 'Picked like every model in QuorX. Leave one empty and the assistant picks for value.',
+          stRow('🧠 Thinking', `The model it talks and acts with. ${autoNote(auto.talk)}`, `<div class="st-fb">${modelField('pickAsstTalk', A.talkModel, 'asTalk', 'Auto (best value)')}${A.talkModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstTalk" title="Pick for value again">✕</button>' : ''}</div>`)
+          + stRow('🛠 Changes to QuorX’s code', `QuorX’s agent uses it when the assistant changes QuorX itself, in a git branch of its own. ${autoNote(auto.code)}`, `<div class="st-fb">${modelField('pickAsstCode', A.codeModel, 'asCode', 'Auto (best value)')}${A.codeModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstCode" title="Pick for value again">✕</button>' : ''}</div>`)),
+        stCard(`${stNum(2)} Voice`, 'Used when “Speak replies” is ticked in the assistant, and by 🎤 Talk.',
+          stRow('Reads replies with', 'The AI voice sounds natural and costs about $0.002 a short reply, from its budget. The PC voice is free and offline.', stSeg('assistant.voiceWith', [['ai', '✨ AI voice'], ['pc', '🖥 PC voice']], A.voiceWith || 'ai'))
+          + stRow('🗣 Voice model', `Default: ElevenLabs v4 Turbo, fast and natural.`, `<div class="st-fb">${modelField('pickAsstVoice', A.voiceModel || ASST_VOICE.model, 'asVoice', ASST_VOICE.model)}${A.voiceModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstVoice" title="Back to ElevenLabs v4 Turbo">✕</button>' : ''}</div>`)
+          + stRow('Voice', `One of the voice model’s voices. Default: ${esc(ASST_VOICE.voice)} (female, warm).`, voices.length
+            ? `<select class="st-select" data-bind="assistant.voice">${voices.map((v) => `<option value="${esc(v)}" ${(A.voice || (vm === ASST_VOICE.model ? ASST_VOICE.voice : voices[0])) === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`
+            : `<input class="st-input" data-bind="assistant.voice" value="${esc(A.voice || '')}" placeholder="${esc(ASST_VOICE.voice)}">`)
+          + stRow('Try it', 'Plays a short line with the voice as it is set here (saved or not).', '<button type="button" class="st-btn secondary sm" data-act="tryAsstVoice">▶ Try the voice</button> <span id="asVoiceSays" class="st-row-help"></span>')
+          + stRow('👂 Speech to text', 'Turns what you say with 🎤 Talk into text. Default: Gemini 3.1 Flash Lite, cheap and accurate.', `<div class="st-fb">${modelField('pickAsstListen', A.listenModel || ASST_LISTEN, 'asListen', ASST_LISTEN)}${A.listenModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstListen" title="Back to the default">✕</button>' : ''}</div>`)),
+        stSec('Budget'),
+        `<div class="sx-caps">${stCap('assistant.monthly', 'Each month, up to', A.monthly ?? 2, 0.1, 500, 0.5, 'It stops at the limit and offers to raise it. Talk on a plan costs $0; its voice and listening are paid per use.', ST.asstAuto?.budget ? `<div class="st-row-help">Spent this month: ${stMoney(`$${ST.asstAuto.budget.spent.toFixed(4)}`)}</div>` : '')}</div>`,
+      ];
+    })()],
     budget: ['Budget', 'Each chat has one budget, the only money limit. Change a chat\'s budget with 💵 in its message box.', [
       stSec('Chat budgets'),
       `<p class="sx-sec-help">A chat's budget counts everything it calls: the agent, the deciders, helpers, screenshot checks and paid media. Once it is used up, 🔒 Strict asks you to raise it or wrap up; ⚡ YOLO stops.</p><div class="sx-caps">`
@@ -13144,6 +13170,8 @@ function stSummary(id, S) {
     case 'deciders': { const n = (S.voters || []).filter(Boolean).length, c = ['gap', 'shots', 'click'].filter((k) => S.checks?.[k] !== false).length;
       return [`${n} seats`, stStatus('info', `${n} decider${n === 1 ? '' : 's'} seated`) + stStatus('info', `Settled at ${S.gate.act}, lean at ${S.gate.confirm}`) + stStatus(c ? 'ok' : 'off', `${c} of 3 harness checks on`)]; }
     case 'tools': { const n = CATS.filter(([k]) => S.tools?.[k]?.on !== false).length; return [`${n} of ${CATS.length}`, stStatus(n ? 'ok' : 'off', `${n} of ${CATS.length} tools on`) + stStatus('info', 'Each chat turns them on in 🧰')]; }
+    case 'assistant': { const A = S.assistant || {}, auto = ST.asstAuto || {};
+      return [short(A.talkModel || auto.talk || '') || 'auto', stStatus('info', `Thinks with ${esc(short(A.talkModel || auto.talk || '') || 'auto')}${A.talkModel ? '' : ' (auto)'}`) + stStatus('info', A.voiceWith === 'pc' ? 'PC voice' : `Voice: ${esc(short(A.voiceModel || ASST_VOICE.model))} · ${esc(A.voice || (A.voiceModel ? '' : ASST_VOICE.voice) || 'default')}`) + `${stMoney(`$${Number(A.monthly ?? 2).toFixed(2)}`)} <span class="sx-state-k">a month</span>`, 'money']; }
     case 'budget': { const b = Number(S.chatBudget ?? G.cfg.chatBudget ?? 10);
       return [b ? usd(b) : 'no limit', `${b ? `${stMoney(usd(b))} <span class="sx-state-k">a new chat</span>` : stStatus('warn', 'New chats have no limit')}`, 'money']; }
     case 'safety': { const M = sfModes(SF), y = YOLO_ROWS.filter(([k]) => S.yoloAuto?.[k] !== false).length; return [S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict', stStatus('info', `New chats: ${S.approval === 'yolo' ? '⚡ YOLO' : '🔒 Strict'}`) + stStatus('ok', `${y} of ${YOLO_ROWS.length} YOLO groups on their own`) + stStatus(M.decide === 'ask' ? 'warn' : 'info', M.decide === 'ask' ? 'Pushes and installs ask you' : M.decide === 'decide' ? 'The deciders decide pushes and installs' : 'Custom: see Advanced') + stStatus(M.care === 'off' ? 'off' : 'ok', M.care === 'on' ? 'Extra care on' : M.care === 'off' ? 'Extra care off' : 'Extra care: custom') + on(SF.snapshots, 'Undo for commands on', 'Undo for commands off')]; }
@@ -13594,6 +13622,18 @@ function wireSettings() {
     if (act === 'clearReviewer') { S.reviewModel = ''; mark(); drawSettings(); }
     if (act === 'pickHelper') { const id = await pickModel('chat', S.helperModel || '', { context: 'Helper: read-only jobs' }); if (id) { S.helperModel = id; mark(); drawSettings(); } }
     if (act === 'clearHelper') { S.helperModel = ''; mark(); drawSettings(); }
+    // ✦ Assistant: each model through the same picker as every model in QuorX.
+    const asPick = { pickAsstTalk: ['talkModel', 'chat', 'Assistant: thinking'], pickAsstCode: ['codeModel', 'chat', 'Assistant: changes to QuorX’s code'], pickAsstVoice: ['voiceModel', 'speech', 'Assistant: reads replies'], pickAsstListen: ['listenModel', 'listen', 'Assistant: 🎤 Talk'] }[act];
+    if (asPick) { const [k, kind, context] = asPick; const id = await pickModel(kind, S.assistant?.[k] || '', { context }); if (id) { (S.assistant ??= {})[k] = id; if (k === 'voiceModel') { const vs = G.byId?.get(id)?.voices || []; if (!vs.includes(S.assistant.voice)) S.assistant.voice = vs[0] || ''; } mark(); drawSettings(); } }
+    const asClear = { clearAsstTalk: 'talkModel', clearAsstCode: 'codeModel', clearAsstVoice: 'voiceModel', clearAsstListen: 'listenModel' }[act];
+    if (asClear) { (S.assistant ??= {})[asClear] = ''; if (asClear === 'voiceModel') S.assistant.voice = ''; mark(); drawSettings(); }
+    if (act === 'tryAsstVoice') {
+      const out = $('#asVoiceSays'), A = S.assistant || {};
+      if (A.voiceWith === 'pc') { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance('Hi! This is how I sound when I read my replies to you.'); const v = pickVoice(speechSynthesis.getVoices(), navigator.language || 'en-US'); if (v) u.voice = v; speechSynthesis.speak(u); return; }
+      out.textContent = 'Asking the voice…';
+      const r = await postJ('/api/assistant/speak', { text: 'Hi! This is how I sound when I read my replies to you.', prefs: { assistant: A, try: true } });
+      if (r.url) { new Audio(r.url).play(); out.textContent = `${short(r.model)} · ${r.voice || 'default voice'}${r.cost ? ` · $${r.cost.toFixed(4)}` : ''}`; } else out.textContent = r.error || 'The AI voice did not answer.';
+    }
     if (act === 'refreshModels') { $('#stCatInfo').textContent = 'Refreshing…'; await loadModels(true); $('#stCatInfo').textContent = `${G.models?.length || 0} models loaded · refreshed ${new Date().toLocaleTimeString()}`; }
     if (act === 'applyLayout') { const b = e.target.closest('[data-ly]'); if (b.getAttribute('aria-disabled') === 'true') return flashTip(b, $('.lt-why', b)?.textContent || '', 2200); await wsLayoutPick(b.dataset.ly, b); stRefresh(); return; }
     if (act === 'resetOrder') { G.projectOrder = []; savePrefs(); renderSidebar(); e.target.textContent = 'Done'; }
@@ -13637,6 +13677,8 @@ function wireSettings() {
   drawSkillsPanel(mark);
   // Usage & costs: today, this week and all time, and a bar per project (from /api/costs).
   getJ('/api/costs?per=1').then((c) => { if (c && !c.error) { ST.costs = c; drawUsagePanel(); stRefresh(); } }).catch(() => {});
+  // ✦ Assistant: what "Auto" picks right now, and its spend this month (once a visit; the page redraws with them).
+  if (!ST.asstAuto) { ST.asstAuto = {}; getJ('/api/assistant').then((r) => { if (r && !r.error) { ST.asstAuto = { ...r.recommended, budget: r.budget }; if (ST.cat === 'assistant' && settingsOpen()) drawSettings(); } }).catch(() => {}); }
   drawProjectsPanel();
   drawPermsPanel();
   if ($('#stLetThrough') && ST.cat === 'letthrough') openLetThrough({ into: $('#stLetThrough') }); // read only, so drawn only when its page shows
@@ -13698,6 +13740,7 @@ function resetCategory() {
   if (ST.cat === 'privacy') S.newsRemote = true;
   if (ST.cat === 'providers') { S.model = d.chatModel || d.setups.C.model; S.reasoning = 'off'; Object.assign(S, { providerSort: 'auto', requireParams: true, zdrOnly: false, fallbackModel: '', blockedProviders: [...(d.blockedProviders || [])] }); }
   if (ST.cat === 'limits') Object.assign(S, { sourceFallback: d.sourceFallback || 'off', sourceFallbackModel: '' });
+  if (ST.cat === 'assistant') S.assistant = { monthly: S.assistant?.monthly ?? 2 }; // models and voice back to auto/defaults; the budget stays
   if (ST.cat === 'terminal') { const ds = d.safety || {}; S.safety = { ...(S.safety || {}), shell: ds.shell, timeout: ds.timeout, memoryMB: ds.memoryMB }; }
   if (ST.cat === 'newchats') S.newChatTools = { ...DEFAULT_CHAT_TOOLS };
   if (ST.cat === 'loop') { S.maxSteps = d.maxSteps; S.compact = true; S.compactAt = 24000; Object.assign(S, { planSteps: d.planSteps, continueRounds: d.continueRounds, maxOutput: d.maxOutput, thinkShare: d.thinkShare, review: d.review, reviewModel: '', reviewTier: d.reviewTier, reviewSendBack: d.reviewSendBack, codeReview: d.codeReview, designLint: d.designLint, fixSteps: d.fixSteps, reviewRounds: d.reviewRounds, reviewBar: d.reviewBar, helpers: d.helpers, helperModel: '', helperSteps: d.helperSteps, helperMinFiles: d.helperMinFiles, retries: d.retries, parallel: d.parallel, verify: d.verify, verifyRounds: d.verifyRounds, askLimit: d.askLimit, trimAt: d.trimAt, buildThinking: d.buildThinking, lazyTools: d.lazyTools, statusEvery: d.statusEvery, guardEdits: d.guardEdits, wrapUp: d.wrapUp, nextSteps: d.nextSteps, otherNotes: d.otherNotes, otherNotesFiles: [...(d.otherNotesFiles || [])], otherNotesKB: d.otherNotesKB, helperRoles: structuredClone(d.helperRoles || []) }); }
@@ -14925,6 +14968,7 @@ OS_REDUCE.addEventListener?.('change', () => { if (G.settings) applyUi(); });
 // Appearance and display preferences, applied to the whole page.
 function applyUi() {
   const U = uiOf(G.settings), root = document.documentElement;
+  showAssistant(G.settings?.assistant?.on === true); // ✦ only once it is turned on in ⚙ Settings → Assistant
   root.dataset.density = U.density;
   root.style.setProperty('--msg-size', `${U.fontSize}px`);
   root.classList.toggle('reduce-motion', motionReduced());
@@ -19038,3 +19082,15 @@ function newsClick(e) {
 initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TOOL_NAME, listFilter, flashTip, ago, clip, savePrefs, showChat,
   closeWindows: () => { for (const id of ['permsDlg']) document.getElementById(id)?.close?.(); if (ST.host === 'page') closeSettings({ force: true }); }, 
   yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });
+
+// ✦ The QuorX assistant's drawer (public/assistant.js) uses the page's own helpers too.
+// The assistant sends into a chat the way you do: the chat opens, and the message goes from its own box (its model,
+// tools, mode and context as they are); a reply already working gets it as a note instead.
+async function assistantSendToChat(id, text) {
+  await refreshSidebar(); await showChat(id);
+  const c = G.open.get(id);
+  for (let n = 0; n < 90 && c && !c.el?.root?.isConnected; n++) await new Promise((r) => requestAnimationFrame(r));
+  if (!c) throw new Error('that chat could not be opened');
+  return c.running ? steer(c, text) : send(c, text);
+}
+initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar, micAllowed, heardSpeech, encodeWav, asDataURL, sendToChat: assistantSendToChat });
