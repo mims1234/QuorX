@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('ohDesktop', {
   frame: (op, arg) => call('frame', op, arg),
   openExternal: (url) => call('openExternal', url),
   showFile: (file) => call('showFile', file),
+  copyImage: (bytes) => call('copyImage', bytes),
   perf: () => call('perf'),
   // The taskbar badge: how many chats need you, and the picture the page drew for it.
   badge: (n, png) => call('badge', n, png),

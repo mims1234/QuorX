@@ -109,9 +109,28 @@ export function appGate(req, res, url) {
   const hm = url.pathname.match(/^\/api\/prefs\/handoff\/([\w-]{24})$/);
   if (hm && req.method === 'POST' && !app && handoffs.get(hm[1])?.items === null) return false;
   if ((app && same(keyCookie(req), appKey)) || same(req.headers['x-quorx-key'], appKey)) return false;
+  if (url.pathname === '/api/media' && (req.method === 'GET' || req.method === 'HEAD') && mediaSigned(url)) return false;
   res.writeHead(401, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'This QuorX needs its app link: open the link it printed when it started (or use the desktop app), then reload.', code: 'APP_KEY' }));
   return true;
+}
+
+// ---------- a media file opened in your own browser ----------
+// A picture or video from a chat opened in another browser (↗) has no cookie there. QuorX's window asks for a link
+// signed for that one file (POST /api/media/link): it opens /api/media for exactly that project, chat and path, for
+// MEDIA_LINK_TTL, and nothing else. Making one needs the key; the signature is made from it.
+export const MEDIA_LINK_TTL = 6 * 3600e3;
+const mediaSig = (project, chat, p, exp) => crypto.createHmac('sha256', appKey).update(`media\n${project}\n${chat}\n${p}\n${exp}`).digest('base64url');
+/** The query (exp and sig) that lets /api/media serve this one file without the key until `exp`. */
+export function mediaLinkQuery(project, chat, p, now = Date.now()) {
+  const exp = String(Math.floor((now + MEDIA_LINK_TTL) / 1000));
+  return { exp, sig: mediaSig(String(project || ''), String(chat || ''), String(p || ''), exp) };
+}
+/** The /api/media request carries a signature for its own project, chat and path that has not run out. */
+export function mediaSigned(url, now = Date.now()) {
+  const q = url.searchParams, exp = q.get('exp') || '', sig = q.get('sig') || '';
+  if (!/^\d{1,12}$/.test(exp) || !sig || Number(exp) * 1000 < now) return false;
+  return same(sig, mediaSig(q.get('project') || '', q.get('chat') || '', q.get('path') || '', exp));
 }
 
 // ---------- moving to quorx.localhost ----------

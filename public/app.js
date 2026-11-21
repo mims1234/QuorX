@@ -3917,6 +3917,7 @@ function viewPictures(list, start, disk = []) {
       body.innerHTML = `<div class="lb-pic pv-checker"><img src="${esc(list[i])}" alt="picture ${i + 1}"></div>${list.length > 1 || fold ? `<div class="lb-nav">${list.length > 1 ? `<button type="button" class="lb-prev" aria-label="Previous">‹</button><span>${i + 1} of ${list.length}</span><button type="button" class="lb-next" aria-label="Next">›</button>` : ''}${fold}</div>` : ''}`;
       const go = (k) => { i = (i + k + list.length) % list.length; draw(); };
       const fb = $('.lb-folder', body); if (fb) fb.onclick = () => openFolder(null, disk[i]);
+      $('.lb-pic img', body)._full = disk[i] || '';
       const pv = $('.lb-prev', body), nx = $('.lb-next', body);
       if (pv) pv.onclick = () => go(-1); if (nx) nx.onclick = () => go(1);
       d.onkeydown = (e) => { if (list.length > 1 && e.key === 'ArrowLeft') go(-1); if (list.length > 1 && e.key === 'ArrowRight') go(1); };
@@ -11844,6 +11845,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
   if (kind === 'image') {
     view.innerHTML = head(meta) + `<div class="pv-stage pv-checker" title="Click for actual size"><img src="${esc(src)}" alt="${esc(name)}"></div>`; wire();
     const img = $('img', view), stage = $('.pv-stage', view);
+    stage._full = full || '';
     img.onload = () => { $('.pv-info', view).textContent = `${meta} · ${img.naturalWidth}×${img.naturalHeight}`; };
     stage.onclick = () => stage.classList.toggle('actual');
     return;
@@ -11852,6 +11854,7 @@ async function previewFile(view, { name, src, size, full, text, kind = previewKi
     view.innerHTML = head(meta) + (kind === 'video' ? `<div class="pv-stage"><video controls preload="metadata" src="${esc(src)}"></video></div>` : `<div class="pv-stage pv-audio"><div class="pv-disc" aria-hidden="true">🎵</div><audio controls preload="metadata" src="${esc(src)}"></audio></div>`);
     wire();
     const el = $(kind, view);
+    $('.pv-stage', view)._full = full || '';
     el.onloadedmetadata = () => { $('.pv-info', view).textContent = [meta, durText(el.duration), kind === 'video' && el.videoWidth ? `${el.videoWidth}×${el.videoHeight}` : ''].filter(Boolean).join(' · '); };
     el.onerror = () => { $('.pv-stage', view).insertAdjacentHTML('beforeend', `<p class="pv-note">This format does not play in the app (it may need its own player).${elsewhere ? ` Use ${elsewhere}.` : ''}</p>`); };
     return;
@@ -16788,10 +16791,11 @@ function wireAreaChrome() {
   };
   $('#reloadBtn').onclick = () => { if (G.view.browser && G.dsk?.ph.isConnected) return window.ohDesktop.nav(G.dsk.sid, 'reload'); if (G.view.browser && $('#paneBody .ubview')) return ubCall('reload'); if (!$('#paneBody iframe')) return renderPane(); reloadPreview(); };
   $('#popBtn').onclick = () => {
-    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return DESK ? window.ohDesktop.openExternal(G.paneUrl) : window.open(G.paneUrl, '_blank', 'noopener');
+    if (G.paneUrl && !G.paneUrl.startsWith('data:')) return openOutside(G.paneUrl);
     const f = $('#paneBody iframe'), img = $('#paneBody img'), au = $('#paneBody audio'), vid = $('#paneBody video');
-    const url = f ? (f.srcdoc ? URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })) : f.src) : img?.src || au?.src || vid?.src;
-    if (url) window.open(url, '_blank');
+    if (f?.srcdoc) return window.open(URL.createObjectURL(new Blob([f.srcdoc], { type: 'text/html' })), '_blank');
+    const url = f ? f.src : img?.src || au?.src || vid?.src;
+    if (url) openOutside(url);
   };
   $('#copyUrlBtn').onclick = async () => {
     if (!G.paneUrl) return;
@@ -17085,12 +17089,71 @@ async function openLink(url, from) {
   G.view = { id: G.view.id, src: false, files: false, browser: true };
   c.paneHidden = false; syncLayout(); renderPane(); toPreview();
 }
-function openOutside(url) {
+// A chat's picture or video (/api/media) needs the app cookie, which your own browser doesn't have: it opens there
+// with a link signed for that one file instead (POST /api/media/link).
+async function outsideAddress(href) {
+  let u; try { u = new URL(href, location.href); } catch { return href; }
+  if (u.origin !== location.origin || u.pathname !== '/api/media') return u.href;
+  const r = await fetch('/api/media/link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ src: u.pathname + u.search }) }).then((x) => x.json()).catch(() => ({}));
+  return r.url ? location.origin + r.url : u.href;
+}
+async function openOutside(url) {
   let u; try { u = new URL(offAppHost(String(url || '')), location.href); } catch { return; }
   if (!/^https?:$/.test(u.protocol)) return;
-  if (DESK) window.ohDesktop.openExternal(u.href); else window.open(u.href, '_blank', 'noopener');
+  const href = await outsideAddress(u.href);
+  if (DESK) window.ohDesktop.openExternal(href); else window.open(href, '_blank', 'noopener');
 }
 const followLink = (url, from, outside) => (outside ? openOutside(url) : openLink(url, from));
+// ---------- right-click on a picture, video or sound (the side pane's viewer, the chat's cards, the picture pop-up) ----------
+// Copy image (a video: the frame showing) as a PNG, Copy file (the file itself, to paste into File Explorer; Windows),
+// Copy path, and Open in your own browser. Only what that kind of media can do is listed.
+const MEDIA_MENU_AT = '.pv-stage img, .pv-stage video, .pv-stage audio, .msg-media img, .msg-media video, .msg-media audio, .lb-pic img';
+/** The picture or the video's current frame as a PNG blob. */
+async function mediaPng(el) {
+  if (el.tagName === 'IMG' && !el.complete) await el.decode().catch(() => {});
+  const vid = el.tagName === 'VIDEO';
+  const w = (vid ? el.videoWidth : el.naturalWidth) || 512, h = (vid ? el.videoHeight : el.naturalHeight) || 512;
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  cv.getContext('2d').drawImage(el, 0, 0, w, h);
+  return new Promise((ok, no) => cv.toBlob((b) => (b ? ok(b) : no(new Error('no picture'))), 'image/png'));
+}
+// Where the file is: a chat card's (on this computer, else as the reply named it), the viewer's, or the pop-up's.
+const mediaPathOf = (el) => { const card = el.closest('.mm-pic, .mm-card'); return el._full || card?._disk || card?._full || el.closest('.pv-stage')?._full || ''; };
+// Copy file needs the server to find the file: a chat's media or a project file, not a picture kept in the chat.
+const fileBehind = (src) => { try { const u = new URL(src, location.href); return u.origin === location.origin && (u.pathname === '/api/media' || u.pathname.startsWith('/ws/')); } catch { return false; } };
+function mediaMenuItems(el) {
+  const src = el.currentSrc || el.src || '', kind = el.tagName.toLowerCase(), path = mediaPathOf(el);
+  const say = (t) => flashTip(el, t, 1800);
+  const items = [];
+  if (kind === 'img' || (kind === 'video' && el.videoWidth)) {
+    items.push([kind === 'video' ? '🖼 Copy this frame' : '🖼 Copy image', () => {
+      // The desktop app puts it on the clipboard itself; a browser gets the PNG as a promise, so the copy keeps the
+      // click that asked for it.
+      const done = DESK && window.ohDesktop.copyImage
+        ? mediaPng(el).then((b) => b.arrayBuffer()).then((a) => window.ohDesktop.copyImage(new Uint8Array(a))).then((ok) => { if (!ok) throw new Error('not copied'); })
+        : navigator.clipboard.write([new ClipboardItem({ 'image/png': mediaPng(el) })]);
+      done.then(() => say('Copied')).catch(() => say('Could not copy the picture'));
+    }]);
+  }
+  if (fileBehind(src) && (!G.cfg?.platform || G.cfg.platform === 'win32')) {
+    items.push(['📄 Copy file', async () => {
+      const r = await postJ('/api/media/copy-file', { src: new URL(src, location.href).pathname + new URL(src, location.href).search }).catch((e) => ({ error: e.message }));
+      say(r?.ok ? 'File copied: paste it in a folder' : `Could not copy the file${r?.error ? `: ${r.error}` : ''}`);
+    }]);
+  }
+  if (path) items.push(['📋 Copy path', () => navigator.clipboard?.writeText(path).then(() => say('Copied')).catch(() => say('Could not copy'))]);
+  if (/^https?:/i.test(new URL(src || 'about:blank', location.href).protocol)) {
+    if (items.length) items.push(null);
+    items.push(['↗ Open in your own browser', () => openOutside(src)]);
+  }
+  return items;
+}
+document.addEventListener('contextmenu', (e) => {
+  const el = e.target.closest?.(MEDIA_MENU_AT);
+  if (!el) return;
+  const items = mediaMenuItems(el);
+  if (items.length) popMenu(e, items);
+});
 document.addEventListener('click', (e) => {
   const a = e.target.closest?.('a[data-cl]');
   if (!a) return;

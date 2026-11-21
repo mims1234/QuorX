@@ -66,7 +66,7 @@ export const canStartFromImage = (spec) => (spec?.frames || []).includes('first_
  * model's nearest offered one is used; 16:9 when none was asked and it is offered). firstFrame: a data or https URL
  * of the picture to start from. Returns { body, note } or { error }.
  */
-export function videoBody({ model, prompt, secs, res, spec, aspect, firstFrame }) {
+export function videoBody({ model, prompt, secs, res, spec, aspect, firstFrame, lastFrame, references }) {
   const body = { model, prompt: String(prompt || ''), duration: secs, resolution: res };
   const offered = (spec?.aspects || []).filter((v) => /^\d+:\d+$/.test(v));
   let note = '';
@@ -80,6 +80,15 @@ export function videoBody({ model, prompt, secs, res, spec, aspect, firstFrame }
   if (firstFrame) {
     if (!canStartFromImage(spec)) return { error: `${model} can't start from a picture (its catalogue lists no first-frame input)` };
     body.frame_images = [{ type: 'image_url', image_url: { url: firstFrame }, frame_type: 'first_frame' }];
+  }
+  if (lastFrame) {
+    if (!(spec?.frames || []).includes('last_frame')) return { error: `${model} can't end on a picture (its catalogue lists no last-frame input)` };
+    (body.frame_images ||= []).push({ type: 'image_url', image_url: { url: lastFrame }, frame_type: 'last_frame' });
+  }
+  // Pictures for the look (reference-to-video). OpenRouter uses the frames instead when both are sent.
+  if (references?.length) {
+    if (body.frame_images) note += ' The reference pictures were left out: a start or end picture takes their place.';
+    else body.input_references = references.map((url) => ({ type: 'image_url', image_url: { url } }));
   }
   return { body, note };
 }

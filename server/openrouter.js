@@ -360,10 +360,20 @@ function pcmToWav(pcm, rate = 24000) {
   return Buffer.concat([h, pcm]);
 }
 
-export async function synthesize({ model, input, voice, instructions, speed }, signal) {
+// A speech model's endpoints: which of them copy a voice from a recording (supports_voice_cloning and friends).
+// (Video models use the same endpoints list: each endpoint's tag names the provider for provider.options.)
+export const speechEndpoints = (id) => cached(`speech-ep:${id}`, async () => {
+  const j = await (await fetch(`${BASE}/api/v1/models/${String(id).split('/').map(encodeURIComponent).join('/')}/endpoints`)).json();
+  return j.data?.endpoints || [];
+});
+
+// references: input_references for a voice copied from a recording (server/mediainputs.js speechRefs). A model that
+// takes one rejects a voice name next to it, so the voice is left out then.
+export async function synthesize({ model, input, voice, instructions, speed, references }, signal) {
   const t = Date.now();
+  const refs = Array.isArray(references) && references.length ? references : null;
   const send = (format) => fetch(`${BASE}/api/v1/audio/speech`, { method: 'POST', headers: headers(), signal,
-    body: JSON.stringify({ model, input, ...(voice ? { voice } : {}), ...(instructions ? { instructions } : {}), ...(speed ? { speed } : {}), response_format: format }) });
+    body: JSON.stringify({ model, input, ...(voice && !refs ? { voice } : {}), ...(refs ? { input_references: refs } : {}), ...(instructions ? { instructions } : {}), ...(speed ? { speed } : {}), response_format: format }) });
   let r = await send('mp3'), format = 'mp3';
   if (!r.ok) {
     const msg = (await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`;
@@ -378,8 +388,14 @@ export async function synthesize({ model, input, voice, instructions, speed }, s
 }
 
 // Lyria answers a streamed chat request with base64 audio chunks.
-export async function composeMusic({ model, prompt, seed }, signal) {
+/** Lyria takes one text: the description, with the style, the song's name, the words sung and "no vocals" folded in. */
+export function lyriaPrompt({ prompt, lyrics, title, style, instrumental }) {
+  return [String(prompt || '').trim(), style && `Style: ${String(style).trim()}`, title && `Title: ${String(title).trim()}`,
+    instrumental === true ? 'Instrumental only, no vocals.' : lyrics && `Lyrics:\n${String(lyrics).trim()}`].filter(Boolean).join('\n\n');
+}
+export async function composeMusic({ model, prompt, seed, lyrics, title, style, instrumental }, signal) {
   const t = Date.now();
+  prompt = lyriaPrompt({ prompt, lyrics, title, style, instrumental });
   const r = await fetch(`${BASE}/api/v1/chat/completions`, { method: 'POST', headers: headers(), signal,
     body: JSON.stringify({ model, stream: true, modalities: ['text', 'audio'], audio: { format: 'mp3' }, ...(Number.isInteger(seed) ? { seed } : {}), messages: [{ role: 'user', content: prompt }] }) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error?.message || `HTTP ${r.status}`);
@@ -413,6 +429,8 @@ export const videoModels = () => cached('videos', async () => {
     aspects: m.supported_aspect_ratios || [],
     // first_frame / last_frame: the pictures it can start (or end) a clip from; audio: whether it makes sound.
     frames: m.supported_frame_images || [], audio: m.generate_audio === true, seed: m.seed === true,
+    // Settings its providers take beyond OpenRouter's own fields (negative prompt, watermark…): provider.options.<tag>.
+    passthrough: m.allowed_passthrough_parameters || [],
   }));
 });
 
