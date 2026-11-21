@@ -95,7 +95,7 @@ function msgHTML(m, i) {
       <div class="qxa-card-t">${H.esc(c.title)}</div>
       ${c.goal ? `<div class="qxa-card-goal">${H.esc(c.goal)}</div>` : ''}
       <div class="qxa-card-ft"><s>${H.esc(c.from)}</s> → <b>${H.esc(c.to)}</b>${c.where ? ` <small>· ${H.esc(c.where)}</small>` : ''}</div>
-      ${m.done ? state : `<div class="qxa-card-act"><button class="qxa-btn primary" data-yes="${i}">${c.kind === 'self_edit' || c.kind === 'chat' ? 'Start it' : c.kind === 'api' ? 'Do it' : 'Change it'}</button><button class="qxa-btn" data-no="${i}">Keep it as it is</button></div>`}
+      ${m.done ? state : `<div class="qxa-card-act"><button class="qxa-btn primary" data-yes="${i}">${c.kind === 'self_edit' || c.kind === 'chat' ? 'Start it' : c.kind === 'send' ? 'Send it' : c.kind === 'api' ? 'Do it' : 'Change it'}</button><button class="qxa-btn" data-no="${i}">Keep it as it is</button></div>`}
     </div>`;
   }
   const bits = m.meta ? [m.meta.steps?.length ? `looked at ${[...new Set(m.meta.steps)].join(', ')}` : '', A.showMoney ? (m.meta.cost ? money(m.meta.cost) : 'on your plan, $0') : ''].filter(Boolean) : [];
@@ -143,6 +143,7 @@ async function send(text) {
 
 async function doAction(act) {
   if (act.kind === 'setting') return H.settingChanged({ where: 'quorx', key: act.key, value: act.value });
+  if (act.kind === 'send') return H.sendToChat(act.chatId, act.text).catch((e) => { A.msgs.push({ role: 'bot', text: `⚠ Couldn't send it: ${e.message}` }); draw(); });
   if (act.kind !== 'open') return;
   const [kind, id] = act.where.split(':');
   if (kind === 'chat') { await H.refreshSidebar(); return H.showChat(id); }
@@ -151,6 +152,7 @@ async function doAction(act) {
 
 async function confirm(m) {
   const c = m.card;
+  if (c.kind === 'send') { m.done = 'yes'; draw(); await H.sendToChat(c.chatId, c.message).catch((e) => { m.done = 'err'; m.err = e.message; }); H.postJ('/api/assistant/card', { title: c.title, outcome: m.done === 'err' ? 'err' : 'yes' }); return draw(); }
   if (c.kind === 'setting') {
     H.settingChanged({ where: 'quorx', key: c.key, value: c.value });
     m.done = 'yes'; draw();

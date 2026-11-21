@@ -183,3 +183,15 @@ test('a reply that only says what it will do is told to do it', async () => {
   assert.equal(r.say, 'Opened it.');
   assert.deepEqual(r.actions, [{ kind: 'open', where: 'budget' }]);
 });
+
+test('send_to_chat: continues an existing chat from its own box (a page action), or a card in "ask" mode', async () => {
+  const id = 'cmtestread01'; // written by the read_chat test above
+  const r = await A.assistantTurn({ text: 'resume it there', prefs: { assistant: { access: 'auto' } }, call: scripted([`{"say":"","do":[{"tool":"send_to_chat","args":{"id":"${id}","message":"Carry on where you left off."}}]}`, '{"say":"Done: resumed it in that chat.","do":[]}']) });
+  assert.deepEqual(r.actions, [{ kind: 'send', chatId: id, text: 'Carry on where you left off.' }]);
+  assert.equal(r.done[0].kind, 'send');
+  const ask = await A.assistantTurn({ text: 'resume it there', prefs: { assistant: { access: 'ask' } }, call: scripted([`{"say":"","do":[{"tool":"send_to_chat","args":{"id":"${id}","message":"Go on."}}]}`, '{"say":"Card is up.","do":[]}']) });
+  assert.equal(ask.cards[0].kind, 'send');
+  assert.equal(ask.actions.length, 0);
+  const none = await A.assistantTurn({ text: 'x', prefs: { assistant: { access: 'auto' } }, call: scripted(['{"say":"","do":[{"tool":"send_to_chat","args":{"id":"nope","message":"hi"}}]}', '{"say":"No such chat.","do":[]}']) });
+  assert.equal(none.actions.length, 0);
+});

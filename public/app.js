@@ -19084,4 +19084,13 @@ initPerms({ esc, $, G, ST, getJ, postJ, getChat, saveChat, renderComposerBar, TO
   yoloAsking: () => YOLO_ROWS.filter(([k]) => G.settings.yoloAuto?.[k] === false).length });
 
 // ✦ The QuorX assistant's drawer (public/assistant.js) uses the page's own helpers too.
-initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar, micAllowed, heardSpeech, encodeWav, asDataURL });
+// The assistant sends into a chat the way you do: the chat opens, and the message goes from its own box (its model,
+// tools, mode and context as they are); a reply already working gets it as a note instead.
+async function assistantSendToChat(id, text) {
+  await refreshSidebar(); await showChat(id);
+  const c = G.open.get(id);
+  for (let n = 0; n < 90 && c && !c.el?.root?.isConnected; n++) await new Promise((r) => requestAnimationFrame(r));
+  if (!c) throw new Error('that chat could not be opened');
+  return c.running ? steer(c, text) : send(c, text);
+}
+initAssistant({ G, esc, getJ, postJ, openSettings, settingChanged, showChat, refreshSidebar, micAllowed, heardSpeech, encodeWav, asDataURL, sendToChat: assistantSendToChat });

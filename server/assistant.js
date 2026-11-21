@@ -16,7 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { HOME, ROOT, currentKey, chat as orChat, runtime, chatModels, speechModels } from './openrouter.js';
 import { readAloudPiece, READ_ALOUD_MAX } from './readaloud.js';
 import { SOURCES, SOURCE_IDS, sourceOn, sourceOffWhy, sourceModels, chatAny, keyFor } from './sources.js';
-import { listProjects, saveProject, costSummary, chatPage } from './store.js';
+import { listProjects, saveProject, costSummary, chatPage, getChat } from './store.js';
 import { SETTINGS, SETTINGS_BY_KEY, CATS, pageValue, show, checkValue, SECRET_KEY } from './quorxsettings.js';
 import { appKey } from './access.js';
 import { renameSoon } from './fsretry.js';
@@ -190,12 +190,18 @@ const TOOLS = {
   api_how: 'How a route works, from its own code: the methods it answers, the body or query it reads, what it returns. Read it before any api_call. args: {"path": "/api/..."}',
   api_get: 'Read any API route (GET), free and at once; long answers come a page at a time. args: {"path": "/api/...?query", "offset": n}',
   api_call: 'Do anything QuorX can do through its API (POST/PUT/PATCH/DELETE): the user gets a card showing exactly what will be sent, and only their click sends it. args: {"method": "POST", "path": "/api/...", "body": {...}, "why": "what this does, in plain words"}',
+  send_to_chat: 'Send a message into an existing chat, as if the user typed it in that chat box: it starts the next reply there with that chat\'s own model, tools and mode (or, if a reply is working, adds the message to it). Use it to continue, resume or redirect a chat. args: {"id": "chat id", "message": "what to tell the agent there"}',
   start_chat: 'Propose starting a new chat in a project, whose first reply does a task with QuorX\'s full agent (files, commands, browser, media…); the user clicks to start it and can watch it. args: {"project": "name or id", "message": "the task, in detail", "model": "model id (optional)"}',
   self_edit: 'Propose a change to QuorX\'s own code or look. On the user\'s click, QuorX\'s agent makes it in a new git worktree and branch (the running copy is untouched); the user tests it and merges. args: {"title": "short name", "goal": "what to change, in detail"}',
 };
 
 function systemPrompt(snapshot, summary = '', access = ACCESS_DEFAULT) {
-  return `You are the QuorX assistant: a warm, plain-spoken helper built into QuorX, an AI agent harness on the user's PC. You talk like a capable colleague, short and human (one to four sentences, no headings, no lists unless asked), and you get things done.
+  return `You are the QuorX assistant: a warm, plain-spoken helper built into QuorX, an AI agent harness on the user's PC. Your job is to get done what the user asks, not to talk about it.
+- Do the task with your tools first, then answer in one short sentence with what you did or found ("Done: resumed it in that chat." / "You have 2 schedules: …"). Two or three sentences only when the answer itself needs them.
+- Don't explain how, why, what you looked at, your limits or what happens next unless the user asks. No apologies, no recaps of earlier answers, no offers like "want me to…?" when you can just do it.
+- If something truly can't be done, say so in one sentence and what would make it possible.
+- Ask a question only when the task can't go on without the answer.
+- No headings or lists unless asked.
 
 You can look at QuorX and act on it through these tools:
 ${Object.entries(TOOLS).map(([k, v]) => `- ${k}: ${v}`).join('\n')}
@@ -243,6 +249,7 @@ export function needsAsk(card, access = ACCESS_DEFAULT) {
 async function propose(ctx, card) {
   if (needsAsk(card, ctx.access)) { ctx.cards.push(card); return { proposed: true, note: 'a card is up; the user decides' }; }
   ctx.done.push(card);
+  if (card.kind === 'send') { ctx.actions.push({ kind: 'send', chatId: card.chatId, text: card.message }); return { done: true, sent: true, note: 'the chat is open and its reply has started; check on it later with read_chat' }; }
   if (card.kind === 'setting') {
     ctx.actions.push({ kind: 'setting', key: card.key, value: card.value }); // the page applies and saves it, like its own Save
     if (card.key.startsWith('assistant.')) { const s = load(), k = card.key.slice(10); if (k === 'monthly') s.monthly = Number(card.value); else s[k] = card.value || undefined; save(); }
@@ -320,6 +327,13 @@ async function runTool(name, args, ctx) {
     if (!route || !ctx.how?.has(route)) return { error: `read how ${p} works with api_how first, then call it with the method and body its code expects` };
     const why = clip(String(args?.why || '').trim(), 200) || `${method} ${p}`;
     return propose(ctx, { id: crypto.randomUUID(), kind: 'api', method, path: p, body: args?.body ?? {}, title: why, from: `${method} ${p}`, to: clip(JSON.stringify(args?.body ?? {}), 400) || '{}' });
+  }
+  if (name === 'send_to_chat') {
+    const doc = getChat(String(args?.id || ''));
+    if (!doc) return { error: `no chat "${args?.id}" (find it with chats)` };
+    const message = String(args?.message || '').trim();
+    if (!message) return { error: 'send_to_chat needs the message' };
+    return propose(ctx, { id: crypto.randomUUID(), kind: 'send', chatId: doc.id, message: clip(message, 8000), title: `Send to "${clip(doc.title || doc.id, 50)}"`, goal: clip(message, 1500), from: 'you, in that chat', to: clip(doc.title || doc.id, 60) });
   }
   if (name === 'start_chat') {
     const ref = String(args?.project || 'scratch').trim().toLowerCase(), all = listProjects();
