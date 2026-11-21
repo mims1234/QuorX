@@ -7934,12 +7934,39 @@ async function send(c, text) {
   runChat(c, text, ctx, imgs, { docs, comments });
   if (c === G.homeDraft) promoteDraft(c);
 }
+// A picture the user attaches is kept in the project by the server (chatPicturePath in server/agent.js): named by the
+// SHA-1 of its data URL, so the page knows the path without asking. It stays usable for the whole chat.
+async function chatPicturePath(dataUrl) {
+  const type = /^data:image\/([\w.+-]+)/.exec(String(dataUrl))?.[1] || 'jpeg';
+  const ext = { jpeg: 'jpg', jpg: 'jpg', png: 'png', webp: 'webp', gif: 'gif' }[type.toLowerCase()] || 'jpg';
+  const hash = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(String(dataUrl)));
+  return `.quorx/uploads/pictures/${[...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 12)}.${ext}`;
+}
+// Every picture the user attached earlier in this chat, by path, for the agent to use again (after a compaction too).
+// A message from before pictures were kept by path gets its paths now, and sends its picture once so it is saved.
+async function sharedPictures(c) {
+  const out = [];
+  for (const m of c.agent.messages) {
+    const groups = m.role === 'user' ? [m] : (m.steerAtt || []);
+    for (const g of groups) {
+      const views = g.imgViews || [];
+      if (!views.length) continue;
+      const fresh = !Array.isArray(g.imgPaths) || g.imgPaths.length !== views.length;
+      if (fresh) g.imgPaths = await Promise.all(views.map((u) => chatPicturePath(u)));
+      g.imgPaths.forEach((path, i) => out.push({ path, said: clip(String(g.content ?? g.text ?? ''), 80), ...(fresh && views[i] ? { data: views[i] } : {}) }));
+    }
+  }
+  return out.slice(-40);
+}
 async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, model = '', comments = [] } = {}) {
+  // Pictures from earlier messages (before this one is added), and where this message's pictures will be kept.
+  const shared = await sharedPictures(c).catch(() => []);
+  const imgPaths = await Promise.all(imgs.map((x) => chatPicturePath(x.full))).catch(() => []);
   const cmts = comments.map(({ selector, tag, text: t, section, rect, url, note, crop }) => ({ selector, tag, text: t, section, rect, url, note, crop: !!crop }));
   const a = c.agent;
   // After a compaction only the turns since the summary are sent, together with the summary. A reply the user stopped
   // goes too, with the text they saw and a note that it stops there, so "go on" or "expand your second point" work.
-  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.error || (stoppedByYou(m) && String(m.content || '').trim())) && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}${m.error ? '\n\n[The user stopped this reply here.]' : ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => d.name).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
+  const history = a.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.error || (stoppedByYou(m) && String(m.content || '').trim())) && (!a.summaryAt || (m.at || 0) >= a.summaryAt)).map((m) => ({ role: m.role, at: m.at, content: m.role === 'assistant' ? `${m.content}${m.note || ''}${m.error ? '\n\n[The user stopped this reply here.]' : ''}` : `${m.cmts?.length ? `[pointed at on the page: ${m.cmts.map((x) => `${x.tag} "${x.text}" (${x.selector})${x.note ? `: ${x.note}` : ''}`).join('; ')}] ` : ''}${m.ctx?.length ? `[attached context: ${m.ctx.join(', ')}] ` : ''}${m.imgPaths?.length ? `[attached pictures, saved in the project: ${m.imgPaths.join(', ')}] ` : ''}${m.docs?.length ? `[attached files: ${m.docs.map((d) => (d.rel ? `${d.name} (${d.rel})` : d.name)).join(', ')}; read them with read_doc / search_docs] ` : ''}${m.content}` }));
   const runId = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   // Resuming after a restart carries on in the reply that was cut off (its steps so far stay above the new ones);
   // "Keep going" after running out of steps is a reply of its own.
@@ -7951,7 +7978,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
     if (m.stats?.partial) delete m.stats; // the resumed run's totals include what the cut-off part spent
     m.trace.push({ t: 'resumed', from: resumeOf, at: (m.trace.at(-1)?.at || 0) });
   }
-  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(cmts.length ? { cmts: cmts.map(({ crop, ...x }) => x) } : {}), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
+  const user = resumeOf ? null : { role: 'user', content: text, at: Date.now(), ...(cmts.length ? { cmts: cmts.map(({ crop, ...x }) => x) } : {}), ...(ctx ? { ctx: ctx.titles } : {}), ...(imgs.length ? { imgs: imgs.map((x) => x.thumb), imgViews: imgs.map((x) => x.view || x.full), ...(imgPaths.length === imgs.length ? { imgPaths } : {}) } : {}), ...(docs.length ? { docs: docs.map(({ id, name, kind, size, status, rel }) => ({ rel, id, name, kind, size, status })) } : {}) };
   if (!cut) a.messages.push(...(user ? [user] : []), m);
   const box = c.el && G.panes.includes(c.id) ? $('.msgs', c.el.root) : null;
   if (box && cut) { updateMsg(c, m); c.follow = true; c.toEnd?.(); }
@@ -7962,7 +7989,7 @@ async function runChat(c, text, ctx, imgs, { resumeOf, docs = [], more = 0, mode
   const prefs = { ...G.settings, theme: G.theme ?? 'system' };
   const lsw = limitSwitchNow(c);
   const body = resumeOf ? { runId: m.runId, chatId: c.id, resume: resumeOf, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(a.limitMode === 'wait' ? { limitMode: 'wait' } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], reading: a.reading?.text || '', ...(more ? { continue: more, ...(model ? { model } : {}) } : {}) }
-    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(a.limitMode === 'wait' ? { limitMode: 'wait' } : {}), ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
+    : { runId: m.runId, chatId: c.id, projectId: c.projectId, chatTitle: c.title, setup: a.setup, settings, prefs, ...(lsw ? { limitSwitch: lsw } : {}), ...(a.limitMode === 'wait' ? { limitMode: 'wait' } : {}), ...(/^\/goal\b/i.test(String(text || '').trim()) ? { goal: true } : {}), allowed: a.allowed, cmdRules: a.cmdRules || [], apps: a.apps || [], folders: a.folders || [], offProject: chatOffProject(c), history, summary: a.summary || '', reading: a.reading?.text || '', text, artifacts, context: ctx?.text || '', images: imgs.map((x) => x.full), ...(shared.length ? { shared } : {}), docs: docs.map((d) => d.id), ...(cmts.length ? { comments: cmts } : {}), ...(a.videoMode ? { videoMode: a.videoMode } : {}), ...(a.videoMode === 'on' && a.videoFrom ? { videoFrom: a.videoFrom } : {}) };
   // Saved straight away, so a reload finds the running reply and reattaches to it.
   saveChat(c, true);
   return followRun(c, m, async (signal) => {

@@ -10,6 +10,7 @@
 //                applies in both modes
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { chat, chatStream, routeLimits, generationCost, chatModels, speechModels, synthesize, speechEndpoints, HOME } from './openrouter.js';
 import { imageModels, generateImage, composeMusic, musicModels, videoModels, generateVideo } from './mediacat.js';
@@ -262,6 +263,15 @@ export function compactPaths(paths) {
 // A picture from the project for the deciders, as a data URL, at most 1280 px on its longest side. A decider model
 // turned down a 1920×810 contact sheet and 1920×1080 frames ("Invalid image dimensions") and took 1024×576 stills,
 // so a big picture left a check with one judge fewer. Scaled with ffmpeg when it is installed; else sent as it is.
+// Where a picture the user attached is kept in the project: named by the SHA-1 of its data URL, so the page works out
+// the same path by itself (chatPicturePath in public/app.js) and the same picture is kept once.
+export const PICTURE_PATH = /^\.quorx\/uploads\/pictures\/[a-f0-9]{12}\.(jpg|png|webp|gif)$/;
+export function chatPicturePath(dataUrl) {
+  const type = /^data:image\/([\w.+-]+)/.exec(String(dataUrl))?.[1] || 'jpeg';
+  const ext = { jpeg: 'jpg', jpg: 'jpg', png: 'png', webp: 'webp', gif: 'gif' }[type.toLowerCase()] || 'jpg';
+  return `.quorx/uploads/pictures/${crypto.createHash('sha1').update(String(dataUrl)).digest('hex').slice(0, 12)}.${ext}`;
+}
+
 export function deciderPicture(file, type, run = execFileSync) {
   try {
     const jpg = run('ffmpeg', ['-v', 'error', '-i', file, '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease", '-frames:v', '1', '-q:v', '4', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'], { maxBuffer: 2e7, timeout: 20000, windowsHide: true });
@@ -1490,6 +1500,27 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   if (routeLim?.maxOut) maxOut = Math.max(1024, Math.min(maxOut, routeLim.maxOut));
   // Images the user attached (data URLs). The chat model sees them if it can; the deciders always can, via decide.
   const attachedImages = (Array.isArray(req.images) ? req.images : []).filter((u) => /^data:image\//.test(String(u))).slice(0, 4);
+  // Pictures stay usable for the whole chat: each is saved in the project by its content (chatPicturePath), this
+  // message's and earlier ones alike. req.shared (from the page) lists the earlier ones by path; one from before
+  // pictures were saved comes with its data once, and is saved now.
+  const savePicture = (u) => {
+    if (!root) return null;
+    const rel = chatPicturePath(u);
+    try {
+      const full = safePath(root, rel);
+      if (!fs.existsSync(full)) { fs.mkdirSync(path.dirname(full), { recursive: true }); fs.writeFileSync(full, Buffer.from(String(u).split(',')[1] || '', 'base64')); }
+      return rel;
+    } catch { return null; }
+  };
+  const attachedPaths = attachedImages.map(savePicture);
+  const sharedPictures = root ? (Array.isArray(req.shared) ? req.shared : []).slice(-40).map((x) => {
+    const rel = typeof x?.path === 'string' && PICTURE_PATH.test(x.path) ? x.path : null;
+    if (!rel || attachedPaths.includes(rel)) return null;
+    if (typeof x.data === 'string' && /^data:image\//.test(x.data) && chatPicturePath(x.data) === rel) savePicture(x.data);
+    try { if (!fs.existsSync(safePath(root, rel))) return null; } catch { return null; }
+    return { path: rel, said: clip(String(x.said || '').replace(/\s+/g, ' ').trim(), 80) };
+  }).filter(Boolean) : [];
+  const picturesNote = `${attachedPaths.some(Boolean) ? `\n\nPictures attached to this message, saved in the project: ${attachedPaths.map((p, i) => (p ? `attached:${i + 1} = ${p}` : '')).filter(Boolean).join('; ')}. In later replies use the path (attached:N means this message's pictures only).` : ''}${sharedPictures.length ? `\n\nPictures the user attached earlier in this chat, saved in the project: ${sharedPictures.map((x) => `${x.path}${x.said ? ` (sent with "${x.said}")` : ''}`).join('; ')}. Use the path wherever a picture is asked for: references, start_image, end_image, or decide images ["file:<path>"].` : ''}`;
   const seesImages = (modelInfo?.in || []).includes('image');
   if (!userText) throw new Error('empty message');
   // Documents attached to this message: small ones go in whole, big ones are described with how to
@@ -1546,7 +1577,7 @@ Saved launch configs (start one with start_server and just its name): ${launchCo
   const messages = resumed ? [...resumed.messages, { role: 'user', content: carryOn
       ? `[You reached this reply's step limit. The user gave you ${carryOn.steps} more steps${carryOn.model && carryOn.model !== carryOn.from ? ` and switched you to ${carryOn.model}` : ''}. Carry on from where you stopped: finish what is left, check it, then give your final reply.]`
       : '[The harness restarted while you were working, and this reply has been resumed from your last finished step. Check where things stand (list_files, read what you need), then carry on with the request.]' }]
-    : [{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }];
+    : [{ role: 'system', content: `${system}${picturesNote}` }, ...history, { role: 'user', content: userContent }];
   // ask_user goes to the user in Strict and to the deciders in YOLO (so a YOLO benchmark can offer it too).
   const askOn = (!req.bench || S.approval === 'yolo') && Number(S.askLimit ?? DEFAULTS.askLimit) > 0;
   // A chat with the deciders off gets no decide and no look (the browser stays); the harness checks are off too.
@@ -6296,7 +6327,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
         return `Error: ${plan.model} can't start from a picture.${can.length ? ` These models can: ${can.join(', ')}${T.video.pick === 'agent' ? ' (pass one as model)' : ' (the user can make one the first choice in the video settings)'}.` : ' None of the video models in use can; leave out start_image.'}`;
       }
       firstFrame = await startPicture(String(args.start_image));
-      if (!firstFrame) return `Error: no picture at ${clip(args.start_image, 120)}. Give a PNG, JPEG or WebP in the project (e.g. assets/generated/frame.png), artifact:<id> of a picture, or attached:1.`;
+      if (!firstFrame) return noPicture(String(args.start_image), 'assets/generated/frame.png');
     }
     // Reference pictures, an end picture and a voice sample: read, and the model checked, before anyone pays.
     const inputs = await mediaInputsFor(cat, args, plan.model);
@@ -6404,6 +6435,15 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
   async function voiceCloneOf(model) {
     try { return voiceClone(await (deps.speechEndpoints || speechEndpoints)(model)); } catch { return null; }
   }
+  // Why a picture couldn't be read, with where to find the chat's pictures when it was attached:N in a message without them.
+  function noPicture(ref, example) {
+    const n = /^attached:(\d+)$/.exec(String(ref).trim());
+    if (n && Number(n[1]) > attachedImages.length) {
+      const saved = sharedPictures.map((x) => x.path);
+      return `Error: no picture is attached to this message${attachedImages.length ? ` (it has ${attachedImages.length})` : ''}. ${saved.length ? `Pictures from earlier in this chat are saved in the project: ${saved.join(', ')}. Pass the path instead.` : 'Ask the user to attach it again.'}`;
+    }
+    return `Error: no picture at ${clip(ref, 120)}. Give a PNG, JPEG or WebP in the project (e.g. ${example}), artifact:<id> of a picture, or attached:1 for the user's first attached picture.`;
+  }
   async function mediaInputsFor(cat, args, model) {
     const out = {};
     const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
@@ -6415,7 +6455,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       out.pictures = [];
       for (const r of list(args.references).slice(0, 16)) {
         const u = await startPicture(r);
-        if (!u) return { error: `Error: no picture at ${clip(r, 120)}. Give a PNG, JPEG or WebP in the project (e.g. assets/generated/hero.png), artifact:<id> of a picture, or attached:1 for the user's first attached picture.` };
+        if (!u) return { error: noPicture(r, 'assets/generated/hero.png') };
         out.pictures.push(u);
       }
     }
@@ -6423,7 +6463,7 @@ Treat the implied parts as part of the request. The assumptions are defaults: fo
       const spec = (await (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()).catch(() => [])).find((m) => m.id === model);
       if (!(spec?.frames || []).includes('last_frame')) return { error: `Error: ${model} can't end on a picture.${choices.videoEnd?.length ? ` These models can: ${choices.videoEnd.join(', ')}.` : ' None of the video models in use can; leave out end_image.'}` };
       out.lastFrame = await startPicture(String(args.end_image));
-      if (!out.lastFrame) return { error: `Error: no picture at ${clip(args.end_image, 120)}. Give a PNG, JPEG or WebP in the project, artifact:<id> of a picture, or attached:1.` };
+      if (!out.lastFrame) return { error: noPicture(String(args.end_image), 'assets/generated/end.png') };
     }
     if (cat === 'video' && (list(args.reference_video).length || list(args.reference_audio).length)) {
       const spec = (await (deps.mediaCatalogue?.video ? Promise.resolve(deps.mediaCatalogue.video) : videoModels()).catch(() => [])).find((m) => m.id === model);
