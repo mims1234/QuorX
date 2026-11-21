@@ -26,7 +26,7 @@ test('a turn looks things up, then answers; a setting change becomes a card, not
     '{"say":"Let me check.","do":[{"tool":"settings_find","args":{"query":"text size"}},{"tool":"settings_set","args":{"key":"ui.fontSize","value":16}}]}',
     '{"say":"I put up a card to make text 16px.","do":[]}',
   ]);
-  const r = await A.assistantTurn({ text: 'make text bigger', prefs: { ui: { fontSize: 14 } }, call });
+  const r = await A.assistantTurn({ text: 'make text bigger', prefs: { ui: { fontSize: 14 }, assistant: { access: 'ask' } }, call });
   assert.equal(r.say, 'I put up a card to make text 16px.');
   assert.equal(r.cards.length, 1);
   assert.equal(r.cards[0].kind, 'setting');
@@ -41,7 +41,7 @@ test('open is done at once; unknown places are refused', async () => {
 });
 
 test('its budget: a card to change it, and at the limit it stops without calling a model', async () => {
-  const r = await A.assistantTurn({ text: 'budget 0.01', call: scripted(['{"say":"","do":[{"tool":"budget_set","args":{"monthly":0.1}}]}', '{"say":"Card is up.","do":[]}']) });
+  const r = await A.assistantTurn({ text: 'budget 0.01', prefs: { assistant: { access: 'ask' } }, call: scripted(['{"say":"","do":[{"tool":"budget_set","args":{"monthly":0.1}}]}', '{"say":"Card is up.","do":[]}']) });
   assert.equal(r.cards[0].kind, 'setting');
   assert.equal(r.cards[0].key, 'assistant.monthly');
   A.syncPrefs({ assistant: { monthly: r.cards[0].value } }); // the page applies the card and its prefs come back
@@ -97,4 +97,89 @@ test('a reply cut off mid-JSON still shows its words, not the JSON', () => {
   const r = A.parseReply('{"say":"SFW18 has one chat: \\"Cosplay\\". The image model is chosen by');
   assert.equal(r.say, 'SFW18 has one chat: "Cosplay". The image model is chosen by…');
   assert.deepEqual(r.do, []);
+});
+
+test('the API map comes from server.js itself, with notes, and leaves out keys and streams', async () => {
+  const X = await import('../server/assistantapi.js');
+  const map = X.apiMap();
+  assert.ok(map.length > 100, `only ${map.length} routes`);
+  assert.ok(map.some((e) => e.path === '/api/costs' && e.methods.includes('GET')));
+  assert.ok(map.some((e) => e.path.startsWith('/api/chats/:id')));
+  assert.ok(!map.some((e) => /\/keys?(\/|$)/.test(e.path)));
+  assert.ok(X.blockedPath('/api/keys') && X.blockedPath('/api/runs/r1/events') && X.blockedPath('/api/run') && !X.blockedPath('/api/costs'));
+  const small = X.apiMap("    // A chat's budget\n    const cbm = url.pathname.match(/^\/api\/chats\/([a-z0-9-]+)\/budget$/i);\n    if (url.pathname === '/api/x' && req.method === 'POST') return 1;");
+  assert.deepEqual(small.map((e) => e.path), ['/api/chats/:id/budget', '/api/x']);
+  assert.equal(small[0].note, "A chat's budget");
+});
+
+test('answers lose anything that looks like a secret, and big inline data', async () => {
+  const X = await import('../server/assistantapi.js');
+  const out = X.scrub({ name: 'a', apiKey: 'sk-1', nested: { github_token: 'x', ok: 1 }, img: `data:image/png;base64,${'A'.repeat(5000)}` });
+  assert.deepEqual(Object.keys(out), ['name', 'nested', 'img']);
+  assert.deepEqual(out.nested, { ok: 1 });
+  assert.match(out.img, /^\[data, \d+ characters\]$/);
+});
+
+test('acting through the API is always a card; keys and streams are refused', async () => {
+  A.resetAssistant(); fs.rmSync(path.join(home, 'data', 'assistant.json'), { force: true });
+  const r = await A.assistantTurn({ text: 'stop that run', prefs: { assistant: { access: 'ask' } }, call: scripted(['{"say":"","do":[{"tool":"api_how","args":{"path":"/api/runs/r1/stop"}},{"tool":"api_call","args":{"method":"POST","path":"/api/runs/r1/stop","why":"Stop the reply"}},{"tool":"api_call","args":{"method":"POST","path":"/api/keys","body":{}}},{"tool":"api_call","args":{"method":"GET","path":"/api/costs"}}]}', '{"say":"Card is up.","do":[]}']) });
+  assert.equal(r.cards.length, 1);
+  assert.equal(r.cards[0].kind, 'api');
+  assert.equal(r.cards[0].path, '/api/runs/r1/stop');
+});
+
+test('read_chat: messages, what a reply did, and how a running reply is doing', async () => {
+  const S = await import('../server/store.js');
+  const id = 'cmtestread01';
+  fs.mkdirSync(path.join(home, 'data', 'chats'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'data', 'chats', `${id}.json`), JSON.stringify({ id, title: 'Read me', projectId: 'scratch', created: 1, agent: { setup: { model: 'x/y' }, messages: [
+    { role: 'user', content: 'make a picture', at: 1 },
+    { role: 'assistant', content: 'Made it.', at: 2, trace: [{ t: 'tool', name: 'imagine' }, { t: 'tool', name: 'imagine' }, { t: 'tool', name: 'write_file' }], stats: { cost: 0.12 } },
+    { role: 'user', content: 'another', at: 3 },
+    { role: 'assistant', content: '', at: 4, runId: 'r9', runActive: true, trace: [] },
+  ] } }));
+  S.getChat(id); // warm the index
+  const X = await import('../server/assistantapi.js');
+  const r = await X.readChat({ id, runLog: async () => ({ status: 'running', events: [{ t: 'tool', name: 'imagine' }, { t: 'approval', id: 'a1', what: 'Make 1 picture ($0.04)' }] }) });
+  assert.equal(r.messages, 4);
+  assert.equal(r.rows[1].did, 'imagine×2, write_file×1');
+  assert.equal(r.rows[1].cost, '0.1200');
+  assert.equal(r.running.status, 'waiting for the user');
+  assert.match(r.running.approval, /Make 1 picture/);
+});
+
+test('context: old tool results shrink when a turn grows; the newest stays whole', () => {
+  const big = `Tool results:\n${'x'.repeat(40000)}`;
+  const msgs = [{ role: 'system', content: 's' }, { role: 'user', content: big }, { role: 'assistant', content: '{}' }, { role: 'user', content: big }];
+  A.fitContext(msgs, 50000);
+  assert.ok(msgs[1].content.length < 1000);
+  assert.equal(msgs[3].content.length, big.length);
+});
+
+test('it must read how a route works before proposing to call it', async () => {
+  const r = await A.assistantTurn({ text: 'resume it', call: scripted(['{"say":"","do":[{"tool":"api_call","args":{"method":"PUT","path":"/api/schedules/s1","body":{"paused":false}}}]}', '{"say":"Let me check first.","do":[]}']) });
+  assert.equal(r.cards.length, 0);
+});
+
+test('access "auto": it does what you ask at once, and asks only before risky things', async () => {
+  A.resetAssistant(); fs.rmSync(path.join(home, 'data', 'assistant.json'), { force: true });
+  const r = await A.assistantTurn({ text: 'bigger text, and raise your budget', prefs: { ui: { fontSize: 14 }, assistant: { access: 'auto' } }, call: scripted([
+    '{"say":"","do":[{"tool":"settings_set","args":{"key":"ui.fontSize","value":16}},{"tool":"budget_set","args":{"monthly":50}}]}', '{"say":"Text is 16px now; the budget raise is yours to approve.","do":[]}']) });
+  assert.deepEqual(r.actions, [{ kind: 'setting', key: 'ui.fontSize', value: 16 }]);
+  assert.equal(r.done.length, 1);
+  assert.equal(r.cards.length, 1);
+  assert.equal(r.cards[0].key, 'assistant.monthly');
+  assert.equal(A.needsAsk({ kind: 'api', method: 'PUT', path: '/api/schedules/s1', body: { paused: false } }, 'auto'), false);
+  assert.equal(A.needsAsk({ kind: 'api', method: 'DELETE', path: '/api/schedules/s1' }, 'auto'), true);
+  assert.equal(A.needsAsk({ kind: 'api', method: 'POST', path: '/api/storage/clear' }, 'auto'), true);
+  assert.equal(A.needsAsk({ kind: 'api', method: 'DELETE', path: '/api/schedules/s1' }, 'full'), false);
+  assert.equal(A.needsAsk({ kind: 'setting', key: 'ui.fontSize', value: 16 }, 'ask'), true);
+  assert.equal(A.needsAsk({ kind: 'setting', key: 'approval', value: 'yolo' }, 'auto'), !!(await import('../server/quorxsettings.js')).SETTINGS_BY_KEY.get('approval')?.guard);
+});
+
+test('a reply that only says what it will do is told to do it', async () => {
+  const call = scripted(['{"say":"I\'ll pin it now.","do":[]}', '{"say":"","do":[{"tool":"open","args":{"where":"budget"}}]}', '{"say":"Opened it.","do":[]}']);
+  const r = await A.assistantTurn({ text: 'open budget', prefs: { assistant: { access: 'auto' } }, call });
+  assert.equal(r.say, 'Opened it.');
+  assert.deepEqual(r.actions, [{ kind: 'open', where: 'budget' }]);
 });

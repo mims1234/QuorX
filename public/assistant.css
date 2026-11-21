@@ -41,7 +41,7 @@
 .qxa-card-ft { font-size: 12.5px; margin-bottom: 8px; } .qxa-card-ft s { color: var(--muted); }
 .qxa-card-act { display: flex; gap: 6px; }
 /* status: a coloured line of text, not a button */
-.qxa-status { font-size: 12px; font-weight: 600; } .qxa-status.yes { color: var(--good, #3cc98a); } .qxa-status.no { color: var(--muted); } .qxa-status.err { color: var(--bad); } .qxa-status.busy { color: var(--accent); }
+.qxa-status { font-size: 12px; font-weight: 600; } .qxa-status.yes, .qxa-status.auto { color: var(--good, #3cc98a); } .qxa-status.no { color: var(--muted); } .qxa-status.err { color: var(--bad); } .qxa-status.busy { color: var(--accent); }
 
 .qxa-compose { border-top: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .qxa-compose textarea { resize: none; width: 100%; box-sizing: border-box; border-radius: 9px; border: 1px solid var(--line-strong); background: var(--surface-inset, var(--bg)); color: var(--text); padding: 8px 10px; font: 13.5px/1.4 var(--font-ui); }
@@ -60,3 +60,4 @@
 .qxa-check input:checked + .box { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #031317); }
 .qxa-check input:checked + .box::after { content: '✓'; }
 .qxa-check input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.qxa-launch[hidden] { display: none; }

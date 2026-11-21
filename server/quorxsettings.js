@@ -138,6 +138,8 @@ export const SETTINGS = [
   E('videoReview', 'video', 'Review the film', 'bool'),
   E('debugger', 'code', 'Debugger for Node and Python', 'enum', { values: [['earned', 'After failed tries'], ['always', 'Always'], ['off', 'Off']] }),
   // ✦ The QuorX assistant (server/assistant.js): the models it uses, its voice and its own monthly budget.
+  E('assistant.on', 'assistant', 'Assistant: show the ✦ assistant', 'bool', { dflt: false, help: 'Off by default. On adds the ✦ button at the bottom right and Ctrl+Shift+K.' }),
+  E('assistant.access', 'assistant', 'Assistant: access', 'enum', { values: [['auto', 'Does it, asks before risky'], ['full', 'Does everything'], ['ask', 'Asks first for every change']], dflt: 'auto', guard: true, help: 'Does it: acts at once like you would, and asks only before deleting or clearing, raising its own budget, or safety settings. Keys and secrets stay yours in every mode.' }),
   E('assistant.talkModel', 'assistant', 'Assistant: thinking model', 'model', { empty: 'Auto (best value)', dflt: '', help: 'The model it talks and acts with. Empty: the best value now, a plan you already pay for first.' }),
   E('assistant.codeModel', 'assistant', 'Assistant: model for changes to QuorX\'s code', 'model', { empty: 'Auto (best value)', dflt: '', help: 'The model QuorX\'s agent uses when the assistant changes QuorX itself, in a branch of its own.' }),
   E('assistant.voiceWith', 'assistant', 'Assistant: reads replies with', 'enum', { values: [['ai', 'AI voice'], ['pc', 'PC voice (free)']], dflt: 'ai', help: 'When "Speak replies" is ticked in the assistant.' }),

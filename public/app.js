@@ -20,7 +20,7 @@ import * as SM from './settings-map.js';
 // Phones (and the desktop app shrunk beside an app for computer use) get the phone layout below this width; any
 // wider window keeps the desktop shell, folding its parts as it narrows (see "narrow windows"). CSS uses the same 720px.
 const PHONE_MQ = '(max-width: 720px)';
-import { initAssistant } from './assistant.js';
+import { initAssistant, showAssistant } from './assistant.js';
 import { initPerms, openPermissions, mountPermissions, appliesHereHTML, whyText, scopeMark, SCOPE } from './perms.js';
 import * as WS from './workspace.js';
 import { createHistory } from './nav-history.js';
@@ -12686,6 +12686,8 @@ function settingsPanels(S) {
       const autoNote = (id) => (id ? `Empty: the best value now, <b>${esc(short(id))}</b>${G.byId?.get(id)?.price?.[1] === 0 || /^(opencode-go|commandcode|claude-local)\//.test(id) ? ' (on a plan you pay for, $0 a call)' : ''}.` : 'Empty: the best value now, a plan you already pay for first.');
       const voices = G.byId?.get(vm)?.voices || [];
       return [
+        stCard('✦ Assistant', '', stRow('Show the assistant', 'Adds the ✦ button at the bottom right (Ctrl+Shift+K opens it). Off: no button, no shortcut, and it makes no calls.', stSwitch('assistant.on', A.on === true))),
+        stCard('Access', 'What it does by itself. API keys, secrets and sign-ins stay yours in every mode.', stRow('It may', 'Does it: acts at once on what you ask, like you clicking it yourself, and asks first only before deleting or clearing anything, raising its own budget, or safety settings (approvals, budgets, permissions, hooks). Does everything: no asking at all. Asks first: every change is a card you click.', stSeg('assistant.access', [['auto', '✅ Does it, asks before risky'], ['full', '⚡ Does everything'], ['ask', '🔒 Asks first']], A.access || 'auto'), { cls: 'sx-row-wide' })),
         stCard(`${stNum(1)} Models`, 'Picked like every model in QuorX. Leave one empty and the assistant picks for value.',
           stRow('🧠 Thinking', `The model it talks and acts with. ${autoNote(auto.talk)}`, `<div class="st-fb">${modelField('pickAsstTalk', A.talkModel, 'asTalk', 'Auto (best value)')}${A.talkModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstTalk" title="Pick for value again">✕</button>' : ''}</div>`)
           + stRow('🛠 Changes to QuorX’s code', `QuorX’s agent uses it when the assistant changes QuorX itself, in a git branch of its own. ${autoNote(auto.code)}`, `<div class="st-fb">${modelField('pickAsstCode', A.codeModel, 'asCode', 'Auto (best value)')}${A.codeModel ? '<button type="button" class="st-btn secondary sm" data-act="clearAsstCode" title="Pick for value again">✕</button>' : ''}</div>`)),
@@ -14966,6 +14968,7 @@ OS_REDUCE.addEventListener?.('change', () => { if (G.settings) applyUi(); });
 // Appearance and display preferences, applied to the whole page.
 function applyUi() {
   const U = uiOf(G.settings), root = document.documentElement;
+  showAssistant(G.settings?.assistant?.on === true); // ✦ only once it is turned on in ⚙ Settings → Assistant
   root.dataset.density = U.density;
   root.style.setProperty('--msg-size', `${U.fontSize}px`);
   root.classList.toggle('reduce-motion', motionReduced());

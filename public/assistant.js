@@ -14,6 +14,13 @@ const ideas = [
   'Add a "copy chat link" button to the chat header',
 ];
 
+/** Shows or hides the ✦ button (⚙ Settings → Assistant → Show the assistant); hiding it closes the panel. */
+export function showAssistant(on) {
+  A.enabled = !!on;
+  const btn = document.getElementById('qxaBtn');
+  if (btn) btn.hidden = !on;
+  if (!on && A.open) toggle(false);
+}
 export function initAssistant(helpers) {
   H = helpers;
   try { A.speak = localStorage.getItem(SPEAK_KEY) === '1'; } catch { /* no storage */ }
@@ -21,24 +28,26 @@ export function initAssistant(helpers) {
   btn.id = 'qxaBtn'; btn.className = 'qxa-launch'; btn.type = 'button';
   btn.title = 'Talk to the QuorX assistant (Ctrl+Shift+K)'; btn.setAttribute('aria-label', 'QuorX assistant');
   btn.innerHTML = '<span aria-hidden="true">✦</span>';
+  btn.hidden = !A.enabled; // until ⚙ Settings → Assistant turns it on (showAssistant)
   btn.addEventListener('click', () => toggle());
   document.body.append(btn);
   const el = document.createElement('aside');
   el.id = 'qxa'; el.className = 'qxa'; el.hidden = true; el.setAttribute('aria-label', 'QuorX assistant');
   document.body.append(el);
-  document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); toggle(); } if (e.key === 'Escape' && A.open && el.contains(document.activeElement)) toggle(false); });
+  document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'k' && A.enabled) { e.preventDefault(); toggle(); } if (e.key === 'Escape' && A.open && el.contains(document.activeElement)) toggle(false); });
 }
 
+const loadState = () => H.postJ('/api/assistant/state', { prefs: { assistant: H.G.settings.assistant || {} } });
 async function toggle(force) {
   A.open = force ?? !A.open;
   const el = document.getElementById('qxa');
   el.hidden = !A.open;
   document.getElementById('qxaBtn').classList.toggle('on', A.open);
   if (!A.open) { stopVoice(); return; }
-  if (!A.state) {
-    A.state = await H.getJ('/api/assistant');
-    A.msgs = (A.state.history || []).map((m) => ({ role: m.role, text: m.content }));
-  }
+  // Every open reads its models fresh, with ⚙ Settings → Assistant as they are now.
+  const first = !A.state;
+  A.state = await loadState();
+  if (first) A.msgs = (A.state.history || []).map((m) => ({ role: m.role, text: m.content }));
   draw();
   el.querySelector('textarea')?.focus();
 }
@@ -81,12 +90,12 @@ function msgHTML(m, i) {
   if (m.role === 'user') return `<div class="qxa-msg me">${H.esc(m.text)}</div>`;
   if (m.role === 'card') {
     const c = m.card;
-    const state = m.done ? `<span class="qxa-status ${m.done}">${m.done === 'yes' ? '✓ Done' : m.done === 'no' ? 'Kept as it was' : H.esc(m.err || 'Failed')}</span>` : '';
+    const state = m.done ? `<span class="qxa-status ${m.done}">${m.done === 'yes' ? '✓ Done' : m.done === 'auto' ? '✓ Done by the assistant' : m.done === 'no' ? 'Kept as it was' : H.esc(m.err || 'Failed')}</span>` : '';
     return `<div class="qxa-card" data-i="${i}">
       <div class="qxa-card-t">${H.esc(c.title)}</div>
       ${c.goal ? `<div class="qxa-card-goal">${H.esc(c.goal)}</div>` : ''}
       <div class="qxa-card-ft"><s>${H.esc(c.from)}</s> → <b>${H.esc(c.to)}</b>${c.where ? ` <small>· ${H.esc(c.where)}</small>` : ''}</div>
-      ${m.done ? state : `<div class="qxa-card-act"><button class="qxa-btn primary" data-yes="${i}">${c.kind === 'self_edit' ? 'Start it' : 'Change it'}</button><button class="qxa-btn" data-no="${i}">Keep it as it is</button></div>`}
+      ${m.done ? state : `<div class="qxa-card-act"><button class="qxa-btn primary" data-yes="${i}">${c.kind === 'self_edit' || c.kind === 'chat' ? 'Start it' : c.kind === 'api' ? 'Do it' : 'Change it'}</button><button class="qxa-btn" data-no="${i}">Keep it as it is</button></div>`}
     </div>`;
   }
   const bits = m.meta ? [m.meta.steps?.length ? `looked at ${[...new Set(m.meta.steps)].join(', ')}` : '', A.showMoney ? (m.meta.cost ? money(m.meta.cost) : 'on your plan, $0') : ''].filter(Boolean) : [];
@@ -122,14 +131,18 @@ async function send(text) {
   A.busy = false;
   if (r.error) { A.msgs.push({ role: 'bot', text: `⚠ ${r.error}` }); return draw(); }
   A.msgs.push({ role: 'bot', text: r.say, meta: { steps: r.steps, cost: r.cost } });
+  // What it did by itself shows as a done card (what changed, from what to what), then what it asks you.
+  for (const c of r.done || []) A.msgs.push({ role: 'card', card: c, done: c.failed ? 'err' : 'auto', err: c.failed });
   for (const c of r.cards || []) A.msgs.push({ role: 'card', card: c });
   if (r.budget) A.state.budget = r.budget;
+  if (r.models) A.state.models = r.models;
   draw();
   for (const act of r.actions || []) doAction(act);
   if (A.speak) say(r.say);
 }
 
 async function doAction(act) {
+  if (act.kind === 'setting') return H.settingChanged({ where: 'quorx', key: act.key, value: act.value });
   if (act.kind !== 'open') return;
   const [kind, id] = act.where.split(':');
   if (kind === 'chat') { await H.refreshSidebar(); return H.showChat(id); }
@@ -142,7 +155,7 @@ async function confirm(m) {
     H.settingChanged({ where: 'quorx', key: c.key, value: c.value });
     m.done = 'yes'; draw();
     await H.postJ('/api/assistant/card', { title: c.title, outcome: 'yes', prefs: { assistant: H.G.settings.assistant || {} } });
-    if (c.key.startsWith('assistant.')) { A.state = await H.getJ('/api/assistant'); draw(); }
+    if (c.key.startsWith('assistant.')) { A.state = await loadState(); draw(); }
     return;
   }
   m.done = 'busy'; m.err = c.kind === 'self_edit' ? 'Starting…' : 'Saving…'; draw();
@@ -154,6 +167,16 @@ async function confirm(m) {
   if (c.kind === 'self_edit') {
     A.msgs.push({ role: 'bot', text: `On it. QuorX's agent is working on branch ${r.branch} with ${shortModel(r.model)}, in its own copy. I've opened the chat so you can watch; when it's done, try it and merge it if you like it.` });
     await H.refreshSidebar(); H.showChat(r.chatId);
+  }
+  if (c.kind === 'chat') {
+    A.msgs.push({ role: 'bot', text: `Started. The chat is open so you can watch it work with ${shortModel(r.model)}; ask me how it's going any time.` });
+    await H.refreshSidebar(); H.showChat(r.chatId);
+  }
+  if (c.kind === 'api') {
+    const ok = r.status >= 200 && r.status < 300;
+    A.msgs.push({ role: 'bot', text: ok ? `Done (${c.from}).` : `QuorX answered ${r.status} for ${c.from}: ${r.result}` });
+    if (!ok) m.done = 'err', m.err = `Answered ${r.status}`;
+    H.refreshSidebar();
   }
   draw();
 }

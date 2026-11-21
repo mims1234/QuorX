@@ -20,11 +20,43 @@ import { listProjects, saveProject, costSummary, chatPage } from './store.js';
 import { SETTINGS, SETTINGS_BY_KEY, CATS, pageValue, show, checkValue, SECRET_KEY } from './quorxsettings.js';
 import { appKey } from './access.js';
 import { renameSoon } from './fsretry.js';
+import { findRoutes, apiGet, apiCall, blockedPath, readChat, routeHow } from './assistantapi.js';
 
 const FILE = path.join(HOME, 'data', 'assistant.json');
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '?'; } })();
 export const DEFAULT_MONTHLY = 2; // dollars a month, until the user sets another
-const HISTORY_MAX = 24, STEPS_MAX = 4;
+// Context: the last KEEP messages go to the model word for word, older ones as a running summary; inside a turn, old
+// tool results shrink once the conversation passes CONTEXT_CHARS, and long results come a page at a time.
+const KEEP = 12, STEPS_MAX = 8, CONTEXT_CHARS = 60000;
+export function fitContext(msgs, max = CONTEXT_CHARS) {
+  const size = () => msgs.reduce((n, m) => n + String(m.content || '').length, 0);
+  const results = msgs.map((m, i) => [m, i]).filter(([m]) => m.role === 'user' && String(m.content).startsWith('Tool results:'));
+  for (const [m] of results.slice(0, -1)) {
+    if (size() <= max) break;
+    if (m.content.length > 700) m.content = `${m.content.slice(0, 600)}\n…(older results cut to save room; call the tool again if you need them)`;
+  }
+  return msgs;
+}
+let summarizing = false;
+/** Folds the older messages into the running summary, so the conversation can go on without growing. */
+async function summarizeOlder(model, call) {
+  const s = load();
+  if (summarizing || s.history.length <= KEEP) return;
+  summarizing = true;
+  try {
+    const old = s.history.slice(0, s.history.length - KEEP);
+    const lines = old.map((h) => `${h.role === 'user' ? 'User' : 'Assistant'}: ${clip(String(h.content || '').replace(/\s+/g, ' '), 600)}${h.steps?.length ? ` [looked at ${[...new Set(h.steps)].join(', ')}]` : ''}`);
+    const r = await (call || ((b) => chatAny(b, undefined, { orChat })))({ model, max_tokens: 500, temperature: 0.2, messages: [
+      { role: 'system', content: 'You keep a short running summary of a conversation between a user and the QuorX assistant: what the user wants and prefers, what was found (ids, names, numbers), what was changed or declined, and what is still open. Plain sentences, under 180 words. Answer with the summary only.' },
+      { role: 'user', content: `Summary so far: ${s.summary || '(none)'}\n\nNewer messages:\n${lines.join('\n')}` }] });
+    const text = String(r.message?.content || '').trim();
+    if (!text) return;
+    s.spent[month()] = spentNow() + (Number(r.usage?.cost) || 0);
+    s.summary = clip(text.replace(/^```\w*|```$/g, '').trim(), 2000);
+    s.history = s.history.slice(old.length);
+    save();
+  } finally { summarizing = false; }
+}
 const clip = (s, n) => (String(s ?? '').length > n ? `${String(s).slice(0, n - 1)}…` : String(s ?? ''));
 const month = (t = Date.now()) => new Date(t).toISOString().slice(0, 7);
 
@@ -91,7 +123,7 @@ async function models() {
 }
 // ⚙ Settings → Assistant lives with the page's settings, like every setting; each request brings them, and this
 // keeps a copy so its budget, voice and self-edits use them too.
-const PREF_KEYS = ['talkModel', 'codeModel', 'voiceWith', 'voiceModel', 'voice', 'listenModel'];
+const PREF_KEYS = ['talkModel', 'codeModel', 'voiceWith', 'voiceModel', 'voice', 'listenModel', 'access'];
 export function syncPrefs(prefs) {
   const a = prefs?.assistant;
   if (!a || typeof a !== 'object') return;
@@ -153,10 +185,16 @@ const TOOLS = {
   open: 'Open a place in QuorX for the user, at once. args: {"where": a settings category (' + Object.keys(CATS).join(', ') + ') or "chat:<id>"}',
   budget_set: 'Propose a new monthly budget for you (the assistant) in dollars; the user decides. args: {"monthly": number}',
   model_set: 'Propose another model for talking or for code changes; the user decides. args: {"role": "talk" | "code", "model": "model id"}',
+  read_chat: 'Read a chat like a person: its last messages (or from offset), what each reply did and cost, and how a reply that is still working is doing (waiting for an approval or a question, its steps, its answer). args: {"id": "chat id", "last": up to 30, "offset": n}',
+  api_list: 'Find routes in QuorX\'s own API (everything the app can show or do: chats, runs, projects, files, costs, servers, schedules, memory, MCP, skills, git, storage…). args: {"query": "words"}',
+  api_how: 'How a route works, from its own code: the methods it answers, the body or query it reads, what it returns. Read it before any api_call. args: {"path": "/api/..."}',
+  api_get: 'Read any API route (GET), free and at once; long answers come a page at a time. args: {"path": "/api/...?query", "offset": n}',
+  api_call: 'Do anything QuorX can do through its API (POST/PUT/PATCH/DELETE): the user gets a card showing exactly what will be sent, and only their click sends it. args: {"method": "POST", "path": "/api/...", "body": {...}, "why": "what this does, in plain words"}',
+  start_chat: 'Propose starting a new chat in a project, whose first reply does a task with QuorX\'s full agent (files, commands, browser, media…); the user clicks to start it and can watch it. args: {"project": "name or id", "message": "the task, in detail", "model": "model id (optional)"}',
   self_edit: 'Propose a change to QuorX\'s own code or look. On the user\'s click, QuorX\'s agent makes it in a new git worktree and branch (the running copy is untouched); the user tests it and merges. args: {"title": "short name", "goal": "what to change, in detail"}',
 };
 
-function systemPrompt(snapshot) {
+function systemPrompt(snapshot, summary = '', access = ACCESS_DEFAULT) {
   return `You are the QuorX assistant: a warm, plain-spoken helper built into QuorX, an AI agent harness on the user's PC. You talk like a capable colleague, short and human (one to four sentences, no headings, no lists unless asked), and you get things done.
 
 You can look at QuorX and act on it through these tools:
@@ -166,19 +204,56 @@ Answer ONLY with one JSON object, no code fence:
 {"say": "what you tell the user", "do": [{"tool": "name", "args": {...}}]}
 - Put tools in "do" when you need facts or want to act; you will get their results and answer again. Use "do": [] when you are done.
 - Never guess numbers, settings, chats or providers: look them up first. To open a chat by name, find it with chats, then open "chat:<id>". If a search finds nothing, try a simpler word before giving up.
-- Changes are cards the user clicks; say you've put one up, never that it is done. Don't propose a card again that the user declined unless they ask.
+- Your access is "${access}". ${access === 'ask' ? 'Every change becomes a card the user clicks: say you put one up, never that it is done.' : access === 'full' ? 'Changes happen as soon as you call the tool: do what the user asks, then say what you did.' : 'Changes happen as soon as you call the tool, like the user doing it: do what they ask, then say what you did. Only risky ones (deleting or clearing, raising your budget, safety settings) become a card for them; the tool result says which.'} Never tell the user to click something you can do yourself, and never end with what you are about to do: do it in the same answer, and answer once it is done. Don't propose a card again that the user declined unless they ask.
 - Earlier replies show what you looked at (lookedAt) and proposed; trust them.
 - Money: prefer what the user already pays for (plans cost nothing more per call). Mention costs in dollars.
 - API keys are never yours to read or set: point to ⚙ Settings → Providers.
 - For changes to QuorX's own code, use self_edit with a precise goal; it runs as a normal QuorX chat the user can watch.
+- You can know everything QuorX knows. If no tool above fits, find the route with api_list and read it with api_get; never say you can't see something before trying. To act where no tool fits: read the route's code with api_how, then api_call with exactly the method and body that code expects (a card).
+- To check on a chat or a reply, use read_chat: it shows the messages and whether a reply is still working or waiting.
+- Results can be long: read what you need, page with offset, and keep your answer short.
 
-Right now: ${snapshot}`;
+Right now: ${snapshot}${summary ? `\n\nEarlier in this conversation (summary): ${summary}` : ''}`;
 }
 
 function snapshot(prefs) {
   const s = load();
   const projects = listProjects().length;
   return `QuorX ${VERSION}; ${projects} project(s); your talk model ${s.talkModel || '(auto)'}; your budget $${s.monthly.toFixed(2)}/month, spent $${spentNow().toFixed(4)} this month; approval mode for new chats: ${prefs?.approval || 'strict'}.`;
+}
+
+// ---------- access: what it does by itself, and what it asks you first (⚙ Settings → Assistant → Access) ----------
+//   ask  · every change is a card you click
+//   auto · it acts at once, like you would; it asks first only before what is risky: deleting or clearing anything,
+//          raising its own budget, and safety settings (approvals, budgets, permissions, hooks)
+//   full · it acts at once on everything it can reach. Keys, secrets and sign-ins stay yours in every mode.
+export const ACCESS_DEFAULT = 'auto';
+const RISKY_WORDS = /delete|remove|trash|wipe|clear|purge|reset|uninstall|kill|drop|rewind|discard|archive/i;
+export function needsAsk(card, access = ACCESS_DEFAULT) {
+  if (access === 'full') return false;
+  if (access !== 'auto') return true;
+  if (card.kind === 'api') return card.method === 'DELETE' || RISKY_WORDS.test(`${card.path} ${JSON.stringify(card.body ?? {})}`);
+  if (card.kind === 'setting') {
+    if (card.key === 'assistant.monthly') return Number(card.value) > load().monthly;
+    return !!SETTINGS_BY_KEY.get(card.key)?.guard;
+  }
+  return false; // starting a chat or a change to QuorX's code: you watch it, and it asks you its own questions
+}
+/** A change: done now when access allows (the result goes back to the model), else a card for the user. */
+async function propose(ctx, card) {
+  if (needsAsk(card, ctx.access)) { ctx.cards.push(card); return { proposed: true, note: 'a card is up; the user decides' }; }
+  ctx.done.push(card);
+  if (card.kind === 'setting') {
+    ctx.actions.push({ kind: 'setting', key: card.key, value: card.value }); // the page applies and saves it, like its own Save
+    if (card.key.startsWith('assistant.')) { const s = load(), k = card.key.slice(10); if (k === 'monthly') s.monthly = Number(card.value); else s[k] = card.value || undefined; save(); }
+    return { done: true, changed: `${card.from} → ${card.to}` };
+  }
+  try {
+    const r = await confirmCard(card);
+    if (r.chatId) ctx.actions.push({ kind: 'open', where: `chat:${r.chatId}` });
+    card.result = r;
+    return { done: true, ...(card.kind === 'api' ? { status: r.status, result: r.result } : { chat: r.chatId, ...(r.branch ? { branch: r.branch } : {}) }) };
+  } catch (e) { card.failed = e.message; return { error: e.message }; }
 }
 
 async function runTool(name, args, ctx) {
@@ -211,8 +286,7 @@ async function runTool(name, args, ctx) {
     let value; try { value = checkValue(s, args.value); } catch (e) { return { error: e.message }; }
     const from = show(s, pageValue(prefs, s, defaults)), to = show(s, value);
     if (from === to) return { note: `${s.label} is already ${to}` };
-    ctx.cards.push({ id: crypto.randomUUID(), kind: 'setting', key: s.key, value, title: `Change ${s.label}`, from, to, where: CATS[s.cat] });
-    return { proposed: true };
+    return propose(ctx, { id: crypto.randomUUID(), kind: 'setting', key: s.key, value, title: `Change ${s.label}`, from, to, where: CATS[s.cat] });
   }
   if (name === 'open') {
     const where = String(args?.where || '');
@@ -223,21 +297,44 @@ async function runTool(name, args, ctx) {
   if (name === 'budget_set') {
     const n = Math.round(Number(args?.monthly) * 100) / 100;
     if (!(n >= 0.1 && n <= 500)) return { error: 'a monthly budget from $0.10 to $500' };
-    ctx.cards.push(settingCard('assistant.monthly', 'the assistant\'s monthly budget', `$${load().monthly.toFixed(2)}`, `$${n.toFixed(2)}`, n));
-    return { proposed: true };
+    return propose(ctx, settingCard('assistant.monthly', 'the assistant\'s monthly budget', `$${load().monthly.toFixed(2)}`, `$${n.toFixed(2)}`, n));
   }
   if (name === 'model_set') {
     const role = args?.role === 'code' ? 'code' : 'talk', id = String(args?.model || '').trim();
     if (!/^[\w.@:~-]+(\/[\w.@:~+-]+)+$/.test(id)) return { error: 'a model id like opencode-go/claude-haiku-5-5' };
     const cur = await models();
-    ctx.cards.push(settingCard(role === 'code' ? 'assistant.codeModel' : 'assistant.talkModel', `the assistant's ${role === 'code' ? 'model for code changes' : 'thinking model'}`, cur[role], id, id));
-    return { proposed: true };
+    return propose(ctx, settingCard(role === 'code' ? 'assistant.codeModel' : 'assistant.talkModel', `the assistant's ${role === 'code' ? 'model for code changes' : 'thinking model'}`, cur[role], id, id));
+  }
+  if (name === 'read_chat') return readChat(args || {});
+  if (name === 'api_list') {
+    const hits = findRoutes(args?.query || '');
+    return hits.length ? hits.map((e) => `${e.methods.join('/') || 'GET?'} ${e.path}${e.note ? ` — ${e.note}` : ''}`) : { none: true, hint: 'try other words, or an empty query for the first routes' };
+  }
+  if (name === 'api_how') { const h = routeHow(args?.path); if (h.path) (ctx.how ||= new Set()).add(h.path); return h; }
+  if (name === 'api_get') return apiGet(args || {});
+  if (name === 'api_call') {
+    const method = String(args?.method || 'POST').toUpperCase(), p = String(args?.path || '');
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return { error: 'api_call is for POST, PUT, PATCH or DELETE; read with api_get' };
+    if (!p.startsWith('/api/') || blockedPath(p)) return { error: 'not a route the assistant may call (keys, secrets, sign-ins and streams are the user\'s)' };
+    const route = routeHow(p).path;
+    if (!route || !ctx.how?.has(route)) return { error: `read how ${p} works with api_how first, then call it with the method and body its code expects` };
+    const why = clip(String(args?.why || '').trim(), 200) || `${method} ${p}`;
+    return propose(ctx, { id: crypto.randomUUID(), kind: 'api', method, path: p, body: args?.body ?? {}, title: why, from: `${method} ${p}`, to: clip(JSON.stringify(args?.body ?? {}), 400) || '{}' });
+  }
+  if (name === 'start_chat') {
+    const ref = String(args?.project || 'scratch').trim().toLowerCase(), all = listProjects();
+    const p = all.find((x) => x.id.toLowerCase() === ref) || all.find((x) => x.name.toLowerCase() === ref) || all.find((x) => x.name.toLowerCase().includes(ref));
+    if (!p) return { error: `no project "${args?.project}"`, projects: all.map((x) => x.name) };
+    if (p.missing || p.needsFolder) return { error: `project ${p.name} has no folder to work in; the user reselects it first` };
+    const message = String(args?.message || '').trim();
+    if (message.length < 8) return { error: 'start_chat needs the task in detail' };
+    const model = String(args?.model || '').trim() || prefs?.model || defaults?.chatModel || (await models()).code;
+    return propose(ctx, { id: crypto.randomUUID(), kind: 'chat', projectId: p.id, model, message: clip(message, 6000), title: `New chat in ${p.name}`, goal: clip(message, 4000), from: p.name, to: `a new chat with ${String(model).split('/').pop()}` });
   }
   if (name === 'self_edit') {
     const title = clip(String(args?.title || '').trim(), 60), goal = String(args?.goal || '').trim();
     if (!title || goal.length < 12) return { error: 'self_edit needs a title and a detailed goal' };
-    ctx.cards.push({ id: crypto.randomUUID(), kind: 'self_edit', title: `Change QuorX: ${title}`, goal: clip(goal, 4000), from: 'the running QuorX', to: `a new branch, with ${(await models()).code}` });
-    return { proposed: true };
+    return propose(ctx, { id: crypto.randomUUID(), kind: 'self_edit', title: `Change QuorX: ${title}`, goal: clip(goal, 4000), from: 'the running QuorX', to: `a new branch, with ${(await models()).code}` });
   }
   return { error: `no tool ${name}` };
 }
@@ -267,18 +364,27 @@ export async function assistantTurn({ text, prefs = {}, defaults = {}, call } = 
   if (!said) throw new Error('Say something first.');
   if (budgetLeft() <= 0) return { say: `I've used my $${s.monthly.toFixed(2)} for ${month()}. Raise my budget below, or wait for next month.`, cards: [settingCard('assistant.monthly', 'the assistant\'s monthly budget', `$${s.monthly.toFixed(2)}`, `$${(s.monthly * 2).toFixed(2)}`, Math.min(500, Math.round(s.monthly * 2 * 100) / 100))], actions: [], cost: 0, budget: budgetInfo() };
   const m = await models();
-  const ctx = { prefs, defaults, cards: [], actions: [] };
-  const msgs = [{ role: 'system', content: systemPrompt(snapshot(prefs)) },
-    ...s.history.slice(-HISTORY_MAX).map((h) => ({ role: h.role, content: h.role === 'assistant' ? JSON.stringify({ say: h.content, do: [], ...(h.steps?.length ? { lookedAt: [...new Set(h.steps)] } : {}), ...(h.proposed?.length ? { proposed: h.proposed } : {}) }) : h.content })),
+  const access = ['ask', 'auto', 'full'].includes(prefs?.assistant?.access) ? prefs.assistant.access : ACCESS_DEFAULT;
+  const ctx = { prefs, defaults, access, cards: [], actions: [], done: [] };
+  const msgs = [{ role: 'system', content: systemPrompt(snapshot(prefs), s.summary || '', access) },
+    ...s.history.slice(-KEEP).map((h) => ({ role: h.role, content: h.role === 'assistant' ? JSON.stringify({ say: h.content, do: [], ...(h.steps?.length ? { lookedAt: [...new Set(h.steps)] } : {}), ...(h.proposed?.length ? { proposed: h.proposed } : {}), ...(h.did?.length ? { did: h.did } : {}) }) : h.content })),
     { role: 'user', content: said }];
-  let cost = 0, plan = 0, reply = { say: '', do: [] }, used = m.talk, steps = [];
+  let cost = 0, plan = 0, reply = { say: '', do: [] }, used = m.talk, steps = [], nudged = false;
   for (let step = 0; step <= STEPS_MAX; step++) {
+    fitContext(msgs);
+    if (step === STEPS_MAX) msgs.push({ role: 'user', content: '(Last step: answer the user now with what you found, "do": [].)' });
     const r = await (call || ((b) => chatAny(b, undefined, { orChat })))({ model: m.talk, max_tokens: 1500, temperature: 0.4, messages: msgs });
     used = r.model || used;
     const c = Number(r.usage?.cost) || 0;
     cost += c;
     if (!c && r.usage) plan += ((r.usage.prompt_tokens || 0) * 0.15 + (r.usage.completion_tokens || 0) * 0.6) / 1e6; // what a flash model would have cost
     reply = parseReply(r.message?.content);
+    // It said it would do something but called nothing: once a turn, it is told to do it now.
+    if (!reply.do.length && !nudged && step < STEPS_MAX - 1 && ctx.access !== 'ask' && /\b(I'?ll|I will|let me|I'm going to|going to|I can now|next I)\b/i.test(reply.say)) {
+      nudged = true;
+      msgs.push({ role: 'assistant', content: String(r.message?.content || '') }, { role: 'user', content: '(You said what you will do but called no tool. Do it now: put the tool call in "do". Answer the user only once it is done.)' });
+      continue;
+    }
     if (!reply.do.length || step === STEPS_MAX || budgetLeft() - cost <= 0) break;
     msgs.push({ role: 'assistant', content: String(r.message?.content || '') });
     const results = [];
@@ -290,14 +396,16 @@ export async function assistantTurn({ text, prefs = {}, defaults = {}, call } = 
     msgs.push({ role: 'user', content: `Tool results:\n${results.join('\n')}\n\nNow answer the user (JSON as before).` });
   }
   s.spent[month()] = spentNow() + cost;
-  s.history.push({ role: 'user', content: said, at: Date.now() }, { role: 'assistant', content: reply.say, at: Date.now(), proposed: ctx.cards.map((c) => c.title), steps });
-  s.history = s.history.slice(-HISTORY_MAX * 2);
+  s.history.push({ role: 'user', content: said, at: Date.now() }, { role: 'assistant', content: reply.say, at: Date.now(), proposed: ctx.cards.map((c) => c.title), did: ctx.done.map((c) => c.title), steps });
+  s.history = s.history.slice(-80); // the summary normally keeps it far shorter
   save();
-  return { say: reply.say || '…', cards: ctx.cards, actions: ctx.actions, steps, model: used, cost, planValue: plan, budget: budgetInfo() };
+  if (s.history.length > KEEP + 8) summarizeOlder(m.talk, call).catch(() => {}); // after the answer; it doesn't hold it up
+  return { say: reply.say || '…', cards: ctx.cards, done: ctx.done, actions: ctx.actions, steps, models: await models(), model: used, cost, planValue: plan, budget: budgetInfo() };
 }
 
 export function budgetInfo() { const s = load(); return { monthly: s.monthly, spent: spentNow(), left: budgetLeft(), month: month() }; }
-export async function assistantState() {
+export async function assistantState(prefs) {
+  syncPrefs(prefs);
   const s = load();
   return { models: await models(), auto: { talk: !s.talkModel, code: !s.codeModel }, recommended: await recommended(), budget: budgetInfo(), history: s.history.filter((h) => !h.note).slice(-40).map(({ role, content, at }) => ({ role, content, at })) };
 }
@@ -309,12 +417,14 @@ export function noteCard({ title = '', outcome = '', prefs } = {}) {
   save();
   return { ok: true };
 }
-export function clearHistory() { load().history = []; save(); return { ok: true }; }
+export function clearHistory() { const s = load(); s.history = []; delete s.summary; save(); return { ok: true }; } // a fresh conversation forgets the summary too
 
 // ---------- what a confirmed card does (settings cards are applied by the page, like the agent's) ----------
 export async function confirmCard(card = {}, prefs) {
   syncPrefs(prefs);
   if (card.kind === 'self_edit') return selfEdit(card);
+  if (card.kind === 'api') return { ok: true, ...(await apiCall({ method: card.method, path: card.path, body: card.body })) };
+  if (card.kind === 'chat') return startReply({ projectId: card.projectId, title: clip(String(card.message).replace(/\s+/g, ' '), 60), message: card.message, model: card.model });
   throw new Error('nothing to do for that card');
 }
 
@@ -331,19 +441,25 @@ async function selfEdit(card) {
   const projectId = `qx-self-${stamp}`;
   saveProject({ id: projectId, path: dir });
   const { code } = await models();
+  const message = `${goal}\n\nYou are changing QuorX's own source code, in a git worktree on branch ${branch} (not the copy that is running). Keep the copyright line at the top of every file. Make the change, run the relevant tests with \`node scripts/run-tests.mjs <test file>\`, and commit on this branch with a clear message. Don't push or merge: the user tests it first.`;
+  const r = await startReply({ projectId, title: card.title, message, model: code });
+  return { ...r, branch, dir };
+}
+
+/** A new chat in a project whose first reply does `message`: an ordinary QuorX chat the user can open and steer. */
+async function startReply({ projectId, title, message, model, approval = 'strict' }) {
   const base = `http://127.0.0.1:${runtime.port}`, H = { 'Content-Type': 'application/json', 'X-QuorX-Key': appKey };
   const chatId = `cm${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`, runId = `r${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
-  const message = `${goal}\n\nYou are changing QuorX's own source code, in a git worktree on branch ${branch} (not the copy that is running). Keep the copyright line at the top of every file. Make the change, run the relevant tests with \`node scripts/run-tests.mjs <test file>\`, and commit on this branch with a clear message. Don't push or merge: the user tests it first.`;
-  const setup = { model: code };
-  const chat = { id: chatId, title: clip(card.title, 60), projectId, created: Date.now(), approval: 'strict', from: 'assistant',
+  const setup = { model };
+  const chat = { id: chatId, title: clip(title, 60), projectId, created: Date.now(), approval, from: 'assistant',
     agent: { setup, allowed: [], artifacts: {}, messages: [{ role: 'user', content: message, at: Date.now() }, { role: 'assistant', content: '', at: Date.now(), runId, live: true, runActive: true, trace: [], approvals: {}, questions: {}, arts: [] }] } };
   const put = await fetch(`${base}/api/chats/${chatId}`, { method: 'PUT', headers: H, body: JSON.stringify(chat) }).then((r) => r.json());
   if (put?.error) throw new Error(put.error);
   const ac = new AbortController();
-  const body = { runId, chatId, projectId, chatTitle: chat.title, setup, settings: { approval: 'strict', mediaEnabled: false }, allowed: [], history: [], summary: '', text: message, artifacts: {}, context: '', images: [], docs: [] };
+  const body = { runId, chatId, projectId, chatTitle: chat.title, setup, settings: { approval, mediaEnabled: false }, allowed: [], history: [], summary: '', text: message, artifacts: {}, context: '', images: [], docs: [] };
   const r = await fetch(`${base}/api/run`, { method: 'POST', headers: H, body: JSON.stringify(body), signal: ac.signal });
   // The reply belongs to QuorX once it has started: the page follows it like any other.
   try { const rd = r.body.getReader(); const end = Date.now() + 15000; let got = ''; while (Date.now() < end && !/"t":"start"/.test(got)) { const { value, done } = await rd.read(); if (done) break; got += Buffer.from(value).toString('utf8'); } } catch { /* it goes on regardless */ }
   ac.abort();
-  return { ok: true, chatId, projectId, branch, dir, model: code };
+  return { ok: true, chatId, projectId, model, runId };
 }

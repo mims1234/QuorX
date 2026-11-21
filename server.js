@@ -269,6 +269,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/assistant' && req.method === 'GET') return json(res, 200, await assistantState());
     if (url.pathname === '/api/assistant' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e5) || '{}'); try { return json(res, 200, await assistantTurn({ text: b.text, prefs: b.prefs || {}, defaults: DEFAULTS })); } catch (e) { return json(res, 200, { error: e.message }); } }
     if (url.pathname === '/api/assistant/confirm' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); try { return json(res, 200, await confirmCard(b.card, b.prefs)); } catch (e) { return json(res, 200, { error: e.message }); } }
+    if (url.pathname === '/api/assistant/state' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); return json(res, 200, await assistantState(b.prefs)); }
     if (url.pathname === '/api/assistant/clear' && req.method === 'POST') return json(res, 200, clearHistory());
     if (url.pathname === '/api/assistant/speak' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 2e4) || '{}'); try { return json(res, 200, await assistantSpeak(b)); } catch (e) { return json(res, 200, { error: e.message, pc: true }); } }
     if (url.pathname === '/api/assistant/card' && req.method === 'POST') { const b = JSON.parse(await readBody(req, 4e3) || '{}'); return json(res, 200, noteCard(b)); }
