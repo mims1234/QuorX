@@ -463,7 +463,7 @@ async function contextText(list) {
 // them. Picking one attaches it as context for the next message. / lists the chat commands.
 import { langOf, mountCode } from './code.js';
 import { renderMarkdown, enhance as enhanceMd, stableCut } from './markdown.js';
-import { mediaKind, writtenMedia, stepMedia, madeMedia } from './chat-media.js';
+import { mediaKind, writtenMedia, stepMedia, madeMedia, chatMadeFiles } from './chat-media.js';
 import { scriptPaths } from './script-paths.js';
 
 // The message box's buttons: icons only, coloured by what they do.
@@ -3248,6 +3248,7 @@ function loadMdCard(item) {
 async function drawMsgMedia(c, m) {
   const el = m.el;
   if (!el || !c) return;
+  chatFilesSoon(c); // the side pane's "From the chat" list follows what the replies made or deleted
   // Media the reply's tools made, each labelled with its tool: an artifact straight away, a file once the server has
   // said it is there (below, with the files it wrote).
   const made = m.role === 'user' ? [] : madeMedia(m.trace), madeBy = new Map(made.filter((x) => x.path).map((x) => [x.path, x]));
@@ -8314,6 +8315,71 @@ function paneFiles(c) {
   return c._paneFiles;
 }
 function savePaneFiles(c) { try { localStorage.setItem(paneFilesKey(c.id), JSON.stringify(paneFiles(c))); } catch { /* this session only */ } }
+// "From the chat" (the Artifact tab's dropdown): every file the chat's replies made or wrote, and what you opened in the
+// pane, as it is on disk now. Checked again with the server whenever the dropdown is pointed at or focused, and shortly
+// after a reply's files change, so a new file shows at once and a deleted one drops out (also from what you opened).
+// Until the first check, what you opened.
+function chatFiles(c) {
+  const pf = paneFiles(c), cf = c?._chatFiles;
+  // Opened since the last check: listed straight away, at the end.
+  return cf ? [...cf, ...pf.filter((f) => !cf.some((x) => x.id === f.id))] : pf;
+}
+async function refreshChatFiles(c) {
+  if (!c?.agent || !G.open.has(c.id)) return;
+  if (c._cfBusy) { c._cfAgain = true; return; }
+  c._cfBusy = true; c._cfAt = Date.now();
+  try {
+    const made = chatMadeFiles(c.agent.messages), pid = spaceOf(c) || '';
+    const opened = paneFiles(c);
+    // A file on disk (not a piece of a reply, a script read through QuorX, a command's log or a picture made in QuorX).
+    const onDisk = (f) => !(f.kind in PANE_CARDS) && !f.raw && f.full && !String(f.full).startsWith('art:') && !String(f.key || '').startsWith('art:') && !String(f.src || '').startsWith('/api/command-log');
+    const ask = [...new Set([...made.filter((x) => x.path).map((x) => x.path), ...opened.filter(onDisk).map((f) => f.full)])].slice(-200);
+    const r = ask.length ? await postJ('/api/paths/check', { projectId: pid, chatId: c.id, paths: ask }) : { found: {}, media: {} };
+    if (!r?.found) return; // the server didn't answer: keep the list as it was
+    // The chat's own cards get the same answer.
+    for (const p of ask) PATHS.seen.set(pathKey(pid, c.id, p), { kind: r.found[p] || '', media: r.media?.[p] || null, at: Date.now() });
+    const list = [];
+    for (const x of made) {
+      if (x.art) { const a = c.agent.artifacts?.[x.art]; if (a?.url) list.push({ id: `file:art:${x.art}`, key: `art:${x.art}`, name: x.name || a.title || x.art, src: a.url, kind: x.kind, full: x.name || a.title || x.art }); continue; }
+      const info = r.media?.[x.path]; if (!info) continue; // gone (or not something the pane can show)
+      const key = mediaKey(info.key || x.path);
+      list.push({ id: `file:${key}`, key, name: x.name || baseName(x.path), src: mediaSrc(c, x.path, info.v), kind: info.kind, full: onDiskPath(info.key) ? info.key : x.path, size: info.size || 0 });
+    }
+    const ids = new Set(list.map((f) => f.id));
+    const gone = (f) => (f.kind in PANE_CARDS ? !paneMsg(c, f) : onDisk(f) && ask.includes(f.full) && !r.found[f.full]);
+    const kept = opened.filter((f) => !gone(f));
+    if (kept.length !== opened.length) { const drop = new Set(opened.filter(gone).map((f) => f.id)); c._paneFiles = paneFiles(c).filter((f) => !drop.has(f.id)); savePaneFiles(c); }
+    const next = [...kept.filter((f) => !ids.has(f.id)), ...list];
+    const sig = JSON.stringify(next.map((f) => [f.id, f.src]));
+    c._chatFiles = next;
+    if (sig !== c._cfSig) { c._cfSig = sig; chatFilesChanged(c); }
+  } finally {
+    c._cfBusy = false;
+    if (c._cfAgain) { c._cfAgain = false; refreshChatFiles(c); }
+  }
+}
+// After a reply's files change: one check a moment later, not one per update while it streams.
+function chatFilesSoon(c, ms = 1200) { if (!c) return; clearTimeout(c._cfTimer); c._cfTimer = setTimeout(() => refreshChatFiles(c), ms); }
+// The list changed: the dropdowns showing this chat's Artifact tab take the new list in place (an open dropdown stays
+// open); one that was showing a file now gone draws the plan or the newest file instead.
+function chatFilesChanged(c) {
+  for (const a of PA.list) inArea(a, () => {
+    const sel = $('#artSelect');
+    if (!sel || sel.hidden || G.view.ftab || paneTab() !== 'art' || focused() !== c) return;
+    const cur = sel.value, opts = artOptions(c);
+    if (sel.innerHTML !== opts.html) { sel.innerHTML = opts.html; sel.disabled = !opts.any; }
+    if (opts.ids.includes(cur)) sel.value = cur; else renderPane();
+  });
+}
+// The Artifact tab's dropdown: the chat's plans, then "From the chat" (chatFiles). { html, ids, any }.
+function artOptions(c) {
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = chatFiles(c);
+  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
+  const html = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
+    + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
+    || '<option>No plans yet</option>';
+  return { html, ids: [...all.map((a) => a.id), ...files.map((f) => f.id)], any: !!(all.length || files.length) };
+}
 // f: a file { key, name, label?, src, kind, full, size }, or a piece of a reply { id, name, kind, run, ref } (PANE_CARDS).
 // Opened again, it moves to the end (the newest). opts: { from: the group it was clicked in, keep: open it to stay }.
 function openFileInPane(c, f, opts = {}) {
@@ -9811,12 +9877,11 @@ function renderPaneNow() {
     $('.pf-close', bar).onclick = () => wsCloseFileTab(tid);
     return drawPaneFile(fc, file, body);
   }
-  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = paneFiles(c);
-  const opt = (id, label) => `<option value="${esc(id)}">${label}</option>`;
-  sel.innerHTML = (all.length && files.length ? `<optgroup label="Plans and reports">${all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join('')}</optgroup>` : all.map((a) => opt(a.id, `${ICON[a.kind] || '📄'} ${esc(a.title)}`)).join(''))
-    + (files.length ? `<optgroup label="From the chat">${files.map((f) => { const pm = f.kind in PANE_CARDS && paneMsg(c, f); return opt(f.id, `${PV_ICON[f.kind] || '📄'} ${esc(f.label || (pm ? PANE_CARDS[f.kind].name(pm, f) : f.kind in PANE_CARDS ? f.name : baseName(f.name)))}`); }).join('')}</optgroup>` : '')
-    || '<option>No plans yet</option>';
-  sel.disabled = !all.length && !files.length;
+  const all = planArts(c).sort((a, b) => (a.updated || 0) - (b.updated || 0)), files = chatFiles(c);
+  const opts = artOptions(c);
+  sel.innerHTML = opts.html;
+  sel.disabled = !opts.any;
+  if (!c._chatFiles || Date.now() - (c._cfAt || 0) > 3000) refreshChatFiles(c); // what is on disk now
   // A file picked from "From the chat" shows right here, in place of the plan; ⧉ Open as tab gives it a tab of its own.
   // With no plans and nothing picked yet, the newest file shows (what the dropdown has selected).
   const pf = files.find((x) => x.id === G.view.id) || (!all.length ? files.at(-1) : null);
@@ -16862,6 +16927,9 @@ function wireAreaChrome() {
     files.ondragstart = (e) => { const t = tabOf(e); if (!t) return; e.dataTransfer.setData('application/x-quorx-filetab', t.dataset.ftab); e.dataTransfer.effectAllowed = 'move'; wsDragStart({ type: 'file', tid: t.dataset.ftab }); };
     files.ondragend = wsDropHide;
   }
+  // Pointed at or focused, the dropdown checks its "From the chat" files with the server (new ones in, deleted ones out).
+  const fresh = () => { const c = focused(); if (c && Date.now() - (c._cfAt || 0) > 1000) refreshChatFiles(c); };
+  $('#artSelect').onpointerenter = fresh; $('#artSelect').onfocus = fresh; $('#artSelect').onmousedown = fresh;
   $('#artSelect').onchange = (e) => {
     const v = e.target.value;
     // A plan or a file from the chat shows here, below the dropdown (⧉ Open as tab gives a file a tab of its own).
