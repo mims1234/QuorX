@@ -357,3 +357,13 @@
 .news-view .nw-source::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .news-view .nw-source[data-from="website"]::before { background: var(--ok); }
 .news-view .nw-source .nw-go { font-size: 12.5px; }
+
+/* ---------- News pinned above the projects in the sidebar (drawSbNews): a project block that stays in sight ---------- */
+#sbNews { flex: none; border-bottom: 1px solid var(--line); }
+#sbNews .sb-ph { cursor: pointer; }
+#sbNews .sb-news-row { cursor: pointer; }
+#sbNews .sb-news-row .sb-chat-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sbNews .sb-news-new { margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 10px; font-weight: 700; line-height: 16px; color: var(--pc); background: var(--pc-dim); border: 1px solid var(--pc-line); }
+#sbNews.folded .sb-fold svg { transform: none; }
+/* flat and edge to edge like the project blocks below it (last.css gives the sidebar's other parts side margins) */
+html body .sidebar .sb-expanded > #sbNews { margin: 0 !important; border-radius: 0 !important; border-width: 0 0 1px 0 !important; border-style: solid !important; border-color: var(--line) !important; box-shadow: none !important; background: transparent !important; }

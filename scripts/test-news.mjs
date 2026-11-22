@@ -327,6 +327,17 @@ test('news view: its rule hiding the chats outranks the free layout, so Home nev
   assert.match(css, /main.layout.ws-free > section.work.news-on > .chats[^{]*{ display: none !important; }/, 'News hides them in the free layout too');
 });
 
+test('news in the sidebar: pinned above the projects, outside their list, with What\'s new, Reports and Articles', () => {
+  const app = fs.readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  const fn = app.slice(app.indexOf('function drawSbNews() {'), app.indexOf('function newsEl() {'));
+  assert.ok(fn.length > 100, 'drawSbNews exists');
+  assert.match(fn, /pl\.before\(box\)/, 'it sits before #projectList, so the list\'s redraws never touch it');
+  for (const k of ['updates', 'reports', 'articles']) assert.match(fn, new RegExp(`row\\('${k}'`), k);
+  assert.match(fn, /openNews\(go\.dataset\.newsGo\)/, 'a row opens its section');
+  assert.match(app, /function newsDot\(\) \{[\s\S]*?drawSbNews\(\);\n\}/, 'the unread mark follows newsDot');
+  assert.match(app, /NEWS\.side = [^;]+; drawSbNews\(\);/, 'opening a section marks its row');
+  assert.match(app, /NEWS\.open = false; NEWS\.gen\+\+; newsStop\(\); drawSbNews\(\);/, 'closing News clears the mark');
+});
 // Which opened chats the page lets go of (kept in its own file).
 import './test-chat-cache.mjs';
 import './test-sidebar-rows.mjs';
