@@ -91,10 +91,10 @@ test('bottom panel: its Terminal is QuorX\'s own terminal in an area of its own,
   // Drawn by renderTerm itself (no copy of the terminal's code).
   assert.match(between('function qpTermBody()', 'function panelDraw()'), /renderTerm\(c\)/);
   // Where commands, servers and terminals open from elsewhere: the panel (a server's Logs, Run › Terminal, a running
-  // command's output, Servers' ⌨ Terminal); ＋ › Terminal still opens a Terminal tab.
+  // command's output, Servers' ⌨ Terminal); ⋯ › New terminal still opens a Terminal tab in the group.
   assert.match(page, /if \(act === 'logs'\) \{ closeServers\(c\); return termHere\(c, s\.name\); \}/);
   assert.match(page, /terminal: \{ run: async \(\) => \{ const c = await wrChat\(\); if \(c\) termHere\(c\); \} \}/);
-  assert.match(page, /\['⌨ Terminal', here\(\(\) => openTerminal\(c, null, 'term'\)\)\]/);
+  assert.match(page, /\['⌨ New terminal', here\(\(\) => \{ const t = termState\(spaceOf\(c\)\), id = termNew\(t\); termSave\(t\); openTerminal\(c, id, 'term'\); \}\)\]/);
   // Without xterm, the plain input shows in every area showing that terminal (the panel was left blank before).
   assert.match(page, /u\.plain = true; box\.hidden = true; eachArea\(\(\) => \{ if \(G\.view\.term\) renderTermInput\(t\); \}\);/);
   // The markup: under the groups, above the status bar; maximised, the groups fold away.
