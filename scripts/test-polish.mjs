@@ -50,10 +50,10 @@ test('home: in the editor area, the project, the start box, its recent chats and
   // Every quick action does something that exists.
   const block = app.slice(app.indexOf('const HOME_ACTS = ['), app.indexOf('];', app.indexOf('const HOME_ACTS = [')));
   const acts = [...block.matchAll(/^ {2}\['(\w+)', /gm)].map((m) => m[1]);
-  assert.deepEqual(acts, ['new', 'search', 'running', 'servers', 'schedules', 'projset', 'settings', 'news']);
-  const body = app.slice(app.indexOf('function homeAct(k) {'), app.indexOf('function drawHomeProject('));
+  assert.deepEqual(acts, ['new', 'search', 'running', 'servers', 'schedules', 'projset', 'settings', 'perms', 'news']);
+  const body = app.slice(app.indexOf('function homeAct(k, at) {'), app.indexOf('function drawHomeProject('));
   for (const k of acts) assert.match(body, new RegExp(`\\b${k}: \\(\\) =>`), k);
-  for (const fn of ['newChat', 'openChatSearch', 'wrRunning', 'wrServers', 'openSchedules', 'openProjectSettings', 'openSettings', 'openNews']) assert.match(app, new RegExp(`(async )?function ${fn}\\(`), fn);
+  for (const fn of ['newChat', 'openChatSearch', 'wrRunning', 'wrServers', 'openSchedules', 'openProjectSettings', 'openSettings', 'openPerms', 'openNews']) assert.match(app, new RegExp(`(async )?function ${fn}\\(`), fn);
   // The start box's project picker redraws Home's top; Home hides the empty chat-tab row.
   assert.match(app, /closeMenu\(\); drawHomeProject\(\); ta\.focus\(\);/);
   assert.match(app, /document\.body\.classList\.toggle\('qx-home', on\);/);

@@ -3352,13 +3352,14 @@ const HOME_ACTS = [
   ['schedules', '⏰', 'Schedules', 'Chats that run on their own'],
   ['projset', '📁', 'Project settings', 'Folder, design system, hooks, permissions, costs'],
   ['settings', '⚙', 'Settings', 'Every setting, for every project'],
+  ['perms', '🛡', 'What QuorX may use', 'The mic, notifications and the Chrome extension on this computer'],
   ['news', '📰', 'What\'s new', 'News and release notes'],
 ];
 const homePid = () => (G.landingProject && G.projects.some((p) => p.id === G.landingProject) ? G.landingProject : 'scratch');
-function homeAct(k) {
+function homeAct(k, at) {
   const pid = homePid(), p = G.projects.find((x) => x.id === pid);
   ({ new: () => newChat(pid), search: () => openChatSearch(), running: () => wrRunning(true), servers: () => wrServers(), schedules: () => openSchedules(),
-    projset: () => p && openProjectSettings(p), settings: () => openSettings(), news: () => openNews('updates') })[k]?.();
+    projset: () => p && openProjectSettings(p), settings: () => openSettings(), perms: () => openPerms(at), news: () => openNews('updates') })[k]?.();
 }
 // Home's top: the project (its folder is in the start box below) and its five latest chats (redrawn when the start box picks another project).
 function drawHomeProject(box = document) {
@@ -3371,7 +3372,7 @@ function drawHomeProject(box = document) {
   list.innerHTML = chats.map((c) => `<button type="button" class="ld-chat home-row" data-c="${esc(c.id)}" title="${esc(c.title)}"><span class="home-t">${esc(c.title)}</span><small>${c.model ? `${esc(short(c.model))} · ` : ''}${ago(c.lastAt || Date.now())}</small><span class="money">${spend(chatCounted(c))}</span></button>`).join('')
     || `<p class="home-none">No chats in ${esc(p?.name || 'this project')} yet: the box above starts one.</p>`;
   for (const b of list.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
-  for (const b of head.querySelectorAll('[data-home-act]')) b.onclick = () => homeAct(b.dataset.homeAct);
+  for (const b of head.querySelectorAll('[data-home-act]')) b.onclick = () => homeAct(b.dataset.homeAct, b);
 }
 function renderLanding(box) {
   const archived = new Set(G.projects.filter((p) => p.archived).map((p) => p.id));
@@ -3428,7 +3429,7 @@ function renderLanding(box) {
   };
   wireStartBox(box, last, projects);
   drawHomeProject(box);
-  for (const b of box.querySelectorAll('.home-act')) b.onclick = () => homeAct(b.dataset.homeAct);
+  for (const b of box.querySelectorAll('.home-act')) b.onclick = () => homeAct(b.dataset.homeAct, b);
   loadGhMeta(box);
   for (const b of box.querySelectorAll('.ld-chat')) b.onclick = () => { showChat(b.dataset.c); if (isPhone()) setMView('chat'); };
   for (const b of box.querySelectorAll('[data-new]')) b.onclick = () => newChat(b.dataset.new);
@@ -11392,13 +11393,7 @@ async function qfKeepAwake() {
   const now = await window.ohDesktop.keepAwake().catch(() => null); if (!now) return;
   QFS.awake = (await window.ohDesktop.keepAwake(!now.on).catch(() => null))?.on ?? now.on;
 }
-function qfPerms() {
-  const b = $('#permBtn'), pop = $('#permPop'), at = $('#qfMenubar [data-m="5"]') || $('#qfMenubar');
-  if (!b || !pop) return;
-  if (pop.hidden) b.click();
-  const r = at.getBoundingClientRect();
-  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 340))}px`; pop.style.top = `${r.bottom + 6}px`;
-}
+function qfPerms() { openPerms($('#qfMenubar [data-m="5"]') || $('#qfMenubar'), { keep: true }); }
 async function qfOpenFolder() {
   const err = document.createElement('span'); err.hidden = true;
   const id = await openFolderAsProject($('#qfAdd'), err, { pickOnly: true });
@@ -15100,13 +15095,27 @@ async function drawPerms() {
   };
   $('[data-pm="ext"]', pop).onclick = () => { closePerms(); openChromeSetup(); };
 }
-function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop || pop.hidden) return; pop.hidden = true; b.setAttribute('aria-expanded', 'false'); b.classList.remove('on'); }
+// Opens "What QuorX may use" beside what was clicked (the ⓘ by the name, Window → What QuorX may use, Home's quick
+// action), below it, or above it when it would run off the bottom. Clicking the same thing again closes it.
+function openPerms(at, { keep = false } = {}) {
+  const b = $('#permBtn'), pop = $('#permPop'); if (!pop) return;
+  if (!pop.hidden && pop._at === at && !keep) return closePerms();
+  pop._at = at || b;
+  pop.hidden = false; b?.classList.add('on'); b?.setAttribute('aria-expanded', 'true');
+  const place = () => {
+    const r = (pop._at || b).getBoundingClientRect(), h = pop.offsetHeight || 340;
+    pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 340))}px`;
+    pop.style.top = `${r.bottom + 6 + h > innerHeight - 8 && r.top - 6 - h > 8 ? r.top - 6 - h : Math.max(8, Math.min(r.bottom + 6, innerHeight - 8 - h))}px`;
+  };
+  place(); drawPerms().then(place);
+}
+function closePerms() { const pop = $('#permPop'), b = $('#permBtn'); if (!pop || pop.hidden) return; pop.hidden = true; pop._at = null; b.setAttribute('aria-expanded', 'false'); b.classList.remove('on'); }
 {
   const b = $('#permBtn'), pop = $('#permPop');
   if (pop) document.body.append(pop); // the top bar is hidden on wider screens (its name moves into the sidebar)
   if (b && pop) {
-    b.onclick = () => { if (!pop.hidden) return closePerms(); const r = b.getBoundingClientRect(); pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 340))}px`; pop.style.top = `${r.bottom + 6}px`; pop.hidden = false; b.classList.add('on'); b.setAttribute('aria-expanded', 'true'); drawPerms(); };
-    addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && !b.contains(e.target)) closePerms(); }, true);
+    b.onclick = () => openPerms(b);
+    addEventListener('pointerdown', (e) => { if (!pop.hidden && !pop.contains(e.target) && !b.contains(e.target) && !pop._at?.contains(e.target)) closePerms(); }, true);
     addEventListener('keydown', (e) => { if (e.key === 'Escape') closePerms(); });
   }
 }
