@@ -14,7 +14,8 @@
 /* ---------- the view: it takes the chat column, and the side pane steps aside ---------- */
 .layout.news-on { grid-template-columns: minmax(0, 1fr) !important; }
 .layout.news-on .pane, .layout.news-on #paneResizer { display: none !important; }
-.work.news-on > .chats { display: none !important; }
+/* The free-layout rule in workspace.css shows the chats with display:block !important; this one has to outrank it. */
+.work.news-on > .chats, main.layout.ws-free > section.work.news-on > .chats { display: none !important; }
 .news-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg); color: var(--text); font: 400 14.5px/1.6 var(--font-ui); scroll-behavior: smooth; }
 .news-view[hidden] { display: none !important; }
 .nw-wrap { max-width: 940px; margin: 0 auto; padding: 22px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px)); display: grid; gap: 22px; min-width: 0; }

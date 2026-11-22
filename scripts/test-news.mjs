@@ -320,6 +320,13 @@ test('news local: views explain themselves without logs; models, costs, deciders
 
 // The chat's Markdown renderer, streamed and whole (kept in its own file).
 import './test-markdown.mjs';
+test('news view: its rule hiding the chats outranks the free layout, so Home never draws over News', () => {
+  const css = fs.readFileSync(fileURLToPath(new URL('../public/news.css', import.meta.url)), 'utf8');
+  const ws = fs.readFileSync(fileURLToPath(new URL('../public/workspace.css', import.meta.url)), 'utf8');
+  assert.match(ws, /main.layout.ws-free > section.work > .chats {[^}]*display: block !important/, 'the free layout still forces the chats on');
+  assert.match(css, /main.layout.ws-free > section.work.news-on > .chats[^{]*{ display: none !important; }/, 'News hides them in the free layout too');
+});
+
 // Which opened chats the page lets go of (kept in its own file).
 import './test-chat-cache.mjs';
 import './test-sidebar-rows.mjs';
