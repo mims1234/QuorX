@@ -18829,6 +18829,34 @@ function newsDot() {
   for (const el of document.querySelectorAll('#newsDot, #railNews .nw-dot')) el.hidden = !on;
   $('#newsBtn')?.setAttribute('aria-label', on ? 'News, with new updates' : 'News');
   $('#railNews')?.setAttribute('data-tip', on ? 'News · new updates' : 'News');
+  drawSbNews();
+}
+// News, pinned above every project in the sidebar: one block like a project's, with What's new, Reports and Articles
+// as its rows. It sits outside the scrolling project list, so it stays in sight; its header folds it like a project.
+function drawSbNews() {
+  const pl = $('#projectList'); if (!pl) return;
+  let box = $('#sbNews');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'sbNews'; box.className = 'sb-project sb-news pinned'; box.style.setProperty('--ph', '190');
+    pl.before(box);
+    box.addEventListener('click', (e) => {
+      if (e.target.closest('.sb-fold, .sb-ph') && !e.target.closest('[data-news-go]')) { const f = G.foldedProjects || (G.foldedProjects = []), i = f.indexOf('news'); if (i < 0) f.push('news'); else f.splice(i, 1); savePrefs(); return drawSbNews(); }
+      const go = e.target.closest('[data-news-go]'); if (go) openNews(go.dataset.newsGo);
+    });
+  }
+  const d = NEWS.data, top = d?.updates?.versions?.[0], unread = newsUnread();
+  const folded = (G.foldedProjects || []).includes('news');
+  const at = NEWS.open ? NEWS.side || NEWS.tab : '';
+  const latest = (k) => [...(d?.[k] || [])].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+  const row = (k, name, first, meta, mark = '') => `<div class="sb-chat sb-chat-item sb-news-row ${at === k ? 'on active' : ''}" role="button" tabindex="0" data-news-go="${k}" title="${esc(name)}${first ? `\n${esc(first)}` : ''}"><div class="sb-chat-content"><div class="sb-chat-topline"><span class="sb-chat-title">${esc(name)}</span>${mark}</div><div class="sb-chat-meta"><span>${esc(meta)}</span></div></div></div>`;
+  const rep = latest('reports'), art = latest('articles');
+  box.classList.toggle('folded', folded);
+  box.innerHTML = `<div class="sb-ph" tabindex="0" aria-expanded="${!folded}" aria-label="News: Enter folds it"><div class="sb-pname-wrap"><b class="sb-pname" title="News: what's new in QuorX, reports and articles">📰 News</b><button type="button" class="sb-fold" aria-expanded="${!folded}" title="${folded ? 'Show' : 'Hide'} News's rows" aria-label="${folded ? 'Show' : 'Hide'} News"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></button>${unread ? '<span class="sb-news-new" title="New since you last opened What&#39;s new">new</span>' : ''}<span class="sb-psp"></span></div></div>`
+    + (folded ? '' : !d ? '<div class="sb-empty">Loading News…</div>'
+      : row('updates', "What's new", top?.title || '', top ? `v${top.version}${top.version === d.version ? ' · the version you run' : ''}` : 'Nothing here yet', unread ? '<span class="st-mark" aria-label="New"></span>' : '')
+        + row('reports', 'Reports', rep?.title || '', `${(d.reports || []).length} · ${rep?.title || 'none yet'}`)
+        + row('articles', 'Articles', art?.title || '', `${(d.articles || []).length} · ${art?.title || 'none yet'}`));
+  for (const r of box.querySelectorAll('[data-news-go]')) r.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNews(r.dataset.newsGo); } };
 }
 function newsEl() {
   let v = $('#newsView');
@@ -18857,6 +18885,7 @@ async function openNews(route = 'updates') {
   // "New" marks compare against what you had read before this visit, so they stay while you look.
   if (NEWS.seen === undefined) NEWS.seen = NEWS.data.lastRead || null;
   const [kind, slug] = String(route || 'updates').split('/');
+  NEWS.side = ['articles', 'reports'].includes(kind) ? kind : 'updates'; drawSbNews();
   if ((kind === 'articles' || kind === 'reports') && slug) return newsArticle(kind, slug, gen);
   NEWS.tab = ['articles', 'reports'].includes(kind) ? kind : 'updates';
   newsRoute(NEWS.tab === 'updates' ? '' : NEWS.tab);
@@ -18864,7 +18893,7 @@ async function openNews(route = 'updates') {
 }
 function closeNews() {
   if (!NEWS.open) return;
-  NEWS.open = false; NEWS.gen++; newsStop();
+  NEWS.open = false; NEWS.gen++; newsStop(); drawSbNews();
   const v = $('#newsView'); if (v) { v.hidden = true; v.innerHTML = ''; }
   $('.work').classList.remove('news-on'); $('.layout').classList.remove('news-on');
   for (const b of document.querySelectorAll('#newsBtn, #railNews')) { b.classList.remove('active'); b.setAttribute('aria-current', 'false'); }
