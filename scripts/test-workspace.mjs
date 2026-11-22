@@ -648,20 +648,24 @@ test('activity bar: the views in order, each opened by a row of the shortcuts ta
   assert.doesNotMatch(html, /data-rail="files"/, 'the rail\'s Files and Servers buttons are gone (the views replace them)');
 });
 
-test('tabs everywhere: browser pages are tabs in each group\'s strip, with ＋ for any kind; the inner page strip is gone', () => {
+test('tabs everywhere: browser pages are tabs in each group\'s strip, ⋯ opens what its icons don\'t; the inner page strip is gone', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.match(html, /class="pa-pages"/, 'a slot for page tabs in the group strip');
-  assert.match(html, /data-pa="add"/, '＋ in the group strip');
+  assert.doesNotMatch(html, /data-pa="add"/, 'no ＋ in the group strip: its icons and ⋯ cover it');
   assert.match(html, /href="tabs\.css"/);
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   const rb = app.slice(app.indexOf('function renderBrowser(c) {'), app.indexOf('\n}\n', app.indexOf('function renderBrowser(c) {')));
   assert.doesNotMatch(rb, /class="btabs"/, 'the Browser view no longer draws its own page strip');
   assert.match(rb, /class="bstage"/, 'the page stage is still there');
-  for (const fn of ['function drawPageTabs(', 'function pageTabMenu(', 'function paneAddMenu(', 'function pageTabsRefresh(']) assert.ok(app.includes(fn), fn);
+  for (const fn of ['function drawPageTabs(', 'function pageTabMenu(', 'function paneOpenItems(', 'function pageTabsRefresh(']) assert.ok(app.includes(fn), fn);
   const menu = app.slice(app.indexOf('function pageTabMenu('), app.indexOf('\n}\n', app.indexOf('function pageTabMenu(')));
   assert.match(menu, /Mute tab/); assert.match(menu, /Mute the agent's pages/); assert.match(menu, /Give to agent/);
-  const add = app.slice(app.indexOf('function paneAddMenu('), app.indexOf('\n}\n', app.indexOf('function paneAddMenu(')));
-  for (const k of ['New chat', 'Browser page', 'Terminal', 'Files', 'Plan', 'Steps', 'Settings']) assert.ok(add.includes(k), `＋ offers ${k}`);
+  const add = app.slice(app.indexOf('function paneOpenItems('), app.indexOf('\n}\n', app.indexOf('function paneOpenItems(')));
+  for (const k of ['New chat', 'Browser page', 'New terminal', 'Plan', 'Settings']) assert.ok(add.includes(k), `⋯ offers ${k}`);
+  for (const k of ["'🧭 Steps'", "'📁 Files'", "'⌨ Terminal'"]) assert.ok(!add.includes(k), `${k} is an icon in the strip already`);
+  assert.doesNotMatch(app, /class="wt-padd"/, 'no ＋ in the single-row strip either');
+  const more = app.slice(app.indexOf('function wsGroupMenu('), app.indexOf('\n}\n', app.indexOf('function wsGroupMenu(')));
+  assert.match(more, /popMenu\(e, \[\n {4}\.\.\.paneOpenItems\(a\),/, '⋯ starts with them');
 });
 
 test('Single: every tab in one row; the chat and its pane share the space; a project starts in it', () => {

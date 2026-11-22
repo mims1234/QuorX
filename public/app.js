@@ -9573,6 +9573,7 @@ function wsGroupMenu(e, a) {
   const capped = { disabled: cap || isPhone(), title: cap ? CAP_TIP : '' };
   const hostCg = hostedIn(a.gid);
   popMenu(e, [
+    ...paneOpenItems(a),
     ...(isPhone() || wsSingle() ? [] : hostCg ? [['💬 Give the chat its own group again', () => wsUnhost(hostCg)], null] : [['💬 Show the chat in this group', () => wsHostChatById(curId(), a.gid), { disabled: !curId(), title: 'The chat you use moves into this group: its tab sits before this group\'s tabs' }], null]),
     ['◫ Split right', () => paneSplitTab(a.gid, null, 'right'), capped],
     ['⊟ Split down', () => paneSplitTab(a.gid, null, 'bottom'), capped],
@@ -10663,17 +10664,17 @@ function wsSingleStrip() {
   box.dataset.sig = sig;
   box.innerHTML = items.map(([k, ico, label, own, page]) => `<span class="wt-ptab ${k === cur ? 'on' : ''}" role="tab" aria-label="${esc(`${label} · ${own}`)}" tabindex="${k === cur ? 0 : -1}" aria-selected="${k === cur}" data-k="${esc(k)}" title="${esc(`${label} · ${own}`)}"><span class="wp-ico" aria-hidden="true">${ico}</span><span class="pp-name">${esc(clip(label, 26))}</span><span class="pp-own">· ${esc(own)}</span>${page && DESK ? sndMark(page) : ''}${page && !page.agent ? `<button type="button" class="pp-x" data-close="${esc(page.sid)}" tabindex="-1" aria-label="Close ${esc(label)}">×</button>` : ''}</span>`).join('')
     + '<button type="button" class="wt-pover" data-ovf hidden></button>'
-    + '<button type="button" class="wt-padd" data-pa="add" aria-haspopup="menu" title="Open a tab: chat, browser page, terminal, files, plan, Steps or Settings" aria-label="Open a tab">＋</button><button type="button" class="wt-pmore" data-pa="more" aria-haspopup="menu" title="Split, move, follow the agent, save the layout" aria-label="More for this group">⋯</button>';
+    + '<button type="button" class="wt-pmore" data-pa="more" aria-haspopup="menu" title="New chat, browser page or terminal; split, move, follow the agent, save the layout" aria-label="More for this group">⋯</button>';
   box.querySelector('.wt-ptab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   stripOverflow(box);
 }
 // A tab strip with tabs out of sight says so: the open-chats strip fades at the side they're on, and the chat's own
-// strip shows "+N" before ＋ (a click scrolls them into view). Rechecked on scroll and resize.
+// strip shows "+N" before ⋯ (a click scrolls them into view). Rechecked on scroll and resize.
 function stripOverflow(strip) {
   if (!strip) return;
   const sync = () => {
     const r = strip.getBoundingClientRect(), tabs = [...strip.querySelectorAll('[role="tab"]')];
-    const cover = strip.querySelector('.wt-pover')?.parentElement === strip ? 90 : 0; // the sticky +N, ＋ and ⋯
+    const cover = strip.querySelector('.wt-pover')?.parentElement === strip ? 64 : 0; // the sticky +N and ⋯
     const left = tabs.filter((t) => t.getBoundingClientRect().left < r.left - 2).length;
     const right = tabs.filter((t) => t.getBoundingClientRect().right > r.right - cover + 2).length;
     strip.classList.toggle('ovf-l', left > 0); strip.classList.toggle('ovf-r', right > 0);
@@ -10693,7 +10694,7 @@ function wsSingleWire() {
   box.addEventListener('click', (e) => {
     const a = singleArea(), c = G.open.get(G.panes[0]); if (!a || !c) return;
     const add = e.target.closest('[data-pa]');
-    if (add) return add.dataset.pa === 'add' ? paneAddMenu(Object.assign(e, { anchor: add }), a) : wsGroupMenu(Object.assign(e, { anchor: add }), a);
+    if (add) return wsGroupMenu(Object.assign(e, { anchor: add }), a);
     const tab = e.target.closest('.wt-ptab'); if (!tab) return;
     const k = tab.dataset.k, v = k.slice(2);
     if (e.target.closest('.bt-snd')) { e.stopPropagation(); return setSound('tab', { sid: v, muted: !G.sound?.tabs?.[v]?.muted }); }
@@ -16908,7 +16909,7 @@ function wireAreaChrome() {
     b.ondragend = wsDropHide;
     b.oncontextmenu = (e) => wsTabMenu(e, area, { type: 'pane', tab: b.dataset.tab, from: area });
   }
-  for (const b of $$a('#paneTabs [data-pa]')) b.onclick = (e) => (b.dataset.pa === 'max' ? wsMaxToggle(area.gid) : b.dataset.pa === 'add' ? paneAddMenu(Object.assign(e, { anchor: b }), area) : wsGroupMenu(Object.assign(e, { anchor: b }), area));
+  for (const b of $$a('#paneTabs [data-pa]')) b.onclick = (e) => (b.dataset.pa === 'max' ? wsMaxToggle(area.gid) : wsGroupMenu(Object.assign(e, { anchor: b }), area));
   wirePageTabs(area);
   // A group showing a chat (a hosted chat): its own tabs bring the group back in front of the chat.
   $('#paneTabs').addEventListener('click', (e) => { if (!e.target.closest('.pa-host') && e.target.closest('[data-tab], .pa-ptab, .pa-ftab') && hostedIn(area.gid)) { area.fromChat = wsFrontOf(area.gid) === 'chat'; wsSetFrontOf(area.gid, 'pane'); } }, true);
@@ -17103,23 +17104,21 @@ function wirePageTabs(area) {
   // Drag one of your pages into a chat's message box (as before) to hand it over.
   holder.addEventListener('dragstart', (e) => { const t = tabOf(e); if (!t || t.classList.contains('agent')) return; e.dataTransfer.setData('application/x-quorx-tab', t.dataset.sid); e.dataTransfer.effectAllowed = 'link'; });
 }
-// ＋: any kind of tab, here (this group).
-function paneAddMenu(e, area) {
+// The top of a group's ⋯: what the strip's own icons (Steps, Terminal, Files, Source control) don't already open.
+// It was a ＋ of its own beside them, mostly repeating them.
+function paneOpenItems(area) {
   const c = focused();
   const here = (fn) => () => { inArea(area, fn); };
-  popMenu(e, [
+  return [
     ['💬 New chat', () => newChat(qfPid())],
     ...(c ? [
       ['🌐 Browser page', here(() => { newBTab(c.projectId, ''); setPaneTab('browser'); requestAnimationFrame(() => $('#paneUrl')?.focus()); })],
-      ['⌨ Terminal', here(() => openTerminal(c, null, 'term'))],
       ['⌨ New terminal', here(() => { const t = termState(spaceOf(c)), id = termNew(t); termSave(t); openTerminal(c, id, 'term'); })],
-      ['📁 Files', here(() => setPaneTab('files'))],
       ['📄 Plan', here(() => setPaneTab('art'))],
-      ['🧭 Steps', here(() => setPaneTab('trace'))],
     ] : []),
-    null,
     ['⚙ Settings', () => openSettings()],
-  ]);
+    null,
+  ];
 }
 // ---------- device sizes (the Browser tab's 📱 menu, public/devices.js) ----------
 // One of your tabs can show its page at a phone's, tablet's or laptop's size, or one of your own, turned sideways or

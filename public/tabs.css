@@ -19,7 +19,6 @@
 #pane .pane-tabs .pa-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #pane .pane-tabs .pa-ptab .bt-dot { flex: none; }
 #pane .pane-tabs [data-tab="browser"][hidden] { display: none !important; }
-#pane .pane-tabs .pa-add { font-size: 15px; }
 /* The Browser view without its inner page strip: the page fills the body. */
 #paneBody .bwin > .bstage:first-child { border-top: 0; }
 #pane .pane-tabs .pa-ptab { max-width: 260px; }
@@ -46,13 +45,11 @@ body.ws-single #pane .pane-tabs { display: none !important; }
 .wt-ptab .bt-snd { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; cursor: pointer; }
 .wt-ptab .bt-snd.off { color: var(--warn, #d9a441); }
 .wt-ptab .bt-snd svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.wt-padd, .wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
-.wt-padd:hover, .wt-pmore:hover { background: var(--panel-2); color: var(--text); }
-/* With more tabs than fit, ＋ and ⋯ stay at the strip's right end and the tabs scroll under them. */
-.ws-top .wt-ptabs .wt-padd, .ws-top .wt-ptabs .wt-pmore { position: sticky; z-index: 1; background: var(--panel); box-shadow: -8px 0 8px -2px var(--panel); }
-.ws-top .wt-ptabs .wt-padd { right: 26px; margin-left: auto; }
-.ws-top .wt-ptabs .wt-pmore { right: 0; box-shadow: none; }
-.ws-top .wt-ptabs .wt-padd:hover, .ws-top .wt-ptabs .wt-pmore:hover { background: var(--panel-2); }
+.wt-pmore { align-self: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; }
+.wt-pmore:hover { background: var(--panel-2); color: var(--text); }
+/* With more tabs than fit, ⋯ stays at the strip's right end and the tabs scroll under it. */
+.ws-top .wt-ptabs .wt-pmore { position: sticky; z-index: 1; right: 0; margin-left: auto; background: var(--panel); box-shadow: -8px 0 8px -2px var(--panel); }
+.ws-top .wt-ptabs .wt-pmore:hover { background: var(--panel-2); }
 
 /* ---------- a chat shown inside a pane group (split layouts) ---------- */
 /* The group keeps its strip on top; while its chat is in front, the rest of the group steps out of sight and lets the
@@ -74,7 +71,7 @@ body.ws-single #pane .pane-tabs { display: none !important; }
 .ws-top .wt-strip.ovf-r { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
 .ws-top .wt-strip.ovf-l { mask-image: linear-gradient(to right, transparent, #000 28px); }
 .ws-top .wt-strip.ovf-l.ovf-r { mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
-.ws-top .wt-ptabs .wt-pover { position: sticky; right: 52px; z-index: 1; flex: none; align-self: center; height: 22px; padding: 0 7px; margin-left: auto; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 11px var(--mono); cursor: pointer; box-shadow: -10px 0 10px -2px var(--panel); }
+.ws-top .wt-ptabs .wt-pover { position: sticky; right: 26px; z-index: 1; flex: none; align-self: center; height: 22px; padding: 0 7px; margin-left: auto; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: 600 11px var(--mono); cursor: pointer; box-shadow: -10px 0 10px -2px var(--panel); }
 .ws-top .wt-ptabs .wt-pover[hidden] { display: none; }
 .ws-top .wt-ptabs .wt-pover:hover { border-color: var(--accent); color: var(--accent); }
-.ws-top .wt-ptabs .wt-pover:not([hidden]) + .wt-padd { margin-left: 4px; }
+.ws-top .wt-ptabs .wt-pover:not([hidden]) + .wt-pmore { margin-left: 4px; }
