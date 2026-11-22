@@ -115,3 +115,14 @@ test('restart needed: ⟳ lights up for server code in subfolders and for page f
   assert.match(app, /b\.title = stale \? `Restart needed: \$\{what\}\. Click to restart and reload\.` : RESTART_TIP\[b\.id\];/);
   assert.match(app, /document\.addEventListener\('visibilitychange', \(\) => \{ if \(!document\.hidden\) checkStale\(\); \}\);/);
 });
+
+test('browser pane: the assistant launcher never hides a real tab, and steps aside from one', () => {
+  const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const hit = app.slice(app.indexOf('function deskHit('), app.indexOf('function deskHit(') + 1500);
+  assert.match(hit, /closest\?\.\('\[role="separator"\], \.qxa-launch'\)/, 'the launcher over the box is not counted as covering the page');
+  const dodge = app.slice(app.indexOf('function deskDodge('), app.indexOf('function deskCovered('));
+  assert.match(dodge, /\$\('#qxaBtn'\)/);
+  assert.match(dodge, /btn\.style\.right = '';/, 'back to its corner when no shown tab reaches it');
+  assert.match(dodge, /innerWidth - hit\.left \+ 12/, 'just left of the shown box');
+  assert.match(app, /deskDodge\(won\.map\(\(d\) => d\.ph\.getBoundingClientRect\(\)\)\);/, 'runs on every placement, with the boxes shown');
+});

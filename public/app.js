@@ -18347,6 +18347,7 @@ async function deskPlaceNow(force) {
     if (await deskPlaceArea(a, d, force, want)) { want.push(d.sid); won.push(d); }
   }
   for (const d of deskAll()) if (!won.includes(d)) d.shown = false;
+  deskDodge(won.map((d) => d.ph.getBoundingClientRect()));
   if (!want.length) { hideAll(PA.deskKey !== '' || force); PA.deskKey = ''; return; }
   // Shown when the set changes, and again once a second (the same safety net as hiding: the app drops what isn't in it).
   const key = want.join('|');
@@ -18396,6 +18397,15 @@ async function deskPlaceArea(a, d, force, taken) {
 // The answer is kept until the page changes (a node, an attribute, the pointer or a scroll), as asking costs a few ms.
 const DESK_GRID = 32;
 const deskSeen = { dirty: true, key: '', covered: false };
+// A real tab is drawn above the whole page, so the assistant's ✦ launcher would sit hidden under one in its corner:
+// while a shown tab's box reaches it, it moves just left of that box (back to its corner once none does).
+function deskDodge(boxes) {
+  const btn = $('#qxaBtn'); if (!btn) return;
+  btn.style.right = '';
+  if (btn.hidden || !boxes.length) return;
+  const b = btn.getBoundingClientRect(), hit = boxes.find((v) => b.left < v.right && b.right > v.left && b.top < v.bottom && b.bottom > v.top);
+  if (hit) btn.style.right = `${Math.max(18, Math.round(innerWidth - hit.left + 12))}px`;
+}
 function deskCovered(ph) {
   if (document.querySelector('dialog[open]:modal')) return true;
   const v = ph.getBoundingClientRect();
@@ -18410,7 +18420,9 @@ function deskHit(ph, v) {
   for (const el of document.querySelectorAll('dialog[open], :popover-open, .oh-tip.on, #replyInfoPop:not([hidden])')) if (over(el.getBoundingClientRect())) return true;
   // A resize handle on the box's edge (the bottom panel's reaches 3px into the area above it) isn't covering the page:
   // counted, it kept the tab hidden (an empty black box) for as long as the bottom panel was open.
-  const mine = (el) => !el || el === ph || ph.contains(el) || !!el.closest?.('[role="separator"]');
+  // The assistant's ✦ launcher floats in the window's corner, over the pane: counted, the agent's page never showed (a
+  // black box with its sound playing). It steps aside instead (deskDodge).
+  const mine = (el) => !el || el === ph || ph.contains(el) || !!el.closest?.('[role="separator"], .qxa-launch');
   const xs = [], ys = [];
   for (let x = v.left + 1; x < v.right - 1; x += DESK_GRID) xs.push(x);
   for (let y = v.top + 1; y < v.bottom - 1; y += DESK_GRID) ys.push(y);
